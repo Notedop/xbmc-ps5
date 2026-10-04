@@ -149,6 +149,62 @@ void CResolutionUtils::FindResolutionFromWhitelist(float fps, int width, int hei
   if (!found)
     CLog::Log(LOGDEBUG, "[WHITELIST] No match for an exact resolution with an exact refresh rate");
 
+#if defined(TARGET_PS5)
+  // PS5: the output runs at the system rate (the desktop mode). A video gets
+  // a VRR mode ("(PS5 VRR)", registered by the window system) whenever Kodi
+  // asks for its best mode - "Adjust display refresh rate" not Off: the lowest
+  // multiple of its frame rate reaching the PS5's VRR minimum of 48 Hz (23.976
+  // -> 71.928, 24 -> 48, 25 -> 50, 29.97 -> 59.94), up to 120 Hz. Otherwise
+  // the system rate; fixed-rate modes other than the desktop are never chosen.
+  // "Sync playback to display" plays no part in this.
+  {
+    const RESOLUTION_INFO desktop =
+        CServiceBroker::GetWinSystem()->GetGfxContext().GetResInfo(RES_DESKTOP);
+    const bool adjust = CServiceBroker::GetSettingsComponent()->GetSettings()->GetInt(
+                            CSettings::SETTING_VIDEOPLAYER_ADJUSTREFRESHRATE) !=
+                        ADJUST_REFRESHRATE_OFF;
+    if (adjust && fps > 0.0f)
+    {
+      int multiple = 1;
+      while (fps * multiple < 48.0f)
+        ++multiple;
+      const float target = fps * multiple;
+      if (target <= 120.5f)
+      {
+        // the closest "(PS5 VRR)" mode within 0.15% (30 fps -> 60, not 59.94)
+        int best = -1;
+        float bestDiff = 0.0f;
+        for (int i = RES_CUSTOM; i < static_cast<int>(CDisplaySettings::GetInstance().ResolutionInfoSize()); ++i)
+        {
+          const RESOLUTION_INFO info =
+              CServiceBroker::GetWinSystem()->GetGfxContext().GetResInfo(static_cast<RESOLUTION>(i));
+          const float diff = std::abs(info.fRefreshRate - target);
+          if (info.strMode.find("(PS5 VRR)") != std::string::npos &&
+              info.iScreenWidth == desktop.iScreenWidth &&
+              info.iScreenHeight == desktop.iScreenHeight && diff <= 0.0015f * info.fRefreshRate &&
+              (best < 0 || diff < bestDiff))
+          {
+            best = i;
+            bestDiff = diff;
+          }
+        }
+        if (best >= 0)
+        {
+          CLog::Log(LOGINFO, "[PS5] {} fps: VRR at {}x = {} ({})", fps, multiple,
+                    CServiceBroker::GetWinSystem()->GetGfxContext().GetResInfo(static_cast<RESOLUTION>(best)).strMode,
+                    best);
+          resolution = static_cast<RESOLUTION>(best);
+          return;
+        }
+        CLog::Log(LOGINFO, "[PS5] {} fps: no VRR mode at {:.3f} Hz: system rate {}", fps, target,
+                  desktop.strMode);
+      }
+    }
+    resolution = RES_DESKTOP;
+    return;
+  }
+#endif
+
   if (noWhiteList || CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
           SETTING_VIDEOSCREEN_WHITELIST_DOUBLEREFRESHRATE))
   {
@@ -245,6 +301,7 @@ void CResolutionUtils::FindResolutionFromWhitelist(float fps, int width, int hei
   }
 
   CLog::Log(LOGDEBUG, "[WHITELIST] No match for a desktop resolution with an exact refresh rate");
+
 
   if (noWhiteList || CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(
           SETTING_VIDEOSCREEN_WHITELIST_DOUBLEREFRESHRATE))

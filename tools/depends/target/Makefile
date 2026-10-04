@@ -135,6 +135,12 @@ ifeq ($(OS),linux)
     DEPENDS += hwdata libdisplay-info
   endif
 endif
+
+ifeq ($(OS),ps5)
+  # PS5 uses a FreeBSD-derived target runtime and does not use linux-system-*
+  # proxy packages. Keep the graph to Kodi-relevant target libraries.
+  DEPENDS += dav1d ffmpeg
+endif
 DEPENDS := $(filter-out $(EXCLUDED_DEPENDS),$(DEPENDS))
 
 .PHONY: $(DEPENDS) download $(DOWNLOAD_TARGETS)

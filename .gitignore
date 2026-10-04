@@ -222,6 +222,18 @@ cmake_install.cmake
 /tools/depends/target/Toolchain_binaddons.cmake
 /tools/depends/target/config-binaddons.site
 /tools/depends/target/binary-addons/native
+/tools/depends/target/python3/Python-*.tar.xz
+# Generic per-platform build/marker artifacts for in-tree PS5 tools/depends
+# builds (e.g. build/ps5-depends-test): every target recipe extracts its
+# source into a $(PLATFORM)-named dir (host-triple-like, two dashes or more)
+# directly under its own tools/depends/target/<name>/ directory and drops
+# .configured-$(PLATFORM) / .installed-$(PLATFORM) marker files there too.
+# This was previously only covered for a few recipes (ffmpeg, dav1d,
+# libdvd*); cover it for all of them so an in-tree PS5 depends build never
+# risks committing its (often 50MB+) build output.
+/tools/depends/target/*/.configured-*
+/tools/depends/target/*/.installed-*
+/tools/depends/target/*/*-*-*/
 
 # /tools/EventClients/
 /tools/EventClients/*.pyc

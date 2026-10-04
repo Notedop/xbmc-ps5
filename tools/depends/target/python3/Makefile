@@ -3,6 +3,12 @@ DEPS = ../../Makefile.include Makefile PYTHON3-VERSION ../../download-files.incl
                                  apple.patch \
                                  process-vm-ready.patch \
                                  static-compile.patch \
+                                 20-ps5-freebsd-cross-host.patch \
+                                 21-ps5-no-subprocess.patch \
+                                 24-ps5-socket-libscenet.patch \
+                                 25-ps5-stdio-nomacros.patch \
+                                 ps5_compat.h \
+                                 ps5_pysocket.h \
                                  10-android-modules.patch \
                                  11-android-ctypes.patch \
                                  13-wasm-em-config-clang.patch \
@@ -99,6 +105,37 @@ ifeq ($(OS), darwin_embedded)
   endif
 endif
 
+ifeq ($(OS),ps5)
+  # Align with known-working PS5 pacbrew python3 profile:
+  # no subprocess/process-control modules in title runtime and conservative
+  # cache overrides for missing/undocumented SDK symbols.
+  PY_MODULES+= py_cv_module__posixsubprocess=n/a \
+               py_cv_module__posixshmem=n/a \
+               py_cv_module__multiprocessing=n/a \
+               py_cv_module__ctypes=n/a
+  # ac_cv_have_getc_unlocked (not ac_cv_func_getc_unlocked, which this
+  # configure.ac does not define) forces off the "getc_unlocked() and
+  # friends" probe in configure.ac: the SDK's FreeBSD <stdio.h> declares
+  # these, so the link-only probe succeeds even though the title's
+  # clean-room libc.prx does not share FreeBSD's FILE layout. See
+  # 25-ps5-stdio-nomacros.patch for the matching Python.h macro removal.
+  EXTRA_CONFIGURE+= ac_cv_func_wait=no ac_cv_func_wait3=no ac_cv_func_wait4=no ac_cv_func_waitpid=no \
+                    ac_cv_func_execv=no ac_cv_func_fexecve=no ac_cv_func_setpriority=no ac_cv_func_sendfile=no \
+                    ac_cv_header_sched_h=no ac_cv_func_posix_spawn=no ac_cv_func_posix_spawnp=no \
+                    ac_cv_func_forkpty=no ac_cv_lib_util_forkpty=no ac_cv_func_getgroups=no \
+                    ac_cv_func_system=no ac_cv_func_dup3=no ac_cv_func_pipe2=no \
+                    ac_cv_func_fork=no ac_cv_func_fork1=no ac_cv_func_vfork=no \
+                    ac_cv_func_getentropy=yes \
+                    ac_cv_func_pthread_getname_np=no ac_cv_func_pthread_get_name_np=no \
+                    ac_cv_func_pthread_setname_np=no ac_cv_func_pthread_set_name_np=no \
+                    ac_cv_have_getc_unlocked=no \
+                    ac_cv_func_sched_setparam=no ac_cv_func_sched_setscheduler=no \
+                    ac_cv_func_sched_get_priority_max=no ac_cv_func_sched_rr_get_interval=no \
+                    ac_cv_func_sched_setaffinity=no \
+                    ac_cv_working_openssl_ssl=yes ac_cv_working_openssl_hashlib=yes \
+                    CPPFLAGS='$(CPPFLAGS) -include $(CURDIR)/ps5_compat.h -DPS5_CLEANROOM_STDIO=1 -DPS5_PYSOCKET=1 -I$(CURDIR)'
+endif
+
 # configuration settings
 CONFIGURE=./configure --prefix=$(PREFIX) \
                       --disable-shared \
@@ -137,6 +174,19 @@ ifeq ($(OS),wasm)
 	cd $(PLATFORM); patch -p1 -i ../14-wasm-build-wasm-default.patch
 	cd $(PLATFORM); patch -p1 -i ../15-wasm-static-hacl.patch
 endif
+ifeq ($(OS),ps5)
+	cd $(PLATFORM); patch -p1 -i ../20-ps5-freebsd-cross-host.patch
+	cd $(PLATFORM); patch -p1 -i ../21-ps5-no-subprocess.patch
+	cd $(PLATFORM); patch -p1 -i ../24-ps5-socket-libscenet.patch
+	cd $(PLATFORM); patch -p1 -i ../25-ps5-stdio-nomacros.patch
+	# getc_unlocked() is forced off via the ac_cv_have_getc_unlocked cache
+	# override above instead of a configure.ac patch - no source edit needed.
+	# selectors.py's KqueueSelector no longer calls register_at_fork() in
+	# this Python version (the bpo-41713 workaround it guarded was reworked
+	# upstream), and every other os.register_at_fork() call site already
+	# checks hasattr(os, "fork")/"register_at_fork" first, which is False
+	# here since ac_cv_func_fork=no - so no patch is needed for that either.
+endif
 ifeq ($(findstring iphone,$(TARGET_PLATFORM)),iphone)
 # These three patches are all merged upstream now (python/cpython#156110,
 # #156116, #156113); drop them when we bump python past 3.16.
@@ -156,6 +206,32 @@ $(LIBDYLIB): .configured-$(PLATFORM)
 	$(MAKE) -C $(PLATFORM) libpython$(PYTHON_VERSION).a
 	touch $@
 
+ifeq ($(OS),ps5)
+# "make install" (and the "libinstall"/"sharedinstall" targets it pulls in)
+# depends on building and linking the target's standalone "python"
+# executable. That link can never succeed here: the ps5_* socket symbols
+# (see ps5_pysocket.h) only resolve at Kodi's own final app link, via
+# libkodishim, and the PS5 SDK libc has no explicit_bzero. A title can't
+# exec a standalone interpreter anyway, so - like the upstream pacbrew
+# build this was ported from - install libpython/headers/stdlib by hand
+# instead of running the target's own "install".
+.installed-$(PLATFORM): $(LIBDYLIB)
+	$(MAKE) -C $(PLATFORM) pybuilddir.txt
+	$(MAKE) -C $(PLATFORM) inclinstall
+	install -d $(PREFIX)/lib/pkgconfig
+	install -m644 $(PLATFORM)/Misc/python.pc $(PREFIX)/lib/pkgconfig/python-$(PYTHON_VERSION).pc
+	install -m644 $(PLATFORM)/Misc/python-embed.pc $(PREFIX)/lib/pkgconfig/python-$(PYTHON_VERSION)-embed.pc
+	install -m644 $(PLATFORM)/libpython$(PYTHON_VERSION).a $(PREFIX)/lib/libpython$(PYTHON_VERSION).a
+	mkdir -p $(PREFIX)/lib/python$(PYTHON_VERSION)
+	(cd $(PLATFORM)/Lib && tar --exclude=test --exclude=tests \
+		--exclude=idlelib --exclude=tkinter --exclude=turtledemo \
+		--exclude=ensurepip --exclude=__pycache__ -cf - .) | \
+		tar -xf - -C $(PREFIX)/lib/python$(PYTHON_VERSION)
+	cp $(PLATFORM)/`cat $(PLATFORM)/pybuilddir.txt`/_sysconfigdata*.py $(PREFIX)/lib/python$(PYTHON_VERSION)/
+	find $(PREFIX)/lib/python$(PYTHON_VERSION) -type f -name "*.pyc" -delete
+	touch $(LIBDYLIB)
+	touch $@
+else
 .installed-$(PLATFORM): $(LIBDYLIB)
 # We specifically use -j1 as some threading issues can occur with install directory creation
 	$(MAKE) -C $(PLATFORM) $(HOSTPLATFORM) install -j1
@@ -163,6 +239,7 @@ $(LIBDYLIB): .configured-$(PLATFORM)
 	find $(PREFIX)/lib/python$(PYTHON_VERSION) -type d -name "config-$(PYTHON_VERSION)-*" -exec rm -r {} +
 	touch $(LIBDYLIB)
 	touch $@
+endif
 
 clean:
 	rm -rf .installed-$(PLATFORM) .configured-$(PLATFORM)

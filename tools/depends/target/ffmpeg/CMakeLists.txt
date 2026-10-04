@@ -15,7 +15,7 @@ endif()
 set(env_vars ${EXTRA_ENV_VARS})
 
 if(CROSSCOMPILING)
-  list(APPEND env_vars "PKG_CONFIG_LIBDIR=${DEPENDS_PATH}/lib/pkgconfig")
+  list(APPEND env_vars "PKG_CONFIG_LIBDIR=${DEPENDS_PATH}/lib/pkgconfig:${DEPENDS_PATH}/libdata/pkgconfig")
   list(APPEND ffmpeg_conf --pkg-config=${PKG_CONFIG_EXECUTABLE}
                           --pkg-config-flags=--static
                           --enable-cross-compile

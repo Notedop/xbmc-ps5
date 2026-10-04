@@ -1,0 +1,33 @@
+PS5: recognize the x86_64-unknown-freebsd cross-compile host.
+
+CPython's configure.ac only assigns ac_sys_system/_host_ident for a fixed
+list of host triples when cross-compiling (the "for now, limit cross builds
+to known configurations" case); anything else hits
+AC_MSG_ERROR([cross build not supported for $host]) before reaching the
+native-build MACHDEP fallback that already recognizes freebsd* via uname.
+The PS5 SDK's host triple is x86_64-unknown-freebsd, so add explicit
+*-*-freebsd* arms to both cross-build case statements (ac_sys_system and
+_host_ident).
+
+--- a/configure.ac
++++ b/configure.ac
+@@ -325,6 +325,9 @@ then
+ 	*-*-cygwin*)
+ 		ac_sys_system=Cygwin
+ 		;;
++	*-*-freebsd*)
++		ac_sys_system=FreeBSD
++		;;
+ 	*-apple-ios*)
+ 		ac_sys_system=iOS
+ 		;;
+@@ -775,6 +778,9 @@ if test "$cross_compiling" = yes; then
+ 	*-*-cygwin*)
+ 		_host_ident=
+ 		;;
++	*-*-freebsd*)
++		_host_ident=$host_cpu
++		;;
+ 	*-*-darwin*)
+ 		;;
+ 	*-apple-ios*)

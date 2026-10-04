@@ -264,6 +264,28 @@ platform_cc=gcc
 platform_cxx=g++
 
 case $host in
+  x86_64-*-freebsd*|x86_64-*-ps5*)
+    meson_cpu="x86_64"
+    meson_system="freebsd"
+    if test "x$use_cpu" = "xauto"; then
+      use_cpu="x86_64"
+    fi
+    use_toolchain="${use_toolchain:-/opt/ps5-payload-sdk}"
+    platform_tool_prefix="prospero-"
+    platform_cc="prospero-clang"
+    platform_cxx="prospero-clang++"
+    if test "$use_linker_explicit" != "yes"; then
+      use_linker="prospero-lld"
+    fi
+    platform_cflags="-fPIC -DPIC -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64"
+    platform_cxxflags="$platform_cflags"
+    optimize_flags="-O2"
+    platform_os="ps5"
+    target_platform="ps5"
+    app_rendersystem="gl"
+    # PS5 builds are always cross
+    cross_compiling="yes"
+  ;;
   *-*linux-android*)
     use_toolchain="${use_toolchain:-$use_ndk_path/toolchains/llvm/prebuilt/$android_toolchain_name}"
     platform_cc=$use_host$use_ndk_api-clang
@@ -412,6 +434,20 @@ case $host in
     platform_os="android"
     meson_system="android"
     #android builds are always cross
+    cross_compiling="yes"
+  ;;
+  x86_64-*-freebsd*|x86_64-*-ps5*)
+    if test "x$use_cpu" = "xauto"; then
+      use_cpu="x86_64"
+    fi
+    meson_cpu="x86_64"
+    meson_system="freebsd"
+    platform_cflags="-fPIC -DPIC -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64"
+    platform_cxxflags="$platform_cflags"
+    optimize_flags="-O2"
+    platform_os="ps5"
+    target_platform="ps5"
+    app_rendersystem="gl"
     cross_compiling="yes"
   ;;
   arm-webos-linux-gnueabi|arm-starfish-linux-gnueabi)
@@ -587,6 +623,8 @@ case $host in
 esac
 
 case $use_platform in
+  ps5)
+    ;;
   ios|ios-simulator|tvos|tvos-simulator|macos)
     ;;
   webos)

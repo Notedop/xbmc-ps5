@@ -29,7 +29,7 @@ CXXFLAGS="@platform_cxxflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/i
 CPPFLAGS="@platform_cppflags@ @platform_includes@ -isystem @prefix@/@deps_dir@/include $CPPFLAGS"
 
 export PKG_CONFIG=@prefix@/@tool_dir@/bin/pkg-config
-export PKG_CONFIG_LIBDIR=@prefix@/@deps_dir@/lib/pkgconfig
+export PKG_CONFIG_LIBDIR=@prefix@/@deps_dir@/lib/pkgconfig:@prefix@/@deps_dir@/libdata/pkgconfig:@prefix@/@deps_dir@/share/pkgconfig
 export NASM=@prefix@/@tool_dir@/bin/nasm
 LIBGCRYPT_CONFIG=@prefix@/@deps_dir@/bin/libgcrypt-config
 
@@ -69,6 +69,14 @@ fi
 if test "@platform_os@" = "android"; then
   ac_cv_func_srand=yes
   ac_cv_func_rand=yes
+fi
+
+if test "@platform_os@" = "ps5"; then
+  # PS5 libc reports FreeBSD-like environment but does not provide querylocale(3).
+  ac_cv_func_querylocale=no
+  # Detected by link checks but headers don't expose prototypes in this SDK.
+  ac_cv_func_pthread_getname_np=no
+  ac_cv_func_pthread_set_name_np=no
 fi
 
 if test "@platform_os@" = "darwin_embedded"; then

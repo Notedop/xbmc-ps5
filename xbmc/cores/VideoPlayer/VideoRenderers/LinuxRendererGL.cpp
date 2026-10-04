@@ -37,6 +37,9 @@
 #endif
 
 #include <locale.h>
+#if defined(TARGET_PS5)
+#include <unistd.h>
+#endif
 #include <memory>
 #include <mutex>
 
@@ -254,6 +257,14 @@ bool CLinuxRendererGL::Configure(const VideoPicture &picture, float fps, unsigne
   m_pixelRatio = 1.0;
 
   m_pboSupported = CGLExtensions::IsExtensionSupported(CGLExtensions::ARB_pixel_buffer_object);
+#if defined(TARGET_PS5)
+  // PS5 GL driver: uploads from pixel buffer objects gain nothing, and 2D
+  // R8/RG8 textures that can also be render targets are kept tiled and filled
+  // pixel by pixel (~23 ms per 1080p plane). Upload from Kodi's own buffers
+  // into rectangle textures, which the driver keeps linear: row copies.
+  m_pboSupported = false;
+  m_textureTarget = GL_TEXTURE_RECTANGLE;
+#endif
 
   if (!CServiceBroker::GetWinSystem()->SetVideoOutput(&picture))
     CLog::Log(LOGWARNING, "LinuxRendererGL::Configure: SetVideoOutput failed");

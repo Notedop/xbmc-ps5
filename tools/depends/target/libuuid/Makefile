@@ -21,7 +21,19 @@ all: .installed-$(PLATFORM)
 	# e2fsprog libuuid often fails because it doesnt create include/uuid location before
 	# installing. lets just create it and move on.
 	mkdir -p $(PREFIX)/include/uuid
-	cd $(PLATFORM); ./configure --prefix=$(PREFIX) --disable-fsck --enable-libuuid
+	# --disable-uuidd: the uuidd helper daemon (and gen_uuid.c's fork()+
+	# execl() call to auto-spawn it) is irrelevant for any tools/depends
+	# target - nothing here runs a system daemon - and is unbuildable on
+	# cross/sandboxed targets like PS5, whose libc provides only execv(),
+	# not the full exec*() family. Without this flag, uuid_generate()'s
+	# object file (and so tst_uuid/uuid_time, which the default "all"
+	# target also builds) carries an unresolved execl symbol on such
+	# targets. With it, USE_UUIDD is never defined and that code path -
+	# and the execl reference - is compiled out entirely; uuid_generate()
+	# still works identically (same /dev/urandom-backed random path), it
+	# just never attempts to talk to a system daemon that would not exist
+	# in a depends sysroot anyway.
+	cd $(PLATFORM); ./configure --prefix=$(PREFIX) --disable-fsck --enable-libuuid --disable-uuidd
 	touch $@
 
 $(LIBDYLIB): .configured-$(PLATFORM)

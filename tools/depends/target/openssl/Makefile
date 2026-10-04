@@ -22,6 +22,10 @@ ifeq ($(OS), linux)
       CONFIGURE+= linux-generic32
     endif
   endif
+else ifeq ($(OS), ps5)
+  TARGETOPT=--with-zlib-include=$(PREFIX)/include --with-zlib-lib=$(PREFIX)/lib
+  # Use BSD target and disable Linux AF_ALG engine.
+  CONFIGURE=./Configure no-shared zlib no-tests no-asm no-module no-afalgeng $(TARGETOPT) --prefix=$(PREFIX) --libdir=lib BSD-x86_64
 else ifeq ($(OS), wasm)
   CONFIGURE=./Configure no-shared no-asm no-tests no-module no-async no-afalgeng --prefix=$(PREFIX) --libdir=lib linux-generic32
 else
@@ -90,4 +94,3 @@ clean:
 
 distclean::
 	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)
-

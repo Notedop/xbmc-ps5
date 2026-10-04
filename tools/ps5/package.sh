@@ -38,13 +38,24 @@ LLD="$PS5_PAYLOAD_SDK/bin/prospero-lld"
 AR="$PS5_PAYLOAD_SDK/bin/prospero-ar"
 
 [ -f "$BUILD/kodi.bin" ] || { echo "!! $BUILD/kodi.bin not found: build Kodi first"; exit 1; }
-# A failed Kodi build leaves new objects but an old kodi.bin (and old module
-# archives): packaging would silently ship the previous build. Refuse.
-STALE=$(find "$BUILD" -name '*.o' -newer "$BUILD/kodi.bin" -print -quit 2>/dev/null)
-if [ -n "$STALE" ]; then
-  echo "!! $BUILD/kodi.bin is older than compiled objects (e.g. ${STALE#$BUILD/}):"
-  echo "!! the Kodi build did not finish. Check: grep -n 'FAILED:\| error:' ~/kodi-build.log"
-  exit 1
+# A failed/incomplete Kodi build leaves kodi.bin stale relative to its own
+# link inputs: packaging would silently ship the previous build. Ask ninja
+# itself whether the kodi.bin target specifically has pending work, rather
+# than comparing mtimes against every *.o under $BUILD - the tree also
+# contains leaf objects with no edge to kodi.bin at all (e.g.
+# cores/dll-loader/exports/wrapper.c.o, the experimental binary-addon
+# loader's always-rebuilt helper target), which can legitimately be newer
+# than kodi.bin from an earlier, unrelated partial build and would
+# otherwise cause a false positive here. A few always-run generator/copy
+# utility steps (ExportFiles/GenerateSystemAddons/GenerateAddonXml) show up
+# in a dry run regardless of staleness; only a line that actually produces
+# kodi.bin counts as real pending work.
+if [ -f "$BUILD/build.ninja" ] && command -v ninja >/dev/null 2>&1; then
+  if (cd "$BUILD" && ninja -n kodi.bin 2>/dev/null) | grep -qE 'kodi\.bin$|-o kodi\.bin'; then
+    echo "!! $BUILD/kodi.bin has pending link work per 'ninja -n kodi.bin':"
+    echo "!! the Kodi build did not finish. Check: grep -n 'FAILED:\| error:' ~/kodi-build.log"
+    exit 1
+  fi
 fi
 [ -f "$APP_TEMPLATE/Makefile" ] && [ -d "$APP_TEMPLATE/.deps/native" ] || {
   echo "!! app template not found at $APP_TEMPLATE (build ps5-opengl's imgui-demo first: make -C $WORK/ps5-opengl imgui-demo)"; exit 1; }

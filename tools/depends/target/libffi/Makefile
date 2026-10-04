@@ -15,6 +15,10 @@ all: .installed-$(PLATFORM)
 .configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM); mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
+ifeq ($(OS),ps5)
+	# PS5 toolchain does not support ms_abi used by the Win64 compatibility stubs.
+	cd $(PLATFORM); sed -i 's/SOURCES="ffi64.c unix64.S ffiw64.c win64.S"/SOURCES="ffi64.c unix64.S"/' configure.host
+endif
 	cd $(PLATFORM); $(CONFIGURE)
 	touch $@
 

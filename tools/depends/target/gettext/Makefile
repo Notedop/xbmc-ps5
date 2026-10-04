@@ -20,6 +20,10 @@ all: .installed-$(PLATFORM)
 .configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM)/*; mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
+ifeq ($(OS),ps5)
+	# PS5 uses a FreeBSD-like libc but does not expose querylocale(3).
+	cd $(PLATFORM); find . -path '*/gnulib-lib/localename.c' -exec sed -i "s/#  elif (defined __FreeBSD__ || defined __DragonFly__) || (defined __APPLE__ && defined __MACH__)/#  elif ((defined __FreeBSD__ \&\& !defined __PROSPERO__) || defined __DragonFly__) || (defined __APPLE__ \&\& defined __MACH__)/" {} +
+endif
 	cd $(PLATFORM); $(CONFIGURE)
 	touch $@
 
@@ -36,4 +40,3 @@ clean:
 
 distclean::
 	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)
-

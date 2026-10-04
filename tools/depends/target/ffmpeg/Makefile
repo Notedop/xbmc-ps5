@@ -13,8 +13,12 @@ endif
 
 CMAKE_ARGS=-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
            -DCMAKE_MODULE_PATH="$(CMAKE_SOURCE_DIR)/cmake/modules;$(CMAKE_SOURCE_DIR)/cmake/modules/buildtools" \
-           -DPKG_CONFIG_PATH=$(PREFIX)/lib/pkgconfig \
+           -DCMAKE_TOOLCHAIN_FILE=$(PREFIX)/share/Toolchain.cmake \
+           -DPKG_CONFIG_PATH=$(PREFIX)/lib/pkgconfig:$(PREFIX)/libdata/pkgconfig \
            -DCMAKE_INSTALL_PREFIX=$(PREFIX) \
+           -DDEPENDS_PATH=$(PREFIX) \
+           -DCORE_SYSTEM_NAME=freebsd \
+           -DCPU=$(CPU) \
            -DFFMPEG_VER=$(VERSION) \
            -DENABLE_DAV1D=ON \
            -DEXTRA_FLAGS="$(FFMPEG_CONFIGURE_OPTIONS)"

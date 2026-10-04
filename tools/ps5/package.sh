@@ -360,6 +360,84 @@ if [ "$PACKAGE_ZIP" = "1" ]; then
     sha256sum "$ZIP_PATH" > "$ZIP_PATH.sha256"
   fi
   echo "Package zip: $ZIP_PATH"
+
+  # Build manifest: source/dependency revisions, feature config, artifact
+  # hashes. Written next to the zip so a release can be reproduced/audited
+  # without re-reading build logs (Phase 4 "preserve packaging and runtime
+  # paths" requirement). Best-effort: a dependency recipe dir that is missing
+  # or was never built via tools/depends just reports null, it never fails
+  # packaging.
+  python3 - "$ROOT" "$BUILD" "$ARTIFACT_DIR" "$TITLE_ID" "${KODI_CATEGORY:-game}" "${KODI_HDR_TITLE:-1}" "$ZIP_PATH" <<'PY'
+import json, os, pathlib, subprocess, sys, datetime
+
+root, build, artifact_dir, title_id, category, hdr_title, zip_path = sys.argv[1:8]
+
+def git_describe(path):
+    try:
+        return subprocess.check_output(
+            ["git", "-C", path, "describe", "--always", "--dirty"],
+            stderr=subprocess.DEVNULL, text=True).strip()
+    except Exception:
+        return None
+
+def dep_version(name, version_file):
+    p = pathlib.Path(root, "tools/depends/target", name, version_file)
+    if not p.exists():
+        return None
+    kv = {}
+    for line in p.read_text(errors="replace").splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            kv[k.strip()] = v.strip()
+    return kv.get("VERSION")
+
+def cmake_cache_bool(name):
+    p = pathlib.Path(build, "CMakeCache.txt")
+    if not p.exists():
+        return None
+    for line in p.read_text(errors="replace").splitlines():
+        if line.startswith(name + ":"):
+            return line.split("=", 1)[-1].strip()
+    return None
+
+def sha256_of(path):
+    sha = pathlib.Path(path + ".sha256")
+    if sha.exists():
+        return sha.read_text().split()[0]
+    return None
+
+manifest = {
+    "generated_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "title_id": title_id,
+    "category": category,
+    "hdr_capable": hdr_title not in ("0", "false", "False"),
+    "kodi_source_revision": git_describe(root),
+    "feature_config": {
+        "ENABLE_PYTHON": cmake_cache_bool("ENABLE_PYTHON"),
+        "ENABLE_UPNP": cmake_cache_bool("ENABLE_UPNP"),
+        "ENABLE_OPTICAL": cmake_cache_bool("ENABLE_OPTICAL"),
+        "ENABLE_DVDCSS": cmake_cache_bool("ENABLE_DVDCSS"),
+        "ENABLE_AIRTUNES": cmake_cache_bool("ENABLE_AIRTUNES"),
+    },
+    "dependency_versions": {
+        "dav1d": dep_version("dav1d", "DAV1D-VERSION"),
+        "ffmpeg": dep_version("ffmpeg", "FFMPEG-VERSION"),
+        "python3": dep_version("python3", "PYTHON3-VERSION"),
+        "curl": dep_version("curl", "CURL-VERSION"),
+        "libsmb2": dep_version("libsmb2", "LIBSMB2-VERSION"),
+        "brotli": dep_version("brotli", "BROTLI-VERSION"),
+        "libiconv": dep_version("libiconv", "LIBICONV-VERSION"),
+    },
+    "artifact": {
+        "zip": os.path.basename(zip_path),
+        "sha256": sha256_of(zip_path),
+    },
+}
+
+out = pathlib.Path(artifact_dir, title_id + "-BUILD-MANIFEST.json")
+out.write_text(json.dumps(manifest, indent=2) + "\n")
+print(f"Build manifest: {out}")
+PY
 fi
 
 if [ -n "${PS5_HOST:-}" ]; then

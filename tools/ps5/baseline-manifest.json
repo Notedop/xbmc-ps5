@@ -1,0 +1,91 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-10-04T14:14:52.966+02:00",
+  "phase": "phase-0",
+  "reference_repo": {
+    "path": "/home/raoul/kodi-ps5-src",
+    "origin": "https://github.com/notedop/kodi-ps5.git",
+    "upstream": "https://github.com/VivaLaVent/kodi-ps5.git",
+    "selected_revision": "3cbafb95fdf4d0a921843475f971c62b65fa5ce9",
+    "local_head": "773c1bbcfb6a98d0e21f5a08add02c2e66424cc8"
+  },
+  "kodi_upstream": {
+    "repo": "https://github.com/xbmc/xbmc.git",
+    "working_sha": "28ea2eac1eb7af8fdcbd2672d933ce87f594be79",
+    "working_sha_reason": "Known local working reference build points to /home/raoul/kodi at this commit via CMAKE_HOME_DIRECTORY evidence."
+  },
+  "candidate_unvalidated_pins": [
+    {
+      "component": "kodi-submodule-local-wip",
+      "sha": "e46bd9cc6cafa0073f386a974e0aa43546a4d531",
+      "note": "Present as staged gitlink in local reference workspace migration WIP; not selected as baseline."
+    }
+  ],
+  "pins": {
+    "ps5_opengl": "122aa899f9255e37d776b2a5317c86e5e9679907",
+    "pacbrew_repo": "dbb6998c90910f58d4f781fc2cab0ecb5ac202b4",
+    "native_app_boilerplate_local": "4f531c4b517f80bcb6b1267135848168d2250047"
+  },
+  "host_environment": {
+    "os": "Ubuntu 24.04.4 LTS (WSL2)",
+    "cmake": "3.28.3",
+    "ninja": "1.11.1",
+    "python3": "3.12.3",
+    "meson": "1.12.1",
+    "clang": "18.1.3",
+    "nasm": "2.16.01",
+    "swig": "4.2.0",
+    "java": "21.0.12.1"
+  },
+  "sdk": {
+    "path": "/opt/ps5-payload-sdk",
+    "contents_top": [
+      "bin",
+      "ldscripts",
+      "samples",
+      "target",
+      "toolchain"
+    ]
+  },
+  "active_known_working_build": {
+    "build_dir": "/home/raoul/kodi-ps5-build",
+    "cmake_home_directory": "/home/raoul/kodi",
+    "cmake_toolchain_file": "/home/raoul/kodi-ps5-src/toolchain/ps5-kodi.cmake"
+  },
+  "inventories": {
+    "overlay_file_count": 87,
+    "kodi_patch_count": 19,
+    "ledger_rows": 110
+  },
+  "migration_checkout": {
+    "path": "/home/raoul/kodi-fork/xbmc-ps5-fork",
+    "branch": "ps5",
+    "branch_base_sha": "28ea2eac1eb7af8fdcbd2672d933ce87f594be79",
+    "remotes": {
+      "upstream": "https://github.com/xbmc/xbmc.git",
+      "origin": "https://github.com/00000080461_ups01/xbmc.git"
+    }
+  },
+  "blockers": [
+    {
+      "id": "phase0-release-baseline-unpinned",
+      "severity": "medium",
+      "description": "Reference release flow at selected revision does not pin an exact Kodi commit; historical release tags alone cannot prove one immutable upstream SHA."
+    },
+    {
+      "id": "phase1-remote-fork-creation-pending",
+      "severity": "medium",
+      "description": "Actual GitHub fork repository creation/push was not completed in this run; local checkout/branch/remotes are prepared."
+    },
+    {
+      "id": "phase2-local-working-tree-divergence",
+      "severity": "low",
+      "description": "Local /home/raoul/kodi contains an extra unmanifested modification (xbmc/addons/AddonInstaller.cpp) not reproduced by overlay+manifest application."
+    },
+    {
+      "id": "phase4-tools-depends-ps5-target-build-validation-pending",
+      "severity": "medium",
+      "description": "PS5 host enablement was added to tools/depends and configure now succeeds, but full PS5-target dependency build/install validation is still pending before switching runtime provisioning."
+    }
+  ]
+}

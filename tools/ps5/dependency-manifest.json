@@ -1,0 +1,142 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-10-04T15:12:00+02:00",
+  "policy": "monolithic-fork",
+  "dependencies": [
+    {
+      "name": "ps5-payload-sdk",
+      "role": "toolchain+sysroot",
+      "source": "host-installed",
+      "version": "unlabeled-path-install",
+      "pin": null,
+      "path": "/opt/ps5-payload-sdk",
+      "notes": "Contains compiler and target sysroot used by current builds."
+    },
+    {
+      "name": "pacbrew-repo",
+      "role": "dependency recipes/packages",
+      "source": "https://github.com/ps5-payload-dev/pacbrew-repo.git",
+      "pin": "dbb6998c90910f58d4f781fc2cab0ecb5ac202b4"
+    },
+    {
+      "name": "ps5-opengl",
+      "role": "graphics runtime/library",
+      "source": "https://github.com/blackbearreloaded/ps5-opengl.git",
+      "pin": "122aa899f9255e37d776b2a5317c86e5e9679907",
+      "pin_source": "patches/ps5-opengl/PS5-OPENGL-COMMIT",
+      "local_worktree": "/home/raoul/ps5-work/ps5-opengl",
+      "consumption": [
+        "toolchain/ps5-kodi.cmake via PS5_OPENGL_PREFIX",
+        "tools/ps5/package.sh APP_TEMPLATE defaults to $HOME/ps5-work/ps5-opengl/build/native-app/PPSA99005"
+      ]
+    },
+    {
+      "name": "ps5-native-app-boilerplate",
+      "role": "native app runtime/packaging template",
+      "source": "https://github.com/blackbearreloaded/ps5-native-app-boilerplate.git",
+      "local_head": "4f531c4b517f80bcb6b1267135848168d2250047",
+      "fallback_commit_in_setup_script": "81d4235346afc7490e98866af4020e94f255b204",
+      "notes": "Setup script attempts older pinned commit first, falls back to RELRO-fixed commit."
+    },
+    {
+      "name": "dav1d",
+      "role": "target codec library",
+      "source": "ps5-payload-sdk sysroot (/target/user/homebrew)",
+      "observed_version_current_build": "1.5.1",
+      "version_source": "build/ps5-release/kodi-pkg-config --modversion dav1d",
+      "tools_depends_candidate": {
+        "recipe": "tools/depends/target/dav1d/Makefile",
+        "version": "1.5.3",
+        "patches": [
+          "01-win-sharedname.patch (windows-only)"
+        ]
+      }
+    },
+    {
+      "name": "ffmpeg",
+      "role": "target media stack",
+      "source": "ps5-payload-sdk sysroot (/target/user/homebrew)",
+      "observed_versions_current_build": {
+        "libavcodec": "61.19.101",
+        "libavformat": "61.7.100",
+        "libavutil": "59.39.100",
+        "libswscale": "8.3.100",
+        "libswresample": "5.3.100",
+        "libpostproc": "58.3.100"
+      },
+      "version_source": "build/ps5-release/kodi-pkg-config --modversion ...",
+      "tools_depends_candidate": {
+        "recipe": "tools/depends/target/ffmpeg/Makefile",
+        "version": "9.0.2",
+        "patches": [
+          "001-ffmpeg-all-libpostproc-plugin.patch",
+          "002-ffmpeg-libavutil-common-h-cpp11-constant-macros.patch",
+          "008-ffmpeg-all-pgssubdec-use-caller-colorspace.patch",
+          "windows-only patches 002/003/004/005/006/007"
+        ]
+      },
+      "depends_on": [
+        "dav1d"
+      ]
+    },
+    {
+      "name": "cpython",
+      "role": "target embedded python runtime",
+      "source": "ps5-payload-sdk sysroot (/target/user/homebrew)",
+      "observed_version_current_build": "3.14 (static libpython3.14.a)",
+      "version_source": "/opt/ps5-payload-sdk/bin/prospero-pkg-config --modversion python-3.14",
+      "tools_depends_candidate": {
+        "recipe": "tools/depends/target/python3/Makefile",
+        "version": "3.14.6",
+        "patch_policy_observation": "existing patches are android/wasm/darwin scoped; no PS5-specific patch carried automatically"
+      }
+    }
+  ],
+  "qualification_status": {
+    "ps5-opengl-external-pin-qualification": {
+      "status": "done-partial",
+      "result": "pinned and consumed as external prerequisite; selected runtime assets vendored in-repo (shims/title)",
+      "evidence": [
+        "toolchain/ps5-kodi.cmake PS5_OPENGL_PREFIX",
+        "tools/ps5/package.sh APP_TEMPLATE default and successful ps5-title/ps5-package runs"
+      ]
+    },
+    "dav1d-current-build-qualification": {
+      "status": "done",
+      "result": "current build resolves dav1d from ps5-payload-sdk homebrew sysroot at version 1.5.1",
+      "evidence": [
+        "build/ps5-release/kodi-pkg-config --modversion dav1d"
+      ]
+    },
+    "ffmpeg-current-build-qualification": {
+      "status": "done",
+      "result": "current build resolves FFmpeg from ps5-payload-sdk homebrew sysroot (libavcodec 61.19.101 etc.)",
+      "evidence": [
+        "build/ps5-release/CMakeCache.txt FFMPEG_* entries",
+        "build/ps5-release/kodi-pkg-config --modversion libav*"
+      ]
+    },
+    "cpython-current-build-qualification": {
+      "status": "done",
+      "result": "current build uses static Python 3.14 from ps5-payload-sdk homebrew sysroot",
+      "evidence": [
+        "build/ps5-release/CMakeCache.txt ENABLE_PYTHON=ON; PYTHON_VERSION=3.14",
+        "/opt/ps5-payload-sdk/target/user/homebrew/lib/libpython3.14.a"
+      ]
+    },
+    "tools-depends-ps5-host-qualification": {
+      "status": "done",
+      "result": "tools/depends now accepts PS5-like FreeBSD host triplet with prospero toolchain",
+      "evidence": [
+        "tools/depends/configure --host=x86_64-unknown-freebsd --with-platform=ps5 --with-toolchain=/opt/ps5-payload-sdk completed successfully"
+      ]
+    },
+    "tools-depends-ps5-target-build-validation": {
+      "status": "pending",
+      "result": "target recipe build/installation pass against PS5 host prefix remains to be fully validated",
+      "evidence": [
+        "PS5 host acceptance and recipe selection are in place; full dependency build matrix not yet completed"
+      ]
+    }
+  }
+}

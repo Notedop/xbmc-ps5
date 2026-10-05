@@ -49,21 +49,45 @@ if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
   find_package(Python3 ${VERSION} ${EXACT_VER} COMPONENTS Development ${SEARCH_QUIET})
 
   if(Python3_FOUND)
-    if(KODI_DEPENDSBUILD)
+    # PS5's CPython is built from source via tools/depends/target/python3
+    # (see docs/README.PS5.md ss1), the same way a KODI_DEPENDSBUILD target
+    # is - so it needs the same transitive static libs explicitly linked in,
+    # even though PS5 isn't a KODI_DEPENDSBUILD platform. _decimal/_ctypes
+    # are disabled in that recipe (tools/depends/target/python3/Makefile),
+    # so gmp/ffi are not actually required there; keep them optional instead
+    # of REQUIRED for ps5 so this doesn't fail if they are ever absent.
+    # expat IS linked the same way as KODI_DEPENDSBUILD (tools/depends'
+    # expat, 2.8.1) - not the SDK pacbrew sysroot's older bundled expat
+    # (2.6.2) that fontconfig/freetype/harfbuzz still pull in (ss0.3): the
+    # kodi-pkg-config wrapper in tools/ps5/configure.sh routes fontconfig's
+    # "Requires.private: expat" to this same tools/depends expat too, so the
+    # whole static link only ever sees one expat.a, not two conflicting ones.
+    if(CORE_SYSTEM_NAME STREQUAL ps5)
+      set(PS5_PYTHON_DEPENDSBUILD TRUE)
+    endif()
+
+    if(KODI_DEPENDSBUILD OR PS5_PYTHON_DEPENDSBUILD)
       set(EXPAT_USE_STATIC_LIBS TRUE)
       find_package(EXPAT REQUIRED ${SEARCH_QUIET})
 
-      find_library(FFI_LIBRARY ffi REQUIRED)
-      find_library(GMP_LIBRARY gmp REQUIRED)
+      if(PS5_PYTHON_DEPENDSBUILD)
+        find_library(FFI_LIBRARY ffi)
+        find_library(GMP_LIBRARY gmp)
+      else()
+        find_library(FFI_LIBRARY ffi REQUIRED)
+        find_library(GMP_LIBRARY gmp REQUIRED)
+      endif()
 
       find_package(Iconv REQUIRED ${SEARCH_QUIET})
       find_package(Intl REQUIRED ${SEARCH_QUIET})
       find_package(LibLZMA REQUIRED ${SEARCH_QUIET})
 
       if(NOT CORE_SYSTEM_NAME STREQUAL android)
-        if(CORE_SYSTEM_NAME STREQUAL wasm)
-          # Emscripten does not provide native libdl/libutil.
-          # Keep only pthread for threaded Python builds.
+        if(CORE_SYSTEM_NAME STREQUAL wasm OR CORE_SYSTEM_NAME STREQUAL ps5)
+          # Emscripten and PS5 do not provide native libdl/libutil - the
+          # recipe's fork/exec/forkpty-dependent modules (_posixsubprocess,
+          # _multiprocessing, _ctypes) are disabled for both platforms, so
+          # neither library is actually needed at link time.
           set(PYTHON_DEP_LIBRARIES pthread)
         else()
           set(PYTHON_DEP_LIBRARIES pthread dl util)
@@ -74,7 +98,13 @@ if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
         endif()
       endif()
 
-      set(Py_LINK_LIBRARIES EXPAT::EXPAT ${FFI_LIBRARY} ${GMP_LIBRARY} LIBRARY::Iconv Intl::Intl LibLZMA::LibLZMA ${PYTHON_DEP_LIBRARIES})
+      set(Py_LINK_LIBRARIES LIBRARY::Iconv Intl::Intl LibLZMA::LibLZMA EXPAT::EXPAT ${PYTHON_DEP_LIBRARIES})
+      if(FFI_LIBRARY)
+        list(APPEND Py_LINK_LIBRARIES ${FFI_LIBRARY})
+      endif()
+      if(GMP_LIBRARY)
+        list(APPEND Py_LINK_LIBRARIES ${GMP_LIBRARY})
+      endif()
     endif()
 
     # We use this all over the place. Maybe it would be nice to keep it as a TARGET property

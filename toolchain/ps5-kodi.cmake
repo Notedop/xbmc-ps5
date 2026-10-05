@@ -46,6 +46,31 @@ set(APP_RENDER_SYSTEM gl CACHE STRING "Kodi render system" FORCE)
 # SDK's compiler wrapper does not provide. Kodi does not use modules.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
+# --- Libraries built from source via tools/depends/target -------------------
+# FFmpeg, dav1d and CPython (plus CPython's own transitive deps: expat, libffi,
+# libintl, libiconv, liblzma) are built against this toolchain by
+# tools/depends/target/{ffmpeg,dav1d,python3,...} (see docs/README.PS5.md ss1)
+# instead of taken from the SDK's pacbrew sysroot. That prefix lives outside
+# PS5_PAYLOAD_SDK, so it must be added to CMAKE_FIND_ROOT_PATH explicitly or
+# find_package(Python3)/find_library() (root-path-restricted while cross
+# compiling) would never see it. It must also come BEFORE the pacbrew root
+# below: find_library()/find_package() take the first match across
+# CMAKE_FIND_ROOT_PATH entries in order, and several of these libraries
+# (expat, libffi, libintl, ...) exist in both roots - without this ordering
+# the pacbrew copies would silently keep winning. configure.sh's
+# kodi-pkg-config wrapper does the pkg-config-based equivalent of this
+# ordering for FFmpeg/dav1d (FindFFMPEG.cmake uses pkg_check_modules, not
+# find_library/CMAKE_FIND_ROOT_PATH, for those).
+if(NOT DEFINED PS5_DEPENDS_PREFIX)
+  if(DEFINED ENV{PS5_DEPENDS_PREFIX})
+    set(PS5_DEPENDS_PREFIX "$ENV{PS5_DEPENDS_PREFIX}")
+  endif()
+endif()
+if(PS5_DEPENDS_PREFIX)
+  set(PS5_DEPENDS_PREFIX "${PS5_DEPENDS_PREFIX}" CACHE PATH "tools/depends/target install prefix (ffmpeg/dav1d/python3)")
+  list(APPEND CMAKE_FIND_ROOT_PATH "${PS5_DEPENDS_PREFIX}")
+endif()
+
 # --- Libraries built by pacbrew-repo (inside the sysroot) -------------------
 set(PS5_HBROOT "${PS5_PAYLOAD_SDK}/target/user/homebrew")
 list(APPEND CMAKE_FIND_ROOT_PATH "${PS5_HBROOT}")

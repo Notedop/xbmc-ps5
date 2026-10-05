@@ -16,7 +16,41 @@ builds while still appearing to succeed. Editing the checkout from Windows
 (e.g. an IDE pointed at the `\\wsl.localhost\...` UNC path) is fine - only the
 actual build/compile must run against a native Linux path.
 
-### 0.2. Host OS packages
+### 0.2. One-command bootstrap
+
+Everything in 0.3 and 0.4 below - host packages, both external SDKs and the
+app template - is installed by a single idempotent script:
+
+```bash
+tools/ps5/bootstrap.sh
+```
+
+Budget 1-3 hours on first run (pacbrew and Mesa are built from source); it
+asks for `sudo` once and keeps the credential alive for the whole run.
+Re-running it after a failure resumes rather than starting over, and a single
+step can be repeated on its own:
+
+```bash
+STEP=opengl tools/ps5/bootstrap.sh     # packages | sdk | stubs | opengl | template
+```
+
+The external sources it checks out and builds (`ps5-opengl`, `pacbrew-repo`,
+the app boilerplate) go to `build/ps5-external/`, so they are covered by
+`.gitignore` and by `git clean -fdx -- build`. Set `WORK=` to put them
+somewhere else - e.g. to keep them across a full build wipe, since
+re-fetching and rebuilding Mesa costs 1-2 hours:
+
+```bash
+WORK=~/ps5-external tools/ps5/bootstrap.sh
+```
+
+`tools/ps5/package.sh` reads the same `WORK` variable to find its app
+template, so pass it there too if you override it.
+
+Read 0.3 and 0.4 if you want to know what it installs or need to do it by
+hand; otherwise skip straight to section 1.
+
+### 0.3. Host OS packages
 
 The PS5 build cross-compiles almost everything itself (via `tools/depends`
 and the external PS5 SDK sysroot below), so it needs far fewer `-dev` library
@@ -37,10 +71,12 @@ own CMake-based recipes (e.g. `cmake` itself) probe for a host libcurl at
 configure time and fail with `CMAKE_USE_SYSTEM_CURL is ON but a curl is not
 found!` if only the runtime package (`libcurl4t64`) is installed.
 
-### 0.3. External PS5 SDK prerequisites (not built by this repo)
+### 0.4. External PS5 SDK prerequisites
 
-These must already be installed; they are not produced by anything in
-`xbmc-ps5-fork`:
+These are not part of the Kodi source tree. `tools/ps5/bootstrap.sh` installs
+and builds both (steps `sdk`, `stubs`, `opengl`, `template`); this section
+describes what they are and why, for anyone installing them by hand or
+debugging the bootstrap.
 
 - `/opt/ps5-payload-sdk` - the PS5 homebrew cross-toolchain (`prospero-clang`,
   `prospero-pkg-config`, etc.) plus a prebuilt "homebrew" sysroot
@@ -59,7 +95,23 @@ These must already be installed; they are not produced by anything in
   (older, symbol-colliding) expat - avoiding duplicate-symbol link errors
   from having two different expat static libraries in one final link.
 - `/opt/ps5-opengl-gl46` - the PS5 OpenGL/EGL shim prefix, plus an app
-  template under `$HOME/ps5-work/ps5-opengl` used by `tools/ps5/package.sh`.
+  template under `build/ps5-external/ps5-opengl` used by
+  `tools/ps5/package.sh`.
+  Built from the revision pinned in
+  `tools/ps5/patches/ps5-opengl/PS5-OPENGL-COMMIT` with
+  `tools/ps5/patches/ps5-opengl/kodi-additions.py` applied, which adds the
+  driver entry points Kodi needs (video out handle, HDR scanout format,
+  zero-copy EGL images). A stock upstream build does **not** export these, so
+  a release archive cannot be substituted as-is.
+
+  The SDK also receives two link stubs it does not ship
+  (`tools/ps5/bootstrap/sce-stubs.sh`): `libSceVideodec2` for the hardware
+  video decoder, and `sceVideoOutVrrUnpegFromFixedRate` added to the existing
+  `libSceVideoOut` stub (the original is kept as `libSceVideoOut.so.sdk`).
+
+  All of these local modifications are intended to be upstreamed; see
+  `docs/ps5/upstream-migration-tasks.md` for the plan and what it would let us
+  delete.
 
 ## 1. Build the dependency toolchain (`tools/depends`)
 
@@ -143,4 +195,6 @@ Both targets call `tools/ps5/package.sh`, which uses:
 
 - `BUILD` (default: `/home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release`)
 - `STAGE` (default: `/home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-stage`)
-- `APP_TEMPLATE` (default: `$HOME/ps5-work/ps5-opengl/build/native-app/PPSA99005`)
+- `APP_TEMPLATE` (default:
+  `build/ps5-external/ps5-opengl/build/native-app/PPSA99005`, i.e.
+  `$WORK/ps5-opengl/...` - see 0.2)

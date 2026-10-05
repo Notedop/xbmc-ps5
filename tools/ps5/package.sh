@@ -13,9 +13,10 @@
 #   4. boilerplate `make app`          -> dist/<TITLE_ID>/{eboot.bin, sce_module, sce_sys}
 #   5. share/kodi copied into the title folder; optional FTP upload.
 #
-#   BUILD       Kodi build dir           default ~/kodi-ps5-build
-#   STAGE       staging dir              default ~/kodi-ps5-stage
-#   APP_TEMPLATE demo app dir            default ~/ps5-work/ps5-opengl/build/native-app/PPSA99005
+#   BUILD       Kodi build dir           default build/ps5-release
+#   STAGE       staging dir              default build/ps5-stage
+#   WORK        external sources dir     default build/ps5-external (bootstrap.sh)
+#   APP_TEMPLATE demo app dir            default $WORK/ps5-opengl/build/native-app/PPSA99005
 #   TITLE_ID    default PPSA99420        HEAP_MIB app malloc heap (default 2048)
 #   KODI_CATEGORY  game (default) or media: home-screen area (media is
 #               experimental: the GL driver does not start in its sandbox)
@@ -28,7 +29,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HERE="$ROOT"
 BUILD="${BUILD:-$ROOT/build/ps5-release}"
 STAGE="${STAGE:-$ROOT/build/ps5-stage}"
-WORK="${WORK:-$HOME/ps5-work}"
+WORK="${WORK:-$ROOT/build/ps5-external}"
 APP_TEMPLATE="${APP_TEMPLATE:-$WORK/ps5-opengl/build/native-app/PPSA99005}"
 TITLE_ID="${TITLE_ID:-PPSA99420}"
 HEAP_MIB="${HEAP_MIB:-2048}"

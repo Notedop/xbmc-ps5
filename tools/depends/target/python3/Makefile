@@ -113,6 +113,17 @@ ifeq ($(OS),ps5)
                py_cv_module__posixshmem=n/a \
                py_cv_module__multiprocessing=n/a \
                py_cv_module__ctypes=n/a
+  # pyexpat links against an external expat (default --with-system-expat=yes
+  # above), resolved via tools/depends/target/expat (2.8.1) rather than the
+  # SDK pacbrew sysroot's older bundled expat (2.6.2) - the latter is missing
+  # newer expat API this CPython version's pyexpat.c calls, and PS5 still
+  # sources fontconfig/freetype/harfbuzz from that SDK sysroot (see
+  # docs/README.PS5.md ss0.3), which pulls that same older expat in
+  # transitively. Having both expat.a builds present in one static
+  # whole-archive link produces duplicate-symbol errors, not just a version
+  # mismatch, so tools/ps5/configure.sh's kodi-pkg-config wrapper routes
+  # fontconfig's "Requires.private: expat" to this same depends-built expat
+  # too, keeping exactly one expat.a in the final link.
   # ac_cv_have_getc_unlocked (not ac_cv_func_getc_unlocked, which this
   # configure.ac does not define) forces off the "getc_unlocked() and
   # friends" probe in configure.ac: the SDK's FreeBSD <stdio.h> declares

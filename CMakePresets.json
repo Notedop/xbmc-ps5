@@ -1,0 +1,48 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "ps5-release",
+      "displayName": "PS5 Release",
+      "description": "PS5 cross-compile, mirrors tools/ps5/configure.sh. Requires the ps5-payload-sdk; Override paths in a local CMakeUserPresets.json.",
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "binaryDir": "${sourceDir}/build/ps5-release",
+      "toolchainFile": "${sourceDir}/toolchain/ps5-kodi.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O2 -g -DNDEBUG",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O2 -g -DNDEBUG",
+        "CMAKE_INSTALL_PREFIX": "/app0",
+        "NATIVEPREFIX": "$env{HOME}/kodi-ps5-native",
+        "WITH_TEXTUREPACKER": "$env{HOME}/kodi-ps5-native/bin",
+        "WITH_JSONSCHEMABUILDER": "$env{HOME}/kodi-ps5-native/bin",
+        "PKG_CONFIG_EXECUTABLE": "${sourceDir}/build/ps5-release/kodi-pkg-config",
+        "INTERNAL_TEXTUREPACKER_INSTALLABLE": "FALSE",
+        "ENABLE_INTERNAL_FFMPEG": "OFF",
+        "ENABLE_TESTING": "OFF",
+        "VERBOSE_FIND": "ON",
+        "ENABLE_PYTHON": "ON",
+        "ENABLE_INTERNAL_SWIG": "ON",
+        "PYTHON_PATH": "/user/homebrew",
+        "PYTHON_VER": "3.14",
+        "Python3_USE_STATIC_LIBS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "ps5-release",
+      "configurePreset": "ps5-release"
+    }
+  ]
+}

@@ -44,13 +44,20 @@ These must already be installed; they are not produced by anything in
 
 - `/opt/ps5-payload-sdk` - the PS5 homebrew cross-toolchain (`prospero-clang`,
   `prospero-pkg-config`, etc.) plus a prebuilt "homebrew" sysroot
-  (`$PS5_PAYLOAD_SDK/target/user/homebrew`) that currently supplies FFmpeg,
-  dav1d and CPython 3.14 directly to the Kodi build (see
-  `docs/ps5/phase4-dependency-qualification.md` - the equivalent
-  `tools/depends/target/{ffmpeg,dav1d,python3}` recipes build and validate
-  cleanly but are not yet the active source for Kodi's own CMake configure;
-  switching to them is tracked as future migration work, not required to
-  build today).
+  (`$PS5_PAYLOAD_SDK/target/user/homebrew`). FFmpeg, dav1d and CPython 3.14
+  are now built from `tools/depends/target/{ffmpeg,dav1d,python3}` and linked
+  from there, not from this sysroot (see
+  `docs/ps5/phase4-dependency-qualification.md`). The sysroot is still used
+  for a handful of libraries this repo intentionally doesn't build itself -
+  fontconfig, freetype, harfbuzz, libass, fribidi, libpng, libfmt and the
+  PS5-specific `libSceImeDialog`/`libSceUserService` system libs. Because
+  fontconfig's `.pc` file declares a private dependency on `expat`,
+  `tools/ps5/configure.sh` patches copies of the SDK's `.pc` files (absolute
+  paths, no sysroot prefixing) and routes `pkg-config` lookups so that
+  fontconfig's expat requirement resolves to the same
+  `tools/depends/target/expat` build Python uses, instead of the SDK's own
+  (older, symbol-colliding) expat - avoiding duplicate-symbol link errors
+  from having two different expat static libraries in one final link.
 - `/opt/ps5-opengl-gl46` - the PS5 OpenGL/EGL shim prefix, plus an app
   template under `$HOME/ps5-work/ps5-opengl` used by `tools/ps5/package.sh`.
 

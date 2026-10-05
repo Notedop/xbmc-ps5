@@ -281,3 +281,7 @@ exclude_dll.txt
 
 # clangd index
 .cache/
+
+# local CMake preset overrides
+/CMakeUserPresets.json
+/cmake-build-*/

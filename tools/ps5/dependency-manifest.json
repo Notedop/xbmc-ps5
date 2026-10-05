@@ -23,11 +23,11 @@
       "role": "graphics runtime/library",
       "source": "https://github.com/blackbearreloaded/ps5-opengl.git",
       "pin": "122aa899f9255e37d776b2a5317c86e5e9679907",
-      "pin_source": "patches/ps5-opengl/PS5-OPENGL-COMMIT",
-      "local_worktree": "/home/raoul/ps5-work/ps5-opengl",
+      "pin_source": "tools/ps5/patches/ps5-opengl/PS5-OPENGL-COMMIT",
+      "local_worktree": "build/ps5-external/ps5-opengl (WORK, see tools/ps5/bootstrap.sh)",
       "consumption": [
         "toolchain/ps5-kodi.cmake via PS5_OPENGL_PREFIX",
-        "tools/ps5/package.sh APP_TEMPLATE defaults to $HOME/ps5-work/ps5-opengl/build/native-app/PPSA99005"
+        "tools/ps5/package.sh APP_TEMPLATE defaults to $WORK/ps5-opengl/build/native-app/PPSA99005"
       ]
     },
     {

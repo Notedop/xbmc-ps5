@@ -3,7 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD="${BUILD:-$ROOT/build/ps5-release}"
-NATIVE="${NATIVE:-$HOME/kodi-ps5-native}"
+# Produced by `make -C tools/depends/native` (TexturePacker, swig, etc.) against
+# the prefix passed to `tools/depends/configure --prefix=...`. See
+# docs/README.PS5.md for the full dependency-build sequence.
+NATIVE="${NATIVE:-$ROOT/build/ps5-depends-test/x86_64-linux-gnu-native}"
 TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-$ROOT/toolchain/ps5-kodi.cmake}"
 PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
 PS5_DEPENDS_PREFIX="${PS5_DEPENDS_PREFIX:-$ROOT/build/ps5-depends-test/x86_64-unknown-freebsd-debug}"
@@ -55,6 +58,16 @@ if [ -f "$PY_ROOT/lib/libpython3.14.a" ]; then
   )
 fi
 
+# JsonSchemaBuilder, unlike TexturePacker, self-builds via CMake's own
+# ExternalProject machinery (using NATIVEPREFIX/share/Toolchain-Native.cmake)
+# whenever -DWITH_JSONSCHEMABUILDER is left unset - so only force an explicit
+# prebuilt path when one genuinely exists; otherwise let it build itself into
+# $NATIVE/bin on first configure.
+JSONSCHEMABUILDER_ARGS=()
+if [ -x "$NATIVE/bin/JsonSchemaBuilder" ]; then
+  JSONSCHEMABUILDER_ARGS=(-DWITH_JSONSCHEMABUILDER="$NATIVE/bin")
+fi
+
 cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -U "FFMPEG_*" -U "Python3_*" -U "PYTHON_*" \
   -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
@@ -63,7 +76,7 @@ cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -DCMAKE_CXX_FLAGS_RELEASE="-O2 -g -DNDEBUG" \
   -DCMAKE_INSTALL_PREFIX=/app0 \
   -DWITH_TEXTUREPACKER="$NATIVE/bin" \
-  -DWITH_JSONSCHEMABUILDER="$NATIVE/bin" \
+  "${JSONSCHEMABUILDER_ARGS[@]}" \
   -DNATIVEPREFIX="$NATIVE" \
   -DPKG_CONFIG_EXECUTABLE="$BUILD/kodi-pkg-config" \
   -DINTERNAL_TEXTUREPACKER_INSTALLABLE=FALSE \

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD="${BUILD:-$ROOT/build/ps5-release}"
-NATIVE="${NATIVE:-/home/raoul/kodi-ps5-native}"
+NATIVE="${NATIVE:-$HOME/kodi-ps5-native}"
 TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-$ROOT/toolchain/ps5-kodi.cmake}"
 PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
 PS5_DEPENDS_PREFIX="${PS5_DEPENDS_PREFIX:-$ROOT/build/ps5-depends-test/x86_64-unknown-freebsd-debug}"
@@ -28,7 +28,7 @@ cat > "$BUILD/kodi-pkg-config" <<WRAP
 DEPENDS_PC="$BUILD/build/lib/pkgconfig:$BUILD/build/libdata/pkgconfig"
 TOOLS_DEPENDS_PC="$PS5_DEPENDS_PREFIX/lib/pkgconfig:$PS5_DEPENDS_PREFIX/share/pkgconfig"
 if [ -d "$PS5_DEPENDS_PREFIX/lib/pkgconfig" ]; then
-  DEPENDS_PC="$TOOLS_DEPENDS_PC:$DEPENDS_PC"
+  DEPENDS_PC="\$TOOLS_DEPENDS_PC:\$DEPENDS_PC"
 fi
 case "\${PKG_CONFIG_LIBDIR:-}" in
   "$BUILD/build/"*)

@@ -22,6 +22,7 @@ the bootstrap as it stands is the supported path until these land.
 | 4 | `blackbearreloaded/ps5-opengl` | Scanout pixel format switch (HDR output) | part of the same |
 | 5 | `blackbearreloaded/ps5-opengl` | EGL image over foreign memory (zero-copy video) | part of the same |
 | 6 | this repo | Make the remaining externs weak + feature-detected | hard link dependency on a patched SDK |
+| 7 | `blackbearreloaded/ps5-opengl` | Fix the failing `test_descriptor_snapshot.py` self-test | the `test-compiler` skip in `tools/ps5/bootstrap/ps5-opengl.sh` |
 
 ---
 
@@ -165,3 +166,29 @@ resolves `ps5_opengl_memory_image_create`.
    first; 5 is the larger review).
 4. Shrink `tools/ps5/bootstrap/ps5-opengl.sh` to a download step and delete
    `tools/ps5/patches/`.
+
+---
+
+## 7. `blackbearreloaded/ps5-opengl`: a failing host self-test at the pin
+
+`make sdk-gl46` runs `make test-compiler` between building Mesa and installing
+the SDK. At the pinned revision `122aa89`, `tests/ps5/test_descriptor_snapshot.py`
+fails on an **unmodified** checkout:
+
+```
+assert 'ps5_flush_gpu_data(storage->data, ps5_descriptor_snapshot_size(context, slot));' in publish
+AssertionError
+```
+
+The test slices `src/gallium/ps5/ps5_screen.c` by source text and asserts the
+exact statement appears inside `ps5_prepare_constant()`. It is not caused by
+`kodi-additions.py` - this was confirmed by stashing our three modified files
+and re-running the test on the clean tree.
+
+Because these self-tests only check the shader compiler's own sources and have
+no effect on the SDK that gets produced, `tools/ps5/bootstrap/ps5-opengl.sh`
+drives the individual `sdk-gl46` toolchain steps and skips `test-compiler`.
+Run `make -C <ps5-opengl> test-compiler` by hand when changing the compiler.
+
+**Action:** report upstream, or confirm the test is stale and expected to be
+rebased. Once fixed, the bootstrap script can call `make sdk-gl46` again.

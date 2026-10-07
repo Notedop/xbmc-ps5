@@ -57,9 +57,16 @@ if [ "$(cat "$STAMP" 2>/dev/null)" != "$PROFILE" ]; then
   rm -rf "$SRC/build/core33-native-runtime"
 fi
 
-# First build also needs Mesa and the shader compiler, which "make sdk-gl46"
-# drives (and which downloads the Mesa sources). Afterwards the installer
-# alone suffices and is much faster.
+LOG="$WORK/ps5-opengl-build.log"
+
+# A first build needs the shader compiler and Mesa as well. Drive the
+# toolchain steps of "make sdk-gl46" individually rather than the target
+# itself, so that its `make test-compiler` step is skipped: those host-side
+# self-tests check the shader compiler's own source against expected
+# snippets and do not affect the SDK that gets produced, and at the pinned
+# revision one of them (tests/ps5/test_descriptor_snapshot.py) fails against
+# an unmodified tree - verified by running it on a clean checkout. Run them
+# by hand with `make -C "$SRC" test-compiler` when changing the compiler.
 if [ ! -d "$SRC/build/sdk/ps5-opengl-gl46/lib" ]; then
   # Upstream's tools/fetch-sources.py is not resumable: it creates
   # third_party/<name>/ and only then fetches into it, but on a re-run it
@@ -76,15 +83,21 @@ if [ ! -d "$SRC/build/sdk/ps5-opengl-gl46/lib" ]; then
       fi
     done
   fi
-  echo "==> first build: fetching sources and building the full SDK (this takes 1-2 hours)"
-  ( cd "$SRC" && make source-fetch && make sdk-gl46 )
-else
-  echo "==> rebuilding the runtime and packaging the SDK ($PROFILE)"
-  ( cd "$SRC" && bash toolchain/install-ps5-opengl-gl46.sh build/sdk/ps5-opengl-gl46 ) \
-    > "$WORK/ps5-opengl-build.log" 2>&1 || {
-    echo "!! SDK build failed, last lines of $WORK/ps5-opengl-build.log:"; tail -25 "$WORK/ps5-opengl-build.log"; exit 1; }
+  echo "==> first build: fetching sources, shader compiler and Mesa (1-2 hours; log: $LOG)"
+  ( cd "$SRC" \
+      && make source-fetch \
+      && bash toolchain/build-opengnm-psbc.sh \
+      && bash toolchain/build-opengnm-psbc-ps5.sh \
+      && PS5_MESA_CROSS_FILE="$PS5_PAYLOAD_SDK/toolchain/prospero.ini" \
+         bash toolchain/build-mesa-ps5.sh ) || {
+    echo "!! compiler/Mesa build failed"; exit 1; }
 fi
-( cd "$SRC" && python3 tests/ps5/verify_gl46_link_surface.py ) >> "$WORK/ps5-opengl-build.log" 2>&1 \
+
+echo "==> building the runtime and packaging the SDK ($PROFILE)"
+( cd "$SRC" && bash toolchain/install-ps5-opengl-gl46.sh build/sdk/ps5-opengl-gl46 ) \
+  > "$LOG" 2>&1 || {
+  echo "!! SDK build failed, last lines of $LOG:"; tail -25 "$LOG"; exit 1; }
+( cd "$SRC" && python3 tests/ps5/verify_gl46_link_surface.py ) >> "$LOG" 2>&1 \
   || echo "   note: verify_gl46_link_surface.py reported a problem (see the log)"
 
 mkdir -p "$SRC/build" && echo "$PROFILE" > "$STAMP"

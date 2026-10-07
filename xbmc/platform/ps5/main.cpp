@@ -41,6 +41,7 @@ extern "C" int unsetenv(const char* name);
 // directory diagnostics below.
 extern "C" int getdents(int fd, char* buf, int nbytes);
 extern "C" int getdirentries(int fd, char* buf, int nbytes, long* basep);
+extern "C" int sceSystemServiceLoadExec(const char* path, const char* argv[]);
 
 // The few SQLite calls the startup probe needs (libsqlite3 is linked into
 // Kodi; its header lives outside the kodi target's include path).
@@ -341,6 +342,12 @@ static bool SwitchPresent(const char* path)
   return false;
 }
 
+static void ExitRequest(int status)
+{
+  Klogf("[kodi-ps5] requesting title exit (Kodi status=%d)\n", status);
+  const int rc = sceSystemServiceLoadExec("exit", nullptr);
+  Klogf("[kodi-ps5] LoadExec(exit) returned 0x%08x\n", static_cast<unsigned int>(rc));
+}
 
 int main(int argc, char* argv[])
 {
@@ -545,7 +552,8 @@ int main(int argc, char* argv[])
     unlink(uninstallSwitch.c_str());
     Klogf("[kodi-ps5] kodi-uninstall found: removed %d files and folders of %s, quitting\n", n,
           kodiDataPath.c_str());
-    _exit(0);
+    ExitRequest(0);
+    return 0;
   }
   const std::string resetSwitch = app0 + "/kodi-reset";
   if (SwitchPresent(resetSwitch.c_str()))
@@ -782,7 +790,6 @@ int main(int argc, char* argv[])
   CAppEnvironment::TearDown();
   OpenUpTree(kodiData); // files created during this run (best effort)
   Klog("[kodi-ps5] exiting\n");
-  // Leave immediately: returning from main in a title does not always end the
-  // process, which leaves the launch screen up with nothing behind it.
-  _exit(status);
+  ExitRequest(status);
+  return status;
 }

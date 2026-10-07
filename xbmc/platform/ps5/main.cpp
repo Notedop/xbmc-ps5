@@ -352,7 +352,7 @@ static void ExitRequest(int status)
 int main(int argc, char* argv[])
 {
   // Written straight to klog: visible even if everything after this fails.
-  Klog("[kodi-ps5] main() reached\n");
+  Klog("[kodi-ps5] main() reached 1.0\n");
   Klogf("[kodi-ps5] build %s\n", KODI_PS5_BUILD_STAMP);
 
   Klogf("[kodi-ps5] PID=%d\n[kodi-ps5] attempting sandbox escape\n", getpid());

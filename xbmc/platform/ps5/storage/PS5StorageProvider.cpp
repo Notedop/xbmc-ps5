@@ -41,14 +41,13 @@ void Add(std::vector<CMediaSource>& drives, const char* path, const char* name)
 
 void CPS5StorageProvider::GetLocalDrives(std::vector<CMediaSource>& localDrives)
 {
-  // No local drive entries. The app's own areas (/app0, /download0, /data)
-  // never hold media, and the loader's loopback FTP server is deliberately not
-  // offered as a source: browsing or refreshing it drives synchronous FTP
-  // Stat/connect round-trips that stall the GUI thread (folder-art probes,
-  // directory-provider refreshes). Removed for UI responsiveness. To reach
-  // console files, add ftp://127.0.0.1:2121/ (or :1337) as a source manually.
-  (void)localDrives;
+  Add(localDrives, "/download0", "Kodi data (/download0)");
+  Add(localDrives, "/app0", "Application image (/app0)");
+  // Present when the loader has jailbroken the process (etaHEN / lapy daemon).
+  Add(localDrives, "/data", "System data (/data)");
+  Add(localDrives, "/", "System data (/root)");
 }
+
 namespace
 {
 // USB drives and extended storage appear here once the sandbox is open

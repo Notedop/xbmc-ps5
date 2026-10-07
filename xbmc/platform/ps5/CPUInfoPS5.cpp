@@ -8,13 +8,37 @@
 
 #include "CPUInfoPS5.h"
 
+#include <sys/sysctl.h>
 #include <sys/types.h>
 
-#include <sys/sysctl.h>
+extern "C"
+{
+  long sceKernelGetCpuFrequency(void);
+  int sceKernelGetCpuTemperature(int* outCelsius);
+  int sceKernelGetCpuCoreClock(int* outMHzPerCore);
+  int sceKernelGetSocSensorTemperature(int sensorId, int* outCelsius);
+  int sceKernelGetCpuUsage(void* out, int32_t* count);
+}
 
 std::shared_ptr<CCPUInfo> CCPUInfo::GetCPUInfo()
 {
   return std::make_shared<CCPUInfoPS5>();
+}
+
+float CCPUInfoPS5::GetCPUFrequency()
+{
+  const long hz = sceKernelGetCpuFrequency();
+  return hz > 0 ? static_cast<float>(hz / 1000000.0) : 0.0f;
+}
+
+bool CCPUInfoPS5::GetTemperature(CTemperature& temperature)
+{
+  int celsius = 0;
+  if (sceKernelGetCpuTemperature(&celsius) != 0)
+    return false;
+
+  temperature = CTemperature::CreateFromCelsius(celsius);
+  return true;
 }
 
 CCPUInfoPS5::CCPUInfoPS5()

@@ -16,7 +16,8 @@ public:
   CGPUInfoPS5() = default;
   ~CGPUInfoPS5() = default;
 
-private:
-  bool SupportsPlatformTemperature() const override { return false; }
-  bool GetGPUPlatformTemperature(CTemperature& temperature) const override { return false; }
+protected:
+  bool SupportsPlatformTemperature() const override { return true; }
+  bool SupportsCustomTemperatureCommand() const override { return false; }
+  bool GetGPUPlatformTemperature(CTemperature& temperature) const override;
 };

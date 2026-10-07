@@ -10,6 +10,7 @@
 
 #include "RegExp.h"
 #include "filesystem/File.h"
+#include "log.h"
 
 #include <cstdint>
 #include <utility>

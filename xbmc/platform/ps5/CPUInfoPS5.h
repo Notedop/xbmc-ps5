@@ -13,10 +13,12 @@
 class CCPUInfoPS5 : public CCPUInfoPosix
 {
 public:
+
   CCPUInfoPS5();
   ~CCPUInfoPS5() = default;
 
-  bool SupportsCPUUsage() const override { return false; }
-  int GetUsedPercentage() override { return 0; }
-  float GetCPUFrequency() override { return 3500.0f; }
+  bool SupportsCPUUsage() const override {return true;}
+  int GetUsedPercentage() override {return 0;}
+  float GetCPUFrequency() override;
+  bool GetTemperature(CTemperature& temperature) override;
 };

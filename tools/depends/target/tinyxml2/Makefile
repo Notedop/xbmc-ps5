@@ -2,8 +2,13 @@ include ../../Makefile.include TINYXML2-VERSION ../../download-files.include
 DEPS = ../../Makefile.include Makefile TINYXML2-VERSION ../../download-files.include \
                                        001-debug-pdb.patch
 
+ifeq ($(TARGET_PLATFORM),ps5)
+CMAKE_OPTIONS=-Dtinyxml2_BUILD_TESTING=OFF \
+              -Dtinyxml2_INSTALL_PKGCONFIG=ON
+else
 CMAKE_OPTIONS=-Dtinyxml2_BUILD_TESTING=OFF \
               -Dtinyxml2_INSTALL_PKGCONFIG=OFF
+endif
 
 LIBDYLIB=$(PLATFORM)/build/$(BYPRODUCT)
 

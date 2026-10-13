@@ -12,6 +12,10 @@
 #include "DVDCodecs/DVDFactoryCodec.h"
 #include "DVDCodecs/Overlay/DVDOverlay.h"
 #include "DVDCodecs/Video/DVDVideoCodecFFmpeg.h"
+#if defined(TARGET_PS5)
+#include "platform/ps5/video/VideoTimingPS5.h"
+#include "utils/StringUtils.h"
+#endif
 #include "ServiceBroker.h"
 #include "cores/VideoPlayer/Interface/DemuxPacket.h"
 #include "cores/VideoPlayer/Interface/TimingConstants.h"
@@ -23,6 +27,7 @@
 #include "windowing/GraphicContext.h"
 #include "windowing/WinSystem.h"
 
+#include <cstdlib>
 #include <iomanip>
 #include <iterator>
 #include <memory>
@@ -861,6 +866,18 @@ void CVideoPlayerVideo::ProcessOverlays(const VideoPicture* pSource, double pts)
 CVideoPlayerVideo::EOutputState CVideoPlayerVideo::OutputPicture(const VideoPicture* pPicture)
 {
   m_bAbortOutput = false;
+
+#if defined(TARGET_PS5)
+  static const bool videoTimingEnabled = std::getenv("KODI_PS5_VIDEO_DEBUG") != nullptr;
+  if (videoTimingEnabled)
+  {
+    const double frameDurationMs =
+        pPicture->iDuration > 0 ? 1000.0 * pPicture->iDuration / DVD_TIME_BASE : 0.0;
+    KODI::PLATFORM::PS5::TraceVideoTimingPS5(
+        "player-output", 1000.0 * pPicture->pts / DVD_TIME_BASE, frameDurationMs, -1.0,
+        StringUtils::Format("speed={} flags={:#x}", m_speed, pPicture->iFlags));
+  }
+#endif
 
   if (m_processInfo.GetVideoStereoMode() != pPicture->stereoMode)
   {

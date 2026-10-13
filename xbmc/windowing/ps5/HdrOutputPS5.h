@@ -30,6 +30,7 @@
 #include "rendering/gl/GuiCompositeShaderGL.h"
 #include "system_gl.h"
 
+#include <cstdlib>
 #include <memory>
 
 struct VideoPicture;
@@ -60,6 +61,10 @@ public:
 
 private:
   bool CreateTarget(int width, int height);
+  bool ProbeTarget(int width, int height, const char* name);
+  void CheckErrors(const char* stage); // kodi-video-debug: GL errors per frame stage
+  void InstallDebugCallback();         // kodi-video-debug: the driver's GL error messages
+  static void SetStage(const char* stage);
   void DestroyTarget();
   bool CreatePackProgram();
   void SwitchScanout(bool hdr);
@@ -67,13 +72,17 @@ private:
   bool m_active = false;   // scanout in the HDR format, frame packed
   bool m_hlg = false;      // the video is HLG: converted to PQ in the shader
   bool m_hdrScanout = false;
-  GLuint m_fbo = 0;        // RGB10_A2 + depth intermediate target
+  GLuint m_fbo = 0;        // 10-bit (or better) + depth intermediate target
   GLuint m_texture = 0;
   GLuint m_depth = 0;
   int m_width = 0;
   int m_height = 0;
   GLuint m_packProgram = 0;
   GLint m_packTexLoc = -1;
+  GLint m_packDiagnosticLoc = -1;
+  const bool m_debug = std::getenv("KODI_PS5_VIDEO_DEBUG") != nullptr;
+  unsigned m_errorReports = 0;
+  bool m_debugCallbackInstalled = false;
   GLuint m_packVao = 0;
   GLuint m_packVbo = 0;
 

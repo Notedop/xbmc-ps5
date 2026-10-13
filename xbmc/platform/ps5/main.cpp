@@ -761,6 +761,8 @@ int main(int argc, char* argv[])
   // port (the hardware decoder) reads.
   const std::vector<std::pair<std::string, const char*>> switches = {
       {app0 + "/kodi-debug", "KODI_PS5_DEBUG"},
+      {app0 + "/kodi-video-debug", "KODI_PS5_VIDEO_DEBUG"},
+      {app0 + "/kodi-software-video", "KODI_PS5_SOFTWARE_VIDEO"},
   };
   for (const auto& sw : switches)
   {

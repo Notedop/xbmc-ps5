@@ -13,6 +13,7 @@
 #include "RendererPS5.h"
 
 #include "VideoCodecRegistration.h"
+#include "VideoTimingPS5.h"
 
 #include "cores/VideoPlayer/Buffers/VideoBuffer.h"
 #include "cores/VideoPlayer/DVDCodecs/DVDFactoryCodec.h"
@@ -113,6 +114,26 @@ void CDVDVideoCodecPS5::Register()
 
 bool CDVDVideoCodecPS5::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
 {
+  if (hints.codec == AV_CODEC_ID_VP9 && std::getenv("KODI_PS5_SOFTWARE_VIDEO") != nullptr)
+  {
+    CLog::Log(LOGINFO,
+              "CDVDVideoCodecPS5: kodi-software-video comparison: VP9 hardware decoding "
+              "bypassed, using FFmpeg");
+    return false;
+  }
+
+  // Dolby Vision profile 5 has no HDR10 base layer: its pictures are in the IPT
+  // colour space and need per-frame DV reshaping the PS5 hardware does not do,
+  // so they come out green/purple. Profiles 7/8 carry an HDR10 base (handled -
+  // the DV RPU/EL NALs are stripped in DropInjectedParameterSets), but profile 5
+  // has nothing we can show correctly. Hand it to FFmpeg, which tone-maps it.
+  if (hints.codec == AV_CODEC_ID_HEVC && hints.dovi.dv_profile == 5)
+  {
+    CLog::Log(LOGINFO, "CDVDVideoCodecPS5: Dolby Vision profile 5 (no HDR10 base); the hardware "
+                       "cannot reshape it (would be green), using FFmpeg");
+    return false;
+  }
+
   VideoDec2Codec codec;
   if (hints.codec == AV_CODEC_ID_H264 && IsH264Supported(hints.profile))
     codec = VideoDec2Codec::H264;
@@ -138,6 +159,8 @@ bool CDVDVideoCodecPS5::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
   else
     return false; // FFmpeg takes it (H.264 High 10, HEVC/VP9 4:2:2/4:4:4, 12-bit, AV1, ...)
 
+  // Above 4K goes to FFmpeg: 8K VP9 in hardware was tried and could not keep
+  // up (35-75 ms a picture at 24 fps; see CVideoDec2::Open).
   if (hints.width <= 0 || hints.height <= 0 || hints.width > 3840 || hints.height > 2176)
     return false;
   // Interlaced streams: decoded in hardware, deinterlaced with bwdif
@@ -155,6 +178,7 @@ bool CDVDVideoCodecPS5::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
     CLog::Log(LOGWARNING, "CDVDVideoCodecPS5: the GL driver has no zero-copy additions (rebuild "
               "it with scripts/18): copying frames");
   m_decoder->SetPooled(m_zeroCopy);
+  m_decoder->SetCpuReadsFrames(!m_zeroCopy);
   if (m_zeroCopy && !m_zeroCopyPool)
     m_zeroCopyPool = std::make_shared<CVideoBufferPoolPS5>();
 
@@ -167,8 +191,12 @@ bool CDVDVideoCodecPS5::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
           ? "H.264"
           : (codec == VideoDec2Codec::H264High10
                  ? "H.264 High 10"
-                 : (m_vp9 ? (m_tenBit ? "VP9 Profile 2" : "VP9")
-                          : (m_tenBit ? "HEVC Main10" : "HEVC"))),
+                 : (codec == VideoDec2Codec::VP9
+                        ? "VP9"
+                        : (codec == VideoDec2Codec::VP9Profile2
+                               ? "VP9 Profile 2"
+                               : (codec == VideoDec2Codec::HEVCMain10 ? "HEVC Main10"
+                                                                      : "HEVC")))),
       hints.width, hints.height);
   m_streamStart = std::chrono::steady_clock::now();
   m_streamDecodes = 0;
@@ -184,6 +212,14 @@ bool CDVDVideoCodecPS5::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
   }
   m_hints = hints;
   BuildParameterSets(hints);
+  RefreshContainerSets();
+  if (m_hevc && ParameterSetsUseTiles())
+  {
+    CLog::Log(LOGINFO, "CDVDVideoCodecPS5: HEVC coded in tiles, which the hardware decoder does not "
+                       "support: using FFmpeg");
+    m_decoder->Close();
+    return false;
+  }
   m_prependParameterSets = !m_parameterSets.empty();
   if (!SetupBitstreamFilter(hints))
   {
@@ -214,6 +250,7 @@ bool CDVDVideoCodecPS5::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
   m_stereoMode = hints.stereo_mode;
 
   m_vp9 = codec == VideoDec2Codec::VP9 || codec == VideoDec2Codec::VP9Profile2;
+  m_vp9HiddenOutputs = 0;
   m_tenBit = codec == VideoDec2Codec::HEVCMain10 || codec == VideoDec2Codec::VP9Profile2 ||
              codec == VideoDec2Codec::H264High10;
   m_hevc = codec == VideoDec2Codec::HEVC || codec == VideoDec2Codec::HEVCMain10;
@@ -504,40 +541,6 @@ bool CDVDVideoCodecPS5::FeedHardware(const DemuxPacket& packet)
   return !m_fatal;
 }
 
-namespace
-{
-// VP9 uncompressed header, first bits: frame_marker(2), profile(2, +1 reserved
-// for profile 3), show_existing_frame(1), then frame_type(1), show_frame(1).
-// Hidden frames (alternate references) still produce a decoder output, which
-// must not be shown; a show-existing-frame command is shown.
-bool Vp9FrameIsShown(const uint8_t* data, size_t size)
-{
-  if (size < 1)
-    return true;
-  unsigned bit = 0;
-  auto read = [&](unsigned count)
-  {
-    unsigned value = 0;
-    for (unsigned i = 0; i < count; ++i, ++bit)
-    {
-      if (bit / 8 >= size)
-        return value << (count - i); // truncated: treat as shown further up
-      value = (value << 1) | ((data[bit / 8] >> (7 - bit % 8)) & 1u);
-    }
-    return value;
-  };
-  if (read(2) != 2)
-    return true; // not a VP9 frame header: never hide on a guess
-  const unsigned profile = read(1) | (read(1) << 1);
-  if (profile == 3)
-    read(1);
-  if (read(1)) // show_existing_frame
-    return true;
-  read(1); // frame_type
-  return read(1) != 0; // show_frame
-}
-} // namespace
-
 bool CDVDVideoCodecPS5::HevcAccessUnitIsRasl(const uint8_t* data, size_t size)
 {
   // Annex-B: the first VCL NAL unit decides. HEVC NAL header: type in bits
@@ -611,7 +614,6 @@ bool CDVDVideoCodecPS5::DecodeOne(const uint8_t* data, size_t size)
     }
     m_skipRasl = false;
   }
-  const bool thisShown = !m_vp9 || Vp9FrameIsShown(data, size);
   std::vector<uint8_t> withParameterSets;
   if (m_prependParameterSets)
   {
@@ -624,6 +626,16 @@ bool CDVDVideoCodecPS5::DecodeOne(const uint8_t* data, size_t size)
     if (m_timeDecodes)
       CLog::Log(LOGINFO, "CDVDVideoCodecPS5: parameter sets ({} bytes) prepended to the first access unit",
                 m_parameterSets.size());
+  }
+  // The container's parameter sets are prepended above and inserted again by
+  // the annexb filter right before the picture. When the stream has its own,
+  // different, ones, those copies override them and the decoder refuses the
+  // access unit (0x811D0301, seen on a 4K HEVC MKV). Keep the stream's own.
+  std::vector<uint8_t> withoutInjected;
+  if (DropInjectedParameterSets(data, size, withoutInjected))
+  {
+    data = withoutInjected.data();
+    size = withoutInjected.size();
   }
   bool gotPicture = false;
   const auto decodeStart = std::chrono::steady_clock::now();
@@ -702,7 +714,8 @@ bool CDVDVideoCodecPS5::DecodeOne(const uint8_t* data, size_t size)
       m_decodeWindow = now;
     else if (m_timeDecodes && now - m_decodeWindow >= std::chrono::seconds(5))
     {
-      CLog::Log(LOGINFO, "CDVDVideoCodecPS5 (kodi-debug): {} decodes in {:.1f} s, {:.1f} ms average, "
+      CLog::Log(LOGINFO,
+                "CDVDVideoCodecPS5 (kodi-video-debug): {} decodes in {:.1f} s, {:.1f} ms average, "
                 "{:.1f} ms longest",
                 m_decodeCount, std::chrono::duration<double>(now - m_decodeWindow).count(),
                 m_decodeTotalMs / m_decodeCount, m_decodeMaxMs);
@@ -718,33 +731,47 @@ bool CDVDVideoCodecPS5::DecodeOne(const uint8_t* data, size_t size)
     m_pendingAus.emplace_front(data, data + size);
     return true;
   }
-  // VP9: whose picture is this? The just-offered frame's (immediate), or the
-  // oldest access unit still waiting (frames in flight). The current access
-  // unit's flag is queued when its picture has not come out with it.
-  bool shown = true;
-  if (m_vp9)
+  if (gotPicture)
   {
-    if (gotPicture && picture.immediate)
-      shown = thisShown;
-    else
+    const size_t decodedBefore = m_decoded.size();
+    if (m_vp9)
     {
-      m_vp9PendingShown.push_back(thisShown);
-      if (gotPicture)
-      {
-        shown = m_vp9PendingShown.front();
-        m_vp9PendingShown.pop_front();
-      }
+      if (!KeepVp9Picture(picture))
+        return false;
+    }
+    else
+      Keep(picture);
+    if (m_timeDecodes && m_decoded.size() > decodedBefore)
+    {
+      const double decodeMs = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - decodeStart)
+                                  .count();
+      const double frameDurationMs = 1000.0 * m_frameDuration / DVD_TIME_BASE;
+      const double ptsMs = 1000.0 * m_decoded.back().pts / DVD_TIME_BASE;
+      KODI::PLATFORM::PS5::TraceVideoTimingPS5(
+          "decode-output", ptsMs, frameDurationMs, decodeMs,
+          StringUtils::Format("frame={} immediate={} decode={}ms", picture.frameIndex,
+                              picture.immediate, decodeMs));
     }
   }
-  if (gotPicture && !shown)
+  return true;
+}
+
+bool CDVDVideoCodecPS5::KeepVp9Picture(const VideoDec2Picture& picture)
+{
+  // Only the decoder's returned output status determines whether pixels may
+  // be presented; output order need not match the current input access unit.
+  if (picture.outputStatus != 0)
   {
-    // VP9 hidden frame: decoded as a reference, never presented
+    ++m_vp9HiddenOutputs;
+    m_decoder->TraceContent("hidden", picture);
     m_decoder->ReleaseFrame(picture.frameIndex);
     return true;
   }
-  if (gotPicture)
-    Keep(picture);
-  return true;
+  if (Keep(picture))
+    return true;
+  m_decoder->ReleaseFrame(picture.frameIndex);
+  return false;
 }
 
 std::string CDVDVideoCodecPS5::LumaSamples(const VideoDec2Picture& picture) const
@@ -757,6 +784,7 @@ std::string CDVDVideoCodecPS5::LumaSamples(const VideoDec2Picture& picture) cons
   auto at = [&](unsigned x, unsigned y) -> unsigned
   {
     const uint8_t* p = picture.data + static_cast<size_t>(y) * picture.pitch + static_cast<size_t>(x) * bytes;
+    CVideoDec2::InvalidateForRead(p, bytes);
     return bytes == 2 ? *reinterpret_cast<const uint16_t*>(p) : *p;
   };
   return StringUtils::Format("{} {} {} {} {}", at(8, 8), at(w / 2, h / 2), at(8, h - 8),
@@ -768,14 +796,14 @@ void CDVDVideoCodecPS5::Trace(const char* stage, const VideoDec2Picture& picture
   if (!m_timeDecodes || m_trace == 0)
     return;
   --m_trace;
-  CLog::Log(LOGINFO,
-            "CDVDVideoCodecPS5 (trace {}): offered frame {} ({}), picture {} frame {} (count {}, "
-            "immediate {}), luma {}",
+  CLog::Log(
+      LOGINFO,
+      "CDVDVideoCodecPS5 (kodi-video-debug trace {}): offered frame {} ({}), picture {} frame {} "
+      "(count {}, immediate {}), luma {}",
             stage, picture.offeredIndex, picture.offeredAccepted ? "accepted" : "refused",
             gotPicture ? "yes" : "no", gotPicture ? picture.frameIndex : -1, picture.pictureCount,
             picture.immediate ? "yes" : "no", gotPicture ? LumaSamples(picture) : "-");
 }
-
 
 void CDVDVideoCodecPS5::LogStreamSummary()
 {
@@ -790,6 +818,9 @@ void CDVDVideoCodecPS5::LogStreamSummary()
             m_streamDecodes, seconds, seconds > 0.0 ? m_streamDecodes / seconds : 0.0,
             m_streamDecodeMs / m_streamDecodes, m_streamMaxMs, m_streamOverBudget,
             m_streamOverBudget == 0 ? "" : " (would drop)");
+  if (m_vp9)
+    CLog::Log(LOGINFO, "CDVDVideoCodecPS5: VP9 outputs: {} shown, {} discarded", m_picturesOut,
+              m_vp9HiddenOutputs);
 }
 
 bool CDVDVideoCodecPS5::RetryPending()
@@ -834,6 +865,7 @@ void CDVDVideoCodecPS5::DetectAlignment(const VideoDec2Picture& picture, unsigne
     const auto* row = reinterpret_cast<const uint16_t*>(picture.data + y * picture.pitch);
     for (unsigned x = 0; x < width; x += std::max(1u, width / 64))
     {
+      CVideoDec2::InvalidateForRead(row + x, sizeof(uint16_t));
       lowBits |= row[x] & 0x003f;
       highBits |= row[x] & 0xfc00;
     }
@@ -858,8 +890,9 @@ void CDVDVideoCodecPS5::DetectAlignment(const VideoDec2Picture& picture, unsigne
 
 bool CDVDVideoCodecPS5::Keep(const VideoDec2Picture& picture)
 {
+  m_decoder->TraceContent("shown", picture);
   if (m_timeDecodes && m_trace > 0)
-    CLog::Log(LOGINFO, "CDVDVideoCodecPS5 (trace hand-off): frame {}, luma {}", picture.frameIndex,
+    CLog::Log(LOGINFO, "CDVDVideoCodecPS5 (kodi-video-debug trace hand-off): frame {}, luma {}", picture.frameIndex,
               LumaSamples(picture));
   // Visible area: the stream's size, never more than what was decoded.
   const unsigned width = std::min(m_width, picture.width);
@@ -890,7 +923,7 @@ bool CDVDVideoCodecPS5::Keep(const VideoDec2Picture& picture)
     return false;
   }
   uint8_t* planes[YuvImage::MAX_PLANES];
-  const uint8_t* chroma = picture.data + pitch * picture.height; // after the full coded height
+  const uint8_t* chroma = picture.data + pitch * picture.chromaOffsetHeight;
   if (!m_tenBit)
   {
     const int strides[YuvImage::MAX_PLANES] = {static_cast<int>(pitch), static_cast<int>(pitch),
@@ -926,6 +959,7 @@ bool CDVDVideoCodecPS5::Keep(const VideoDec2Picture& picture)
   }
 
   m_decoded.push_back(Decoded{buffer, NextPts()});
+  m_decoder->TraceContent("copied", picture, 1000.0 * m_decoded.back().pts / DVD_TIME_BASE);
   return true;
 }
 
@@ -992,7 +1026,8 @@ bool CDVDVideoCodecPS5::KeepDeinterlaced(const VideoDec2Picture& picture, unsign
   for (unsigned y = 0; y < height; ++y)
     std::memcpy(m_deintIn->data[0] + static_cast<size_t>(y) * m_deintIn->linesize[0],
                 picture.data + static_cast<size_t>(y) * picture.pitch, width);
-  const uint8_t* chroma = picture.data + static_cast<size_t>(picture.pitch) * picture.height;
+  const uint8_t* chroma =
+      picture.data + static_cast<size_t>(picture.pitch) * picture.chromaOffsetHeight;
   for (unsigned y = 0; y < height / 2; ++y)
   {
     const uint8_t* src = chroma + static_cast<size_t>(y) * picture.pitch;
@@ -1087,7 +1122,6 @@ void CDVDVideoCodecPS5::ResetDecoderState()
   m_trace = 30;
   m_decoder->Reset();
   m_pendingAus.clear();
-  m_vp9PendingShown.clear();
   CloseDeinterlacer(); // set up again with the next picture
   m_deintPts.clear();
   m_deintOutputs = 0;
@@ -1113,11 +1147,19 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecPS5::GetPicture(VideoPicture* pVideoPictu
   if (m_fatal)
     return VC_ERROR;
 
-  if (m_decoded.empty() && (m_codecControlFlags & DVD_CODEC_CTRL_DRAIN))
+  while (m_decoded.empty() && (m_codecControlFlags & DVD_CODEC_CTRL_DRAIN))
   {
     VideoDec2Picture picture;
     if (m_decoder->Flush(&picture))
-      Keep(picture);
+    {
+      if (m_vp9)
+      {
+        if (!KeepVp9Picture(picture))
+          return VC_ERROR;
+      }
+      else
+        Keep(picture);
+    }
     else
       return VC_EOF;
   }
@@ -1126,6 +1168,15 @@ CDVDVideoCodec::VCReturn CDVDVideoCodecPS5::GetPicture(VideoPicture* pVideoPictu
 
   Decoded d = m_decoded.front();
   m_decoded.pop_front();
+  if (m_zeroCopy)
+    static_cast<CVideoBufferPS5*>(d.buffer)->TraceContent("handoff", 1000.0 * d.pts / DVD_TIME_BASE);
+  if (m_timeDecodes)
+  {
+    const double frameDurationMs = 1000.0 * m_frameDuration / DVD_TIME_BASE;
+    KODI::PLATFORM::PS5::TraceVideoTimingPS5(
+        "codec-output", 1000.0 * d.pts / DVD_TIME_BASE, frameDurationMs, -1.0,
+        StringUtils::Format("frame={}", d.buffer->GetId()));
+  }
   KODI::PLATFORM::PS5::ps5_video_frame_stats().decoded.fetch_add(1, std::memory_order_relaxed);
   if (m_picturesOut++ == 0)
   {
@@ -1209,6 +1260,34 @@ struct NalRef
   size_t n;
 };
 
+// First j >= i with d[j..j+2] == 00 00 01 (and j + 3 <= n), or n if none.
+// Word-at-a-time: a start code begins with a zero byte, so an 8-byte block
+// without any zero byte cannot contain the start of one and is skipped whole.
+size_t FindStartCode3(const uint8_t* d, size_t i, size_t n)
+{
+  if (n < 3)
+    return n;
+  const size_t last = n - 3; // highest position a start code can begin at
+  while (i <= last)
+  {
+    if (i + 8 <= n)
+    {
+      uint64_t x;
+      std::memcpy(&x, d + i, sizeof(x));
+      if (((x - 0x0101010101010101ull) & ~x & 0x8080808080808080ull) == 0)
+      {
+        i += 8; // no zero byte in d[i..i+7]
+        continue;
+      }
+    }
+    const size_t stop = std::min(i + 8, last + 1);
+    for (; i < stop; ++i)
+      if (d[i] == 0 && d[i + 1] == 0 && d[i + 2] == 1)
+        return i;
+  }
+  return n;
+}
+
 // Annex-B access unit -> NAL unit payloads (without start codes)
 std::vector<NalRef> SplitAnnexB(const uint8_t* d, size_t n)
 {
@@ -1217,20 +1296,16 @@ std::vector<NalRef> SplitAnnexB(const uint8_t* d, size_t n)
   size_t start = SIZE_MAX;
   while (i < n)
   {
-    size_t len = 0;
-    if (i + 4 <= n && d[i] == 0 && d[i + 1] == 0 && d[i + 2] == 0 && d[i + 3] == 1)
-      len = 4;
-    else if (i + 3 <= n && d[i] == 0 && d[i + 1] == 0 && d[i + 2] == 1)
-      len = 3;
-    if (len)
-    {
-      if (start != SIZE_MAX && i > start)
-        out.push_back({d + start, i - start});
-      i += len;
-      start = i;
-    }
-    else
-      ++i;
+    const size_t j = FindStartCode3(d, i, n);
+    if (j >= n)
+      break;
+    // A 4-byte start code at j-1 (00 00 00 01) is the one a byte-wise scan
+    // would meet first; otherwise the 3-byte code at j.
+    const size_t at = (j > i && d[j - 1] == 0) ? j - 1 : j;
+    if (start != SIZE_MAX && at > start)
+      out.push_back({d + start, at - start});
+    i = at + (at == j ? 3 : 4);
+    start = i;
   }
   if (start != SIZE_MAX && start < n)
     out.push_back({d + start, n - start});
@@ -1373,6 +1448,7 @@ bool CDVDVideoCodecPS5::RunRecovery()
     bool irap = false, hasSlice = false;
     CleanAccessUnit(m_parameterSets.data(), m_parameterSets.size(), cleanedSets, irap, hasSlice);
     m_parameterSets = std::move(cleanedSets);
+    RefreshContainerSets();
     m_prependParameterSets = !m_parameterSets.empty();
     const std::deque<ReplayPacket> replay = m_replay; // stage 2 needs it again
     for (const ReplayPacket& r : replay)
@@ -1541,4 +1617,122 @@ void CDVDVideoCodecPS5::LogFingerprint(const char* what, const uint8_t* data, si
             "CDVDVideoCodecPS5: {} ({} bytes; stream profile {}, level {}, {}x{}, {} bit):{}", what,
             size, m_hints.profile, m_hints.level, m_hints.width, m_hints.height,
             m_hints.bitsperpixel, text.empty() ? " (no NAL units)" : text);
+}
+
+bool CDVDVideoCodecPS5::DropInjectedParameterSets(const uint8_t* data, size_t size,
+                                                  std::vector<uint8_t>& out)
+{
+  if (m_vp9 || m_parameterSets.empty() || !data || size == 0)
+    return false;
+  auto psType = [&](const NalRef& n) -> int {
+    if (n.n == 0)
+      return -1;
+    const unsigned t = m_hevc ? (n.p[0] >> 1) & 0x3f : n.p[0] & 0x1f;
+    if (m_hevc)
+      return (t >= 32 && t <= 34) ? static_cast<int>(t) : -1; // VPS SPS PPS
+    return (t == 7 || t == 8) ? static_cast<int>(t) : -1;     // SPS PPS
+  };
+  // the container's sets, split once per stream (RefreshContainerSets), not per access unit
+  auto isContainerCopy = [&](const NalRef& n) {
+    for (const auto& [offset, length] : m_containerSetSpans)
+      if (length == n.n && std::memcmp(m_parameterSets.data() + offset, n.p, n.n) == 0)
+        return true;
+    return false;
+  };
+  const std::vector<NalRef> nals = SplitAnnexB(data, size);
+  bool inband[64] = {};
+  bool any = false;
+  for (const NalRef& n : nals)
+  {
+    const int t = psType(n);
+    if (t >= 0 && !isContainerCopy(n))
+      inband[t] = any = true;
+  }
+  // HEVC types 48..63 are "unspecified": a decoder must ignore them, so dropping
+  // them cannot change a correct picture. Dolby Vision's RPU (62) and
+  // enhancement layer (63) live there; the PS5 decoder can refuse an access
+  // unit carrying them, which used to cost a refused start before recovery
+  // stripped them. Stripped up front (the unofficial Stremio PS5 port found
+  // the same and does likewise).
+  bool unspecified = false;
+  if (m_hevc)
+    for (const NalRef& n : nals)
+      if (n.n && ((n.p[0] >> 1) & 0x3f) >= 48)
+      {
+        unspecified = true;
+        break;
+      }
+  if (!any && !unspecified)
+    return false; // nothing to change: leave the access unit alone
+  static const uint8_t startCode[4] = {0, 0, 0, 1};
+  out.clear();
+  out.reserve(size);
+  unsigned dropped = 0;
+  for (const NalRef& n : nals)
+  {
+    const int t = psType(n);
+    if (t >= 0 && inband[t] && isContainerCopy(n))
+    {
+      ++dropped; // the container's copy of a type the stream sends itself
+      continue;
+    }
+    if (m_hevc && n.n && ((n.p[0] >> 1) & 0x3f) >= 48)
+      continue; // unspecified (Dolby Vision RPU / EL): ignored by decoders anyway
+    out.insert(out.end(), startCode, startCode + 4);
+    out.insert(out.end(), n.p, n.p + n.n);
+  }
+  if (any && !m_loggedInbandSets)
+  {
+    m_loggedInbandSets = true;
+    CLog::Log(LOGINFO,
+              "CDVDVideoCodecPS5: {} carries its own parameter sets, different from the container's; "
+              "using the stream's ({} container copies dropped from this access unit)",
+              m_streamName, dropped);
+  }
+  return true;
+}
+
+bool CDVDVideoCodecPS5::ParameterSetsUseTiles() const
+{
+  // tiles_enabled_flag sits after a fixed run of PPS header fields; walked
+  // here straight from the H.265 syntax (7.3.2.3.1), on the RBSP (emulation-
+  // prevention bytes removed).
+  for (const NalRef& nal : SplitAnnexB(m_parameterSets.data(), m_parameterSets.size()))
+  {
+    if (nal.n < 3 || ((nal.p[0] >> 1) & 0x3f) != 34) // PPS only
+      continue;
+    const std::vector<uint8_t> rbsp = RbspHead(nal, 2);
+    Bits b{rbsp};
+    b.Ue();          // pps_pic_parameter_set_id
+    b.Ue();          // pps_seq_parameter_set_id
+    b.Read(1);       // dependent_slice_segments_enabled_flag
+    b.Read(1);       // output_flag_present_flag
+    b.Read(3);       // num_extra_slice_header_bits
+    b.Read(1);       // sign_data_hiding_enabled_flag
+    b.Read(1);       // cabac_init_present_flag
+    b.Ue();          // num_ref_idx_l0_default_active_minus1
+    b.Ue();          // num_ref_idx_l1_default_active_minus1
+    b.Ue();          // init_qp_minus26 (se: same length as ue)
+    b.Read(1);       // constrained_intra_pred_flag
+    b.Read(1);       // transform_skip_enabled_flag
+    if (b.Read(1))   // cu_qp_delta_enabled_flag
+      b.Ue();        //   diff_cu_qp_delta_depth
+    b.Ue();          // pps_cb_qp_offset (se)
+    b.Ue();          // pps_cr_qp_offset (se)
+    b.Read(1);       // pps_slice_chroma_qp_offsets_present_flag
+    b.Read(1);       // weighted_pred_flag
+    b.Read(1);       // weighted_bipred_flag
+    b.Read(1);       // transquant_bypass_enabled_flag
+    const unsigned tiles = b.Read(1); // tiles_enabled_flag
+    if (b.ok && tiles)
+      return true;
+  }
+  return false;
+}
+
+void CDVDVideoCodecPS5::RefreshContainerSets()
+{
+  m_containerSetSpans.clear();
+  for (const NalRef& nal : SplitAnnexB(m_parameterSets.data(), m_parameterSets.size()))
+    m_containerSetSpans.emplace_back(static_cast<size_t>(nal.p - m_parameterSets.data()), nal.n);
 }

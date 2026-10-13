@@ -39,18 +39,25 @@ enum class VideoDec2Codec
 
 struct VideoDec2Picture
 {
-  const uint8_t* data = nullptr; // luma; chroma at data + pitch * height
+  const uint8_t* data = nullptr; // luma; chroma at data + pitch * chromaOffsetHeight
   uint32_t width = 0;  // decoded width
-  uint32_t height = 0; // coded height (chroma offset in rows)
+  uint32_t height = 0; // decoder-reported luma height
+  uint32_t chromaOffsetHeight = 0; // decoder-reported luma rows, including padding
+  uint32_t chromaHeight = 0; // visible chroma rows
   uint32_t pitch = 0;  // bytes per row, both planes
   uint32_t bitDepth = 8; // 8: NV12; 10: 16 bits per sample, semi-planar
   int frameIndex = -1;   // pooled mode: the frame to hand back with ReleaseFrame
   bool immediate = false; // came out of the frame offered with this access unit
-  // trace (kodi-debug): the frame offered with this call, whether the decoder
+  // trace (kodi-video-debug): the frame offered with this call, whether the decoder
   // took it, and the decoder's own picture count for the returned output
   int offeredIndex = -1;
   bool offeredAccepted = false;
   unsigned pictureCount = 0;
+  uint8_t outputStatus = 0; // byte 0x0B: nonzero means discarded output, not displayable pixels
+  uint64_t diagnosticSequence = 0;
+  uint64_t diagnosticGeneration = 0;
+  uint64_t diagnosticFingerprint = 0;
+  uint64_t diagnosticMatchingSequence = 0;
 };
 
 class CVideoDec2
@@ -69,6 +76,14 @@ public:
   // the decoder's reach until ReleaseFrame. Set before Open.
   void SetPooled(bool pooled) { m_pooled = pooled; }
   bool IsPooled() const { return m_pooled; }
+  // Whether the CPU reads whole pictures (copy/deinterlace). If not (zero
+  // copy: the GPU reads them), pictures are not flushed from the CPU caches
+  // on output (24 MiB of cache-line flushes per 4K 10-bit picture) - and a
+  // CPU reader must InvalidateForRead what it reads. Set before decoding.
+  void SetCpuReadsFrames(bool reads) { m_cpuReadsFrames = reads; }
+  // drop the CPU's cached copy of memory the decoder wrote
+  static void InvalidateForRead(const void* data, size_t size);
+  void TraceContent(const char* stage, const VideoDec2Picture& picture, double pts = -1.0);
   // pooled mode: Decode found no free frame; the access unit was not consumed
   bool Stalled() const { return m_stalled; }
   // pooled mode: Kodi no longer shows the picture in this frame (any thread)
@@ -95,7 +110,13 @@ public:
 
   size_t MaxAccessUnit() const { return m_inputSize; }
 
+  // Unique per decoder object, never reused (unlike its memory addresses):
+  // tells one decoder's frames and log lines from the next one's.
+  uint64_t Instance() const { return m_instance; }
+
 private:
+  static uint64_t NextInstance();
+  const uint64_t m_instance = NextInstance();
   struct DirectMemory
   {
     void* address = nullptr;
@@ -105,6 +126,10 @@ private:
   static bool AllocateDirect(size_t size, int protection, DirectMemory& out, std::string& error);
   static void FreeDirect(DirectMemory& mem);
   bool ToPicture(const void* output, VideoDec2Picture* picture);
+  void LogPlaneBoundary(const uint8_t* buf,
+                        uint32_t rowBytes,
+                        uint32_t reportedHeight,
+                        uint32_t streamHeight) const;
   uint8_t* NextFrameBuffer(int& index);
   int FrameIndexOf(const void* buffer) const;
 
@@ -124,6 +149,7 @@ private:
   size_t m_inputSize = 0;
   size_t m_frameSize = 0;
   unsigned m_nextFrame = 0;
+  uint32_t m_streamHeight = 0;
 
   // pooled mode: who holds each frame
   enum class FrameState
@@ -133,9 +159,32 @@ private:
     Kodi,    // returned as a picture, until ReleaseFrame
   };
   bool m_pooled = false;
+  bool m_cpuReadsFrames = true;
   bool m_stalled = false;
   mutable std::mutex m_frameMutex;
   FrameState m_frameState[kFrameBuffers] = {};
+  unsigned m_frameReferences[kFrameBuffers] = {};
+  bool m_sharedFrameLogged = false;
+  static uint64_t Fingerprint(const VideoDec2Picture& picture);
+  void CaptureContent(VideoDec2Picture& picture);
+  bool m_contentTracing = false;
+  std::mutex m_contentMutex;
+  uint64_t m_contentSequence = 0;
+  uint64_t m_frameGenerations[kFrameBuffers] = {};
+  uint64_t m_frameFingerprints[kFrameBuffers] = {};
+  uint64_t m_frameSequences[kFrameBuffers] = {};
+  uint64_t m_recentFingerprints[128] = {};
+  uint64_t m_recentSequences[128] = {};
+  unsigned m_repeatedContents = 0;
+  unsigned m_repeatedShown = 0;
+  unsigned m_repeatedHidden = 0;
+  unsigned m_repeatReports = 0;
+  unsigned m_nonzeroOutputStatus = 0;
+  unsigned m_contentChecks = 0;
+  unsigned m_contentChanges = 0;
+  unsigned m_generationChanges = 0;
+  unsigned m_sameSlotContents = 0;
+  unsigned m_contentWarnings = 0;
   uint32_t m_codecType = 0;
   bool m_tenBit = false;
   mutable bool m_formatLogged = false;

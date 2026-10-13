@@ -17,6 +17,7 @@
 #include "cores/VideoPlayer/VideoRenderers/LinuxRendererGL.h"
 #include "cores/VideoPlayer/VideoRenderers/RenderFactory.h"
 #include "utils/log.h"
+#include "utils/StringUtils.h"
 #include "windowing/WindowSystemFactory.h"
 
 #include <algorithm>
@@ -248,21 +249,101 @@ bool CWinSystemPS5GLContext::BeginRender()
 {
   if (m_stats)
   {
-    // kodi-debug: the GUI thread was away from rendering for a while - the
+    // kodi-video-debug: the GUI thread was away from rendering for a while - the
     // log lines just before this one show what it was doing
     const auto now = std::chrono::steady_clock::now();
     if (m_frameStart.time_since_epoch().count() != 0)
     {
       const double sinceLast = std::chrono::duration<double, std::milli>(now - m_frameStart).count();
       if (sinceLast > 500.0)
-        CLog::Log(LOGWARNING, "PS5 presentation (kodi-debug): GUI thread stalled for {:.0f} ms",
+        CLog::Log(LOGWARNING, "PS5 presentation (kodi-video-debug): GUI thread stalled for {:.0f} ms",
                   sinceLast);
     }
     m_frameStart = now;
   }
   const bool ok = CRenderSystemGL::BeginRender();
   m_hdr.BindTarget(m_nWidth, m_nHeight); // HDR: the frame renders into the 10-bit target
+  if (m_stats)
+    FrameGpuStamp(0);
   return ok;
+}
+
+void CWinSystemPS5GLContext::FrameGpuStamp(int point)
+{
+  FrameGpuTimer& t = m_frameGpu;
+  if (!t.initialised)
+  {
+    t.initialised = true;
+    t.genQueries = reinterpret_cast<FrameGpuTimer::GenQueries>(eglGetProcAddress("glGenQueries"));
+    t.deleteQueries =
+        reinterpret_cast<FrameGpuTimer::DeleteQueries>(eglGetProcAddress("glDeleteQueries"));
+    t.queryCounter =
+        reinterpret_cast<FrameGpuTimer::QueryCounter>(eglGetProcAddress("glQueryCounter"));
+    t.getQueryiv = reinterpret_cast<FrameGpuTimer::GetQueryiv>(eglGetProcAddress("glGetQueryiv"));
+    t.getQueryObjectiv = reinterpret_cast<FrameGpuTimer::GetQueryObjectiv>(
+        eglGetProcAddress("glGetQueryObjectiv"));
+    t.getQueryObjectui64v = reinterpret_cast<FrameGpuTimer::GetQueryObjectui64v>(
+        eglGetProcAddress("glGetQueryObjectui64v"));
+    GLint bits = 0;
+    if (t.genQueries && t.deleteQueries && t.queryCounter && t.getQueryiv && t.getQueryObjectiv &&
+        t.getQueryObjectui64v)
+    {
+      glGetError();
+      t.getQueryiv(GL_TIMESTAMP, GL_QUERY_COUNTER_BITS, &bits);
+      if (glGetError() == GL_NO_ERROR && bits > 0)
+      {
+        t.genQueries(FrameGpuTimer::kFrames * 3, &t.queries[0][0]);
+        t.available = glGetError() == GL_NO_ERROR;
+      }
+    }
+    CLog::Log(LOGINFO, "PS5 presentation (kodi-video-debug): frame GPU time {} ({} timestamp bits)",
+              t.available ? "measured" : "not measurable", bits);
+  }
+  if (!t.available)
+    return;
+  const int slot = t.next;
+  if (point == 0)
+  {
+    t.started = !t.pending[slot];
+    if (!t.started)
+      return; // the ring is full: this frame goes untimed
+  }
+  else if (!t.started)
+    return;
+  t.queryCounter(t.queries[slot][point], GL_TIMESTAMP);
+  if (point == 2)
+  {
+    t.pending[slot] = true;
+    t.started = false;
+    t.next = (slot + 1) % FrameGpuTimer::kFrames;
+  }
+}
+
+void CWinSystemPS5GLContext::CollectFrameGpuTimes()
+{
+  FrameGpuTimer& t = m_frameGpu;
+  if (!t.available)
+    return;
+  for (int i = 0; i < FrameGpuTimer::kFrames; ++i)
+  {
+    if (!t.pending[i])
+      continue;
+    GLint ready = 0;
+    t.getQueryObjectiv(t.queries[i][2], GL_QUERY_RESULT_AVAILABLE, &ready);
+    if (!ready)
+      continue;
+    uint64_t stamp[3] = {};
+    for (int p = 0; p < 3; ++p)
+      t.getQueryObjectui64v(t.queries[i][p], GL_QUERY_RESULT, &stamp[p]);
+    t.pending[i] = false;
+    if (stamp[2] < stamp[0] || stamp[1] < stamp[0] || stamp[2] < stamp[1])
+      continue;
+    const double ms = static_cast<double>(stamp[2] - stamp[0]) / 1e6;
+    t.totalMs += ms;
+    t.maxMs = std::max(t.maxMs, ms);
+    t.packMs += static_cast<double>(stamp[2] - stamp[1]) / 1e6;
+    ++t.timed;
+  }
 }
 
 bool CWinSystemPS5GLContext::SetHDR(const VideoPicture* videoPicture)
@@ -315,7 +396,7 @@ void CWinSystemPS5GLContext::PresentRender(bool rendered, bool videoLayer)
   if (!m_bRenderCreated)
     return;
 
-  double renderMs = 0.0; // kodi-debug: the frame's cost, before the pacer's wait
+  double renderMs = 0.0; // kodi-video-debug: the frame's cost, before the pacer's wait
   if (m_stats && m_frameStart.time_since_epoch().count() != 0)
     renderMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                         m_frameStart)
@@ -323,7 +404,18 @@ void CWinSystemPS5GLContext::PresentRender(bool rendered, bool videoLayer)
 
   if (rendered || videoLayer)
   {
+    if (m_stats)
+      FrameGpuStamp(1);
+    const auto beforePack = m_stats ? std::chrono::steady_clock::now()
+                                    : std::chrono::steady_clock::time_point{};
     m_hdr.Pack(m_nWidth, m_nHeight); // HDR: the packed 10-bit words into the real framebuffer
+    if (m_stats)
+    {
+      m_statPackMs +=
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - beforePack)
+              .count();
+      FrameGpuStamp(2);
+    }
 
     // the system may switch the output onto (or off) its VRR link at any time
     if (m_videoOutLogged)
@@ -363,12 +455,22 @@ void CWinSystemPS5GLContext::PresentRender(bool rendered, bool videoLayer)
           std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - beforeSwap)
               .count();
       if (swapMs > 500.0)
-        CLog::Log(LOGWARNING, "PS5 presentation (kodi-debug): eglSwapBuffers blocked for {:.0f} ms",
+        CLog::Log(LOGWARNING, "PS5 presentation (kodi-video-debug): eglSwapBuffers blocked for {:.0f} ms",
                   swapMs);
+      m_statSwapMs += swapMs;
+      m_statSwapMaxMs = std::max(m_statSwapMaxMs, swapMs);
     }
-    if (m_stats) // kodi-debug: what reaches the display, and what a frame costs
+    if (m_stats) // kodi-video-debug: what reaches the display, and what a frame costs
     {
       const auto now = std::chrono::steady_clock::now();
+      if (m_lastSwap.time_since_epoch().count() != 0 && m_fRefreshRate > 1.0f)
+      {
+        const double sinceSwap = std::chrono::duration<double, std::milli>(now - m_lastSwap).count();
+        if (sinceSwap > 1.5 * 1000.0 / static_cast<double>(m_fRefreshRate))
+          ++m_statMissed;
+      }
+      m_lastSwap = now;
+      CollectFrameGpuTimes();
       ++m_statFrames;
       if (rendered)
         ++m_statGuiFrames;
@@ -380,7 +482,7 @@ void CWinSystemPS5GLContext::PresentRender(bool rendered, bool videoLayer)
       if (seconds >= 5.0)
       {
         CLog::Log(LOGINFO,
-                  "PS5 presentation (kodi-debug): {:.1f} frames/s ({:.1f}/s with GUI content), "
+                  "PS5 presentation (kodi-video-debug): {:.1f} frames/s ({:.1f}/s with GUI content), "
                   "paced at {:.3f} Hz, {}, render {:.1f} ms average / {:.1f} ms longest, "
                   "video decoded {} presented {}",
                   m_statFrames / seconds, m_statGuiFrames / seconds, VrrTargetRate(),
@@ -390,6 +492,21 @@ void CWinSystemPS5GLContext::PresentRender(bool rendered, bool videoLayer)
                       std::memory_order_relaxed),
                   KODI::PLATFORM::PS5::ps5_video_frame_stats().presented.load(
                       std::memory_order_relaxed));
+        const FrameGpuTimer& g = m_frameGpu;
+        CLog::Log(LOGINFO,
+                  "PS5 presentation (kodi-video-debug): {} refreshes missed; CPU pack {:.1f} ms, swap "
+                  "{:.1f} ms average / {:.1f} ms longest; frame GPU {} ",
+                  m_statMissed, m_statFrames ? m_statPackMs / m_statFrames : 0.0,
+                  m_statFrames ? m_statSwapMs / m_statFrames : 0.0, m_statSwapMaxMs,
+                  g.timed ? StringUtils::Format("{:.2f} ms average / {:.2f} ms longest (pack "
+                                                "{:.2f} ms) over {} frames",
+                                                g.totalMs / g.timed, g.maxMs, g.packMs / g.timed,
+                                                g.timed)
+                          : std::string("not measured"));
+        m_frameGpu.timed = 0;
+        m_frameGpu.totalMs = m_frameGpu.maxMs = m_frameGpu.packMs = 0.0;
+        m_statMissed = 0;
+        m_statPackMs = m_statSwapMs = m_statSwapMaxMs = 0.0;
         m_statFrames = m_statGuiFrames = 0;
         m_statRenderMs = m_statRenderMaxMs = 0.0;
         m_statWindow = now;

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 
 #include "HdrOutputPS5.h"
@@ -95,14 +96,48 @@ private:
   std::chrono::steady_clock::time_point m_lastLinkCheck{};  // VRR link re-check (2 s)
   KODI::PLATFORM::PS5::CHdrOutputPS5 m_hdr;
 
-  // kodi-debug: presented frames, pacing and render time, every 5 seconds
-  const bool m_stats = std::getenv("KODI_PS5_DEBUG") != nullptr;
+  // kodi-video-debug: presented frames, pacing and render time, every 5 seconds
+  const bool m_stats = std::getenv("KODI_PS5_VIDEO_DEBUG") != nullptr;
   std::chrono::steady_clock::time_point m_frameStart{};
   std::chrono::steady_clock::time_point m_statWindow{};
   unsigned m_statFrames = 0;
   unsigned m_statGuiFrames = 0;
   double m_statRenderMs = 0.0;
   double m_statRenderMaxMs = 0.0;
+  // kodi-video-debug: where a frame's time goes - the pack pass and the swap on the
+  // CPU, presents more than 1.5 refresh periods apart (a missed refresh), and
+  // the frame's GPU time (GL_TIMESTAMP: frame start / before pack / after pack)
+  double m_statPackMs = 0.0;
+  double m_statSwapMs = 0.0;
+  double m_statSwapMaxMs = 0.0;
+  unsigned m_statMissed = 0;
+  std::chrono::steady_clock::time_point m_lastSwap{};
+  struct FrameGpuTimer
+  {
+    static constexpr int kFrames = 8;
+    using GenQueries = void (*)(int, unsigned*);
+    using DeleteQueries = void (*)(int, const unsigned*);
+    using QueryCounter = void (*)(unsigned, unsigned);
+    using GetQueryiv = void (*)(unsigned, unsigned, int*);
+    using GetQueryObjectiv = void (*)(unsigned, unsigned, int*);
+    using GetQueryObjectui64v = void (*)(unsigned, unsigned, uint64_t*);
+    GenQueries genQueries = nullptr;
+    DeleteQueries deleteQueries = nullptr;
+    QueryCounter queryCounter = nullptr;
+    GetQueryiv getQueryiv = nullptr;
+    GetQueryObjectiv getQueryObjectiv = nullptr;
+    GetQueryObjectui64v getQueryObjectui64v = nullptr;
+    bool initialised = false;
+    bool available = false;
+    unsigned queries[kFrames][3] = {};
+    bool pending[kFrames] = {};
+    bool started = false; // this frame's start stamp was written
+    int next = 0;
+    unsigned timed = 0;
+    double totalMs = 0.0, maxMs = 0.0, packMs = 0.0;
+  } m_frameGpu;
+  void FrameGpuStamp(int point); // 0 frame start, 1 before pack, 2 after pack
+  void CollectFrameGpuTimes();
 
   bool CreateContext();
   void QueryOutputGeometry();

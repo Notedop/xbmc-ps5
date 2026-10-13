@@ -56,15 +56,21 @@ public:
   void Set(const std::shared_ptr<CVideoDec2>& decoder, const VideoDec2Picture& picture,
            AVPixelFormat format);
   void ReturnFrame(); // to the decoder; the buffer is then empty
+  void TraceContent(const char* stage, double pts = -1.0);
+  void TraceRenderContent();
 
   // for software paths (screenshots): NV12-style planes in the decoder's frame
   void GetPlanes(uint8_t* (&planes)[YuvImage::MAX_PLANES]) override;
   void GetStrides(int (&strides)[YuvImage::MAX_PLANES]) override;
 
   const uint8_t* Luma() const { return m_data; }
-  const uint8_t* Chroma() const { return m_data + static_cast<size_t>(m_pitch) * m_codedHeight; }
+  const uint8_t* Chroma() const
+  {
+    return m_data + static_cast<size_t>(m_pitch) * m_chromaOffsetHeight;
+  }
   unsigned Pitch() const { return m_pitch; }            // bytes per row, both planes
-  unsigned CodedHeight() const { return m_codedHeight; } // rows before the chroma plane
+  unsigned CodedHeight() const { return m_codedHeight; } // decoder-reported luma rows
+  unsigned ChromaHeight() const { return m_chromaHeight; }
   unsigned BitDepth() const { return m_bitDepth; }       // 8 (NV12) or 10 (16-bit samples)
 
 private:
@@ -73,7 +79,12 @@ private:
   const uint8_t* m_data = nullptr;
   unsigned m_pitch = 0;
   unsigned m_codedHeight = 0;
+  unsigned m_chromaOffsetHeight = 0;
+  unsigned m_chromaHeight = 0;
   unsigned m_bitDepth = 8;
+  VideoDec2Picture m_diagnosticPicture;
+  double m_diagnosticPts = -1.0;
+  bool m_contentRendered = false;
 };
 
 class CVideoBufferPoolPS5 : public IVideoBufferPool

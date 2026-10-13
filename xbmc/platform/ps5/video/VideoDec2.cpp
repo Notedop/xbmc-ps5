@@ -9,6 +9,8 @@
 #include "VideoDec2.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -16,6 +18,8 @@
 #include <string>
 
 #include <sys/mman.h>
+
+#include "utils/log.h"
 
 // ---------------------------------------------------------------------------
 // libSceVideodec2 / libkernel / libSceSysmodule interface (clean-room)
@@ -77,7 +81,7 @@ struct sceVideodec2Frame
 struct sceVideodec2Output
 {
   uint64_t size;
-  uint8_t valid, error, pictureCount, padding;
+  uint8_t valid, error, pictureCount, discarded;
   uint32_t codec, width, pitch, height, reserved;
   void* buffer;
   uint64_t bufferSize;
@@ -121,8 +125,8 @@ constexpr uint32_t kCodecHEVC = 0x000ee049;
 // BlackBearReloaded's ps5-hardware-video-decoding-research, EVO Player)
 constexpr uint32_t kCodecVP9 = 2382845;
 constexpr int kMemoryType = 12;       // direct memory type used on hardware
-constexpr int kProtGpu = 0x32;        // CPU read/write + GPU read/write
-constexpr int kProtCpuGpu = 0x33;
+constexpr int kProtGpu = 0x32;        // CPU write + GPU read/write
+constexpr int kProtCpuGpu = 0x33;     // CPU read/write + GPU read/write
 constexpr int kProtCpu = 0x03;
 constexpr size_t kInputSlot = 8 * 1024 * 1024;
 
@@ -149,19 +153,131 @@ std::string Hex(const char* what, int32_t rc)
   return buf;
 }
 
-// The decoder writes frames behind the CPU's back: drop any cached copy of
-// the lines before reading them.
-void InvalidateForRead(const void* data, size_t size)
-{
-  const auto* p = static_cast<const uint8_t*>(data);
-  for (size_t off = 0; off < size; off += 64)
-    __builtin_ia32_clflush(p + off);
-  __builtin_ia32_mfence();
-}
 } // namespace
 
 namespace KODI::PLATFORM::PS5
 {
+
+// The decoder writes frames behind the CPU's back: drop any cached copy of
+// the lines before reading them.
+void CVideoDec2::InvalidateForRead(const void* data, size_t size)
+{
+  if (!data || size == 0)
+    return;
+  const auto first = reinterpret_cast<uintptr_t>(data) & ~uintptr_t{63};
+  const auto end = reinterpret_cast<uintptr_t>(data) + size;
+  for (uintptr_t p = first; p < end; p += 64)
+    __builtin_ia32_clflush(reinterpret_cast<const void*>(p));
+  __builtin_ia32_mfence();
+}
+
+uint64_t CVideoDec2::Fingerprint(const VideoDec2Picture& picture)
+{
+  // Sparse cache-line reads, not a whole-frame flush or GPU readback.
+  uint64_t hash = 14695981039346656037ULL;
+  const unsigned bytes = picture.bitDepth > 8 ? 2 : 1;
+  for (unsigned plane = 0; plane < 2; ++plane)
+  {
+    const unsigned rows = plane == 0 ? picture.height : picture.chromaHeight;
+    const uint8_t* base = picture.data +
+                         (plane == 0 ? 0 : static_cast<size_t>(picture.pitch) *
+                                               picture.chromaOffsetHeight);
+    for (unsigned y = 0; y < 4; ++y)
+      for (unsigned x = 0; x < 4; ++x)
+      {
+        const unsigned column = (picture.width - 1) * (2 * x + 1) / 8;
+        const unsigned row = (rows - 1) * (2 * y + 1) / 8;
+        const uint8_t* sample = base + static_cast<size_t>(row) * picture.pitch + column * bytes;
+        InvalidateForRead(sample, bytes);
+        for (unsigned b = 0; b < bytes; ++b)
+          hash = (hash ^ sample[b]) * 1099511628211ULL;
+      }
+  }
+  return hash;
+}
+
+void CVideoDec2::CaptureContent(VideoDec2Picture& picture)
+{
+  if (!m_contentTracing || picture.frameIndex < 0 || picture.width == 0 ||
+      picture.height == 0 || picture.chromaHeight == 0)
+    return;
+  picture.diagnosticFingerprint = Fingerprint(picture);
+  uint64_t previousSequence;
+  uint64_t previousFingerprint;
+  uint64_t matchingSequence = 0;
+  {
+    std::lock_guard<std::mutex> lock(m_contentMutex);
+    const int index = picture.frameIndex;
+    picture.diagnosticSequence = ++m_contentSequence;
+    m_nonzeroOutputStatus += picture.outputStatus != 0;
+    picture.diagnosticGeneration = m_frameGenerations[index];
+    previousSequence = m_frameSequences[index];
+    previousFingerprint = m_frameFingerprints[index];
+    if (previousSequence != 0 && previousFingerprint == picture.diagnosticFingerprint)
+      ++m_sameSlotContents;
+    for (unsigned i = 0; i < 128; ++i)
+      if (m_recentSequences[i] != 0 &&
+          m_recentFingerprints[i] == picture.diagnosticFingerprint)
+        matchingSequence = std::max(matchingSequence, m_recentSequences[i]);
+    m_repeatedContents += matchingSequence != 0;
+    picture.diagnosticMatchingSequence = matchingSequence;
+    const unsigned slot = picture.diagnosticSequence % 128;
+    m_recentFingerprints[slot] = picture.diagnosticFingerprint;
+    m_recentSequences[slot] = picture.diagnosticSequence;
+    m_frameSequences[index] = picture.diagnosticSequence;
+    m_frameFingerprints[index] = picture.diagnosticFingerprint;
+  }
+  if (picture.diagnosticSequence <= 120)
+    CLog::Log(LOGINFO,
+              "PS5 content: decoder={} stage=return seq={} frame={} generation={} hash={:016x} "
+              "previousSlotSeq={} previousSlotHash={:016x} matchingRecentSeq={} immediate={} "
+              "outputStatus={:02x} pictureCount={}",
+              m_instance, picture.diagnosticSequence, picture.frameIndex,
+              picture.diagnosticGeneration, picture.diagnosticFingerprint, previousSequence,
+              previousFingerprint, matchingSequence, picture.immediate, picture.outputStatus,
+              picture.pictureCount);
+}
+
+void CVideoDec2::TraceContent(const char* stage, const VideoDec2Picture& picture, double pts)
+{
+  if (picture.diagnosticSequence == 0)
+    return;
+  const uint64_t hash = Fingerprint(picture);
+  const bool changed = hash != picture.diagnosticFingerprint;
+  bool reused;
+  bool report;
+  bool repeatedShownReport = false;
+  {
+    std::lock_guard<std::mutex> lock(m_contentMutex);
+    reused = m_frameGenerations[picture.frameIndex] != picture.diagnosticGeneration;
+    ++m_contentChecks;
+    m_contentChanges += changed;
+    m_generationChanges += reused;
+    report = (changed || reused) && m_contentWarnings < 16;
+    if (report)
+      ++m_contentWarnings;
+    if (picture.diagnosticMatchingSequence != 0)
+    {
+      if (std::strcmp(stage, "shown") == 0)
+      {
+        ++m_repeatedShown;
+        repeatedShownReport = m_repeatReports < 16;
+        if (repeatedShownReport)
+          ++m_repeatReports;
+      }
+      else if (std::strcmp(stage, "hidden") == 0)
+        ++m_repeatedHidden;
+    }
+  }
+  if (picture.diagnosticSequence <= 120 || report || repeatedShownReport)
+    CLog::Log(LOGINFO,
+              "PS5 content: decoder={} stage={} seq={} frame={} generation={} pts={} "
+              "hash={:016x} returnHash={:016x} changed={} reused={} matchingRecentSeq={} "
+              "outputStatus={:02x} pictureCount={}",
+              m_instance, stage, picture.diagnosticSequence, picture.frameIndex,
+              picture.diagnosticGeneration, pts, hash, picture.diagnosticFingerprint, changed,
+              reused, picture.diagnosticMatchingSequence, picture.outputStatus, picture.pictureCount);
+}
 
 CVideoDec2::~CVideoDec2()
 {
@@ -219,6 +335,18 @@ bool CVideoDec2::Open(VideoDec2Codec codec, int width, int height, std::string& 
   Close();
   const bool uhd = width > 1920 || height > 1088;
   const bool vp9 = codec == VideoDec2Codec::VP9 || codec == VideoDec2Codec::VP9Profile2;
+  m_contentTracing = vp9 && std::getenv("KODI_PS5_VIDEO_DEBUG") != nullptr;
+  {
+    std::lock_guard<std::mutex> lock(m_contentMutex);
+    m_contentSequence = 0;
+    m_contentChecks = m_contentChanges = m_generationChanges = m_sameSlotContents =
+        m_contentWarnings = m_repeatedContents = m_repeatedShown = m_repeatedHidden =
+            m_repeatReports = m_nonzeroOutputStatus = 0;
+    for (unsigned i = 0; i < kFrameBuffers; ++i)
+      m_frameGenerations[i] = m_frameFingerprints[i] = m_frameSequences[i] = 0;
+    for (unsigned i = 0; i < 128; ++i)
+      m_recentFingerprints[i] = m_recentSequences[i] = 0;
+  }
   const bool h264 = codec == VideoDec2Codec::H264 || codec == VideoDec2Codec::H264High10;
   m_codecType = h264 ? kCodecH264 : (vp9 ? kCodecVP9 : kCodecHEVC);
   m_tenBit = codec == VideoDec2Codec::HEVCMain10 || codec == VideoDec2Codec::VP9Profile2 ||
@@ -286,6 +414,11 @@ bool CVideoDec2::Open(VideoDec2Codec codec, int width, int height, std::string& 
   // decoder decodes without error but against nothing, whatever keyframe or
   // parameter sets it is given - and 10-bit decoders refuse them outright
   // (0x811d0111). Real time at 4K60 is therefore the decoder's own job.
+  // 8K VP9 (configured at the stream's size) was tried as well: at depth 1
+  // the decoder needs 35-75 ms a picture (more than a 24 fps frame period),
+  // with or without Kodi drawing the video and with more CPUs; at depth 2
+  // stream errors (0x811d0303), black flashes and distortion. Above 4K
+  // streams are left to FFmpeg (see CDVDVideoCodecPS5::Open).
   config.pipelineDepth = 1;
   config.computeQueue = reinterpret_cast<uint64_t>(m_computeQueue);
   config.cpuAffinity = 0x3f;
@@ -401,10 +534,15 @@ bool CVideoDec2::Open(VideoDec2Codec codec, int width, int height, std::string& 
   }
 
   m_inputSize = kInputSlot;
-  if (!AllocateDirect(m_inputSize, kProtGpu, m_inputMemory, error))
+  const int ioProtection = vp9 ? kProtCpuGpu : kProtGpu;
+  if (vp9)
+    CLog::Log(LOGINFO,
+              "PS5 VP9: input/output direct memory protection={:#x} (CPU read/write, GPU read/write)",
+              ioProtection);
+  if (!AllocateDirect(m_inputSize, ioProtection, m_inputMemory, error))
     return false;
   m_frameSize = Align16k(memory.maxFrameSize);
-  if (!AllocateDirect(m_frameSize * kFrameBuffers, kProtGpu, m_frameMemory, error))
+  if (!AllocateDirect(m_frameSize * kFrameBuffers, ioProtection, m_frameMemory, error))
     return false;
 
   rc = sceVideodec2CreateDecoder(&config, &memory, &m_decoder);
@@ -422,16 +560,54 @@ bool CVideoDec2::Open(VideoDec2Codec codec, int width, int height, std::string& 
   }
   Log("[kodi-ps5] videodec2: decoder ready (%u frame buffers of %zu KiB)\n", kFrameBuffers,
       m_frameSize / 1024);
+  m_streamHeight = static_cast<uint32_t>(height);
   return true;
+}
+
+uint64_t CVideoDec2::NextInstance()
+{
+  static std::atomic<uint64_t> next{1};
+  return next.fetch_add(1, std::memory_order_relaxed);
 }
 
 void CVideoDec2::Close()
 {
+  // Traced straight to the klog, step by step: if a call ever blocks here, the
+  // last line names it even when nothing else gets out.
+  const bool traced = m_decoder || m_computeQueue;
+  if (traced && m_contentTracing)
+  {
+    std::lock_guard<std::mutex> lock(m_contentMutex);
+    CLog::Log(LOGINFO,
+              "PS5 content summary: decoder={} outputs={} checks={} changed={} reused={} "
+              "sameSlotContents={} repeatedContents={} repeatedShown={} repeatedHidden={} "
+              "nonzeroOutputStatus={} (identical samples can also mean static content)",
+              m_instance, m_contentSequence, m_contentChecks, m_contentChanges,
+              m_generationChanges, m_sameSlotContents, m_repeatedContents, m_repeatedShown,
+              m_repeatedHidden, m_nonzeroOutputStatus);
+  }
+  const auto start = std::chrono::steady_clock::now();
+  auto elapsed = [&start]
+  {
+    return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::steady_clock::now() - start)
+                                      .count());
+  };
+  if (traced)
+    Log("[ps5vdec] decoder %llu: closing\n", static_cast<unsigned long long>(m_instance));
   if (m_decoder)
-    sceVideodec2DeleteDecoder(m_decoder);
+  {
+    const int32_t rc = sceVideodec2DeleteDecoder(m_decoder);
+    Log("[ps5vdec] decoder %llu: deleted (%#x, %lld ms)\n",
+        static_cast<unsigned long long>(m_instance), static_cast<unsigned>(rc), elapsed());
+  }
   m_decoder = nullptr;
   if (m_computeQueue)
-    sceVideodec2ReleaseComputeQueue(m_computeQueue);
+  {
+    const int32_t rc = sceVideodec2ReleaseComputeQueue(m_computeQueue);
+    Log("[ps5vdec] decoder %llu: compute queue released (%#x, %lld ms)\n",
+        static_cast<unsigned long long>(m_instance), static_cast<unsigned>(rc), elapsed());
+  }
   m_computeQueue = nullptr;
   FreeDirect(m_frameMemory);
   FreeDirect(m_inputMemory);
@@ -445,9 +621,16 @@ void CVideoDec2::Close()
   m_cpuWorkspace = nullptr;
   m_cpuWorkspaceSize = 0;
   m_nextFrame = 0;
+  m_streamHeight = 0;
+  if (traced)
+    Log("[ps5vdec] decoder %llu: closed, memory released (%lld ms)\n",
+        static_cast<unsigned long long>(m_instance), elapsed());
   std::lock_guard<std::mutex> lock(m_frameMutex);
   for (auto& state : m_frameState)
     state = FrameState::Free;
+  for (auto& references : m_frameReferences)
+    references = 0;
+  m_sharedFrameLogged = false;
 }
 
 uint8_t* CVideoDec2::NextFrameBuffer(int& index)
@@ -500,8 +683,47 @@ void CVideoDec2::ReleaseFrame(int index)
   if (index < 0 || index >= static_cast<int>(kFrameBuffers))
     return;
   std::lock_guard<std::mutex> lock(m_frameMutex);
-  if (m_frameState[index] == FrameState::Kodi)
-    m_frameState[index] = FrameState::Free;
+  if (m_frameState[index] == FrameState::Kodi && m_frameReferences[index] > 0)
+  {
+    if (--m_frameReferences[index] == 0)
+      m_frameState[index] = FrameState::Free;
+  }
+}
+
+// kodi-video-debug, first picture: sample interleaved pairs across the width around
+// both the reported and stream luma heights to identify the actual plane edge.
+void CVideoDec2::LogPlaneBoundary(const uint8_t* buf,
+                                 uint32_t rowBytes,
+                                 uint32_t reportedHeight,
+                                 uint32_t streamHeight) const
+{
+  const unsigned bytes = m_tenBit ? 2 : 1;
+  constexpr unsigned kHorizontalSamples = 5;
+  const uint32_t boundary = std::min(reportedHeight, streamHeight);
+  const uint32_t first = boundary > 8 ? boundary - 8 : 0;
+  const uint32_t last = std::max(reportedHeight, streamHeight) + 12;
+  for (uint32_t row = first; row <= last; row += 2)
+  {
+    Log("[kodi-ps5] videodec2 (kodi-video-debug): row %u%s%s:",
+        row, row == reportedHeight ? " reported-end" : "",
+        row == streamHeight ? " stream-end" : "");
+    for (unsigned sample = 0; sample < kHorizontalSamples; ++sample)
+    {
+      size_t at = static_cast<size_t>(row) * rowBytes +
+                  rowBytes * (2 * sample + 1) / (2 * kHorizontalSamples);
+      at -= at % (2 * bytes);
+      if (at + 2 * bytes > m_frameSize)
+        break;
+      const uint8_t* p = buf + at;
+      InvalidateForRead(p, 2 * bytes);
+      const unsigned firstValue =
+          bytes == 2 ? reinterpret_cast<const uint16_t*>(p)[0] : p[0];
+      const unsigned secondValue =
+          bytes == 2 ? reinterpret_cast<const uint16_t*>(p)[1] : p[1];
+      Log(" %u:%u,%u", sample, firstValue, secondValue);
+    }
+    Log("\n");
+  }
 }
 
 bool CVideoDec2::ToPicture(const void* out, VideoDec2Picture* picture)
@@ -521,22 +743,44 @@ bool CVideoDec2::ToPicture(const void* out, VideoDec2Picture* picture)
   {
     m_formatLogged = true;
     Log("[kodi-ps5] videodec2: first picture %ux%u, frameFormat %u, pitch %u, pitchBytes %u, "
-        "pictureCount %u -> %u bytes per row (%s)\n",
+        "pictureCount %u, reserved %u, bufferSize %llu (%llu rows at 4:2:0), stream height %u "
+        "-> %u bytes per row (%s)\n",
         output->width, output->height, output->frameFormat, output->pitch, output->pitchBytes,
-        output->pictureCount, rowBytes, m_tenBit ? "10-bit" : "8-bit NV12");
+        output->pictureCount, output->reserved, static_cast<unsigned long long>(output->bufferSize),
+        static_cast<unsigned long long>(rowBytes ? output->bufferSize * 2 / 3 / rowBytes : 0),
+        m_streamHeight, rowBytes, m_tenBit ? "10-bit" : "8-bit NV12");
+    if (std::getenv("KODI_PS5_VIDEO_DEBUG"))
+      LogPlaneBoundary(buf, rowBytes, output->height, m_streamHeight);
   }
   picture->frameIndex = FrameIndexOf(buf);
   if (m_pooled && picture->frameIndex >= 0)
   {
     std::lock_guard<std::mutex> lock(m_frameMutex);
+    // VP9 can show the same reference frame again while an earlier picture still holds it.
+    const unsigned references = ++m_frameReferences[picture->frameIndex];
+    if (references > 1 && !m_sharedFrameLogged)
+    {
+      m_sharedFrameLogged = true;
+      Log("[kodi-ps5] videodec2: frame %d returned while still held (%u picture references); "
+          "reuse deferred until all pictures release it\n", picture->frameIndex, references);
+    }
     m_frameState[picture->frameIndex] = FrameState::Kodi;
   }
   picture->data = buf;
   picture->width = output->width;
   picture->height = output->height;
+  // The decoder pads luma before chroma; the stream height only limits visible chroma rows.
+  picture->chromaOffsetHeight = output->height;
+  const uint32_t visibleHeight =
+      m_streamHeight > 0 ? std::min(m_streamHeight, output->height) : output->height;
+  picture->chromaHeight = (visibleHeight + 1) / 2;
   picture->pitch = rowBytes;
   picture->bitDepth = m_tenBit ? 10 : 8;
-  InvalidateForRead(buf, static_cast<size_t>(rowBytes) * output->height * 3 / 2);
+  picture->outputStatus = output->discarded;
+  picture->pictureCount = output->pictureCount;
+  if (m_cpuReadsFrames)
+    InvalidateForRead(buf, static_cast<size_t>(rowBytes) * output->height * 3 / 2);
+  CaptureContent(*picture);
   return true;
 }
 
@@ -598,6 +842,11 @@ bool CVideoDec2::Decode(const uint8_t* au, size_t size, bool& gotPicture,
   picture->offeredIndex = frameIndex;
   picture->offeredAccepted = frame.accepted != 0;
   picture->pictureCount = output.pictureCount;
+  if (m_contentTracing && frame.accepted)
+  {
+    std::lock_guard<std::mutex> lock(m_contentMutex);
+    ++m_frameGenerations[frameIndex];
+  }
   if (m_pooled && frame.accepted)
   {
     std::lock_guard<std::mutex> lock(m_frameMutex);
@@ -628,6 +877,15 @@ bool CVideoDec2::Flush(VideoDec2Picture* picture)
   output.size = sizeof(output);
   if (sceVideodec2Flush(m_decoder, &frame, &output) != 0)
     return false;
+  picture->immediate = output.buffer == frameBuffer;
+  picture->offeredIndex = frameIndex;
+  picture->offeredAccepted = frame.accepted != 0;
+  picture->pictureCount = output.pictureCount;
+  if (m_contentTracing && frame.accepted)
+  {
+    std::lock_guard<std::mutex> lock(m_contentMutex);
+    ++m_frameGenerations[frameIndex];
+  }
   if (m_pooled && frame.accepted)
   {
     std::lock_guard<std::mutex> lock(m_frameMutex);

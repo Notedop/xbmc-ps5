@@ -20,6 +20,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct AVBSFContext;
@@ -100,7 +101,8 @@ private:
   CDVDStreamInfo m_hints; // for rebuilding the bitstream filter on a seek
   bool DecodeOne(const uint8_t* data, size_t size);
   bool Keep(const VideoDec2Picture& picture);
-  // kodi-debug trace of the first pictures after an open or a reset: frames
+  bool KeepVp9Picture(const VideoDec2Picture& picture);
+  // kodi-video-debug trace of the first pictures after an open or a reset: frames
   // offered/accepted/returned, and luma samples of the returned picture at
   // return and at hand-off (black regions read 0 or 16)
   unsigned m_trace = 0;
@@ -137,6 +139,21 @@ private:
   // Annex-B filter needs extradata to run, so convert here; the parameter sets
   // are then in-band. Returns false (out untouched) for Annex-B input.
   bool ToAnnexB(const uint8_t* data, size_t size, std::vector<uint8_t>& out) const;
+  // A stream that carries its OWN parameter sets in-band, differing from the
+  // container's (extradata) copy, gets the container copies removed per type,
+  // so the stream's own are what the decoder uses - as FFmpeg does. HEVC NAL
+  // types 48..63 (Dolby Vision RPU/EL) are dropped too. Returns false (out
+  // untouched) when the access unit needs no change.
+  bool DropInjectedParameterSets(const uint8_t* data, size_t size, std::vector<uint8_t>& out);
+  // HEVC coded in tiles (tiles_enabled_flag in a PPS): the PS5's decoder does
+  // not support them. Checked on the container's parameter sets so Open() can
+  // hand the stream to FFmpeg up front.
+  bool ParameterSetsUseTiles() const;
+  // The container's parameter sets as (offset, length) into m_parameterSets,
+  // split once whenever m_parameterSets changes (not once per access unit).
+  void RefreshContainerSets();
+  std::vector<std::pair<size_t, size_t>> m_containerSetSpans;
+  bool m_loggedInbandSets = false;
   std::vector<uint8_t> m_annexB;
   bool m_loggedLengthPrefixed = false;
   unsigned m_cleanNoSlice = 0;  // stage 1: access units with nothing decodable in them
@@ -192,13 +209,11 @@ private:
   // first non-RASL picture.
   bool m_skipRasl = false;
   static bool HevcAccessUnitIsRasl(const uint8_t* data, size_t size);
-  // VP9: show flags of access units whose picture has not come out yet (with
-  // frames in flight, a picture belongs to an earlier access unit)
-  std::deque<bool> m_vp9PendingShown;
+  unsigned m_vp9HiddenOutputs = 0;
 
-  // decode time statistics: every 5 seconds with kodi-debug, and one summary
+  // decode time statistics: every 5 seconds with kodi-video-debug, and one summary
   // line per stream when the codec closes (always)
-  const bool m_timeDecodes = getenv("KODI_PS5_DEBUG") != nullptr;
+  const bool m_timeDecodes = getenv("KODI_PS5_VIDEO_DEBUG") != nullptr;
   std::string m_streamName;      // for the summary: codec and size
   float m_streamFps = 0.0f;
   std::chrono::steady_clock::time_point m_streamStart{};

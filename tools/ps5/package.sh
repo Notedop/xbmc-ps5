@@ -21,6 +21,7 @@
 #   KODI_CATEGORY  game (default) or media: home-screen area (media is
 #               experimental: the GL driver does not start in its sandbox)
 #   PS5_HOST    console IP for FTP upload (optional)
+#   PS5_DEPLOY_JOBS concurrent FTP uploads (default 3, range 1..8)
 set -euo pipefail
 
 export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
@@ -453,9 +454,13 @@ PY
 fi
 
 if [ -n "${PS5_HOST:-}" ]; then
+   PS5_DEPLOY_JOBS="${PS5_DEPLOY_JOBS:-8}"
+   [[ "$PS5_DEPLOY_JOBS" =~ ^[1-8]$ ]] || {
+     echo "!! PS5_DEPLOY_JOBS must be between 1 and 8" >&2; exit 1; }
+   command -v lftp >/dev/null || {
+     echo "!! lftp is required for deployment; install lftp or copy the folder manually" >&2; exit 1; }
    echo "==> uploading to ftp://$PS5_HOST:${PS5_FTP_PORT:-2121}/data/homebrew/$TITLE_ID"
-   command -v lftp >/dev/null || { echo "   (install lftp, or copy the folder manually)"; }
-   lftp -e "mirror -R --delete --no-perms '$DIST' '/data/homebrew/$TITLE_ID'; quit" -p "${PS5_FTP_PORT:-2121}" "$PS5_HOST"
+   lftp -e "set cmd:fail-exit yes; mirror -R --delete --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST' '/data/homebrew/$TITLE_ID'; quit" -p "${PS5_FTP_PORT:-2121}" "$PS5_HOST"
 fi
 echo
 echo "Title folder: $DIST"

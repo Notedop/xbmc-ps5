@@ -817,6 +817,12 @@ CVideoPlayer::~CVideoPlayer()
     system->Unregister(this);
 
   CloseFile();
+#if defined(TARGET_PS5)
+  // OnExit() normally unregisters; make sure no dangling pointer survives a
+  // player thread that ended abnormally
+  if (auto system = CServiceBroker::GetWinSystem(); system != nullptr)
+    system->UnregisterRenderLoop(this);
+#endif
   DestroyPlayers();
 
   while (m_outboundEvents->IsProcessing())

@@ -198,3 +198,51 @@ Both targets call `tools/ps5/package.sh`, which uses:
 - `APP_TEMPLATE` (default:
   `build/ps5-external/ps5-opengl/build/native-app/PPSA99005`, i.e.
   `$WORK/ps5-opengl/...` - see 0.2)
+
+Set `PS5_HOST` to upload the packaged title over FTP using `lftp mirror`.
+Install `lftp` on the build host. Deployment uses three concurrent transfers
+by default and prints mirror activity.
+
+```bash
+PS5_HOST=192.168.1.100 PS5_DEPLOY_JOBS=3 \
+  cmake --build build/ps5-release --target ps5-title
+```
+
+`PS5_DEPLOY_JOBS` accepts `1..8`; use `1` to restore serial transfers if the
+console's FTP service struggles with parallel uploads. `PS5_FTP_PORT` defaults
+to `2121`. Normal lftp size/timestamp comparison is retained: unchanged files
+can be skipped, but regenerated files with newer timestamps may be uploaded
+again even when their contents match. Size-only comparison is deliberately
+not enabled because it can miss same-size executable or asset changes.
+
+Fully close Kodi before deploying and wait for deployment to finish before
+launching it. As with the original mirror deployment, files are updated in
+place and files no longer in the local title are removed remotely. No hash
+manifest or extra verification scans are used. The mirror also removes the
+previous Python uploader's manifest and temporary files if they remain in
+the remote title directory.
+
+## 5. Runtime debugging
+
+Optional empty marker files in the deployed title's `app0` directory enable
+diagnostics at startup. Restart Kodi after adding or removing them.
+
+| Marker | Effect |
+|---|---|
+| `kodi-debug` | General Kodi debug logging. |
+| `kodi-video-debug` | Detailed video decoding, frame-content, presentation timing and HDR diagnostics, independently of `kodi-debug`. |
+| `kodi-software-video` | Bypass hardware decoding for VP9 only, using FFmpeg for comparison. |
+
+For example, after packaging, add video diagnostics to the local title folder
+before uploading it:
+
+```bash
+touch build/ps5-stage/app/dist/PPSA99420/kodi-video-debug
+```
+
+The corresponding console path is
+`/mnt/sandbox/PPSA99420_000/app0/kodi-video-debug`. Diagnostic output goes to
+the kernel log alongside Kodi messages. Detailed video diagnostics add work
+to the playback path; leave these markers absent for normal playback. Remove
+comparison/debug markers from both the local title folder and the deployed
+copy when finished, since subsequent deployment mirrors the local folder.

@@ -297,6 +297,21 @@ void CThread::Action()
   {
     e.LogThrowMessage("Process");
   }
+#if defined(TARGET_PS5)
+  // Under memory pressure (e.g. 8K software decoding) std::bad_alloc and
+  // friends escape Process(). Without OnExit() the owner skips its cleanup:
+  // VideoPlayer then stays registered in the render loop after deletion and
+  // the next playback crashes on the dangling pointer.
+  catch (const std::exception& e)
+  {
+    CLog::Log(LOGERROR, "Thread {} Process() terminated by exception: {}", m_ThreadName,
+              e.what());
+  }
+  catch (...)
+  {
+    CLog::Log(LOGERROR, "Thread {} Process() terminated by unknown exception", m_ThreadName);
+  }
+#endif
 
   try
   {

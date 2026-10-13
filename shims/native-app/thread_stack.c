@@ -12,11 +12,10 @@
 #include <stddef.h>
 #include <stdio.h>
 
-/* Kodi's usual size on Linux. 1 MiB was not enough: thumbnail extraction
- * (software HEVC decode plus JPEG encoding on a job worker) overflowed it,
- * crashing at once or - by corrupting neighbouring memory - when the worker
- * thread later terminated. */
-#define PS5_MIN_THREAD_STACK (8u * 1024u * 1024u)
+/* 1 MiB was not enough: thumbnail extraction (software HEVC decode plus JPEG
+ * encoding on a job worker) overflowed it. 4 MiB is the smallest fallback
+ * observed to work, while imposing 8 MiB on every thread exhausts title memory. */
+#define PS5_MIN_THREAD_STACK (4u * 1024u * 1024u)
 /* if the system refuses a thread at that size, smaller ones are tried */
 static const size_t fallback_stacks[] = {4u * 1024u * 1024u, 1024u * 1024u};
 

@@ -1,6 +1,7 @@
 #include "platform/ps5/elf/PS5AddonLoader.h"
 
 #include "filesystem/File.h"
+#include "filesystem/SpecialProtocol.h"
 #include "platform/ps5/elf/ElfLoader.h"
 #include "platform/ps5/elf/HostExports.h"
 #include "utils/log.h"
@@ -44,6 +45,42 @@ uint64_t Fingerprint(const std::vector<uint8_t>& bytes)
     hash *= 1099511628211ull;
   }
   return hash;
+}
+
+// A packaging-generated manifest beside the primary authorizes exact helper
+// basenames in that directory. The manifest is part of the signed app package,
+// like the primary binary itself; absent manifests grant no helper scope.
+bool RegisterAuxiliaryManifest(ps5elf::Image* image, const std::string& path,
+                               char* error, size_t error_size)
+{
+  const std::string native = CSpecialProtocol::TranslatePath(path);
+  const size_t slash = native.find_last_of('/');
+  if (slash == std::string::npos || slash == 0)
+    return true;
+  const std::string manifest = native.substr(0, slash + 1) + ps5elf::kAuxiliaryManifestName;
+  if (!XFILE::CFile::Exists(manifest))
+    return true;
+  XFILE::CFile file;
+  std::vector<uint8_t> text;
+  if (file.LoadFile(manifest, text) < 0)
+  {
+    std::snprintf(error, error_size, "cannot read %s", manifest.c_str());
+    return false;
+  }
+  std::vector<std::string> helpers;
+  if (!ps5elf::parse_auxiliary_manifest(reinterpret_cast<const char*>(text.data()), text.size(),
+                                        native.substr(slash + 1).c_str(), helpers, error,
+                                        error_size))
+    return false;
+  if (helpers.empty())
+    return true;
+  std::vector<const char*> names;
+  for (const auto& helper : helpers)
+    names.push_back(helper.c_str());
+  CLog::Log(LOGINFO, "PS5AddonLoader: {} trusted helper(s) authorized for {}", names.size(),
+            native);
+  return ps5elf::register_auxiliaries(image, native.c_str(), names.data(), names.size(), error,
+                                      error_size);
 }
 } // namespace
 
@@ -90,16 +127,15 @@ bool CPS5AddonLoader::Load()
     CLog::Log(LOGERROR, "PS5AddonLoader: failed to load {}: {}", path, err);
     return false;
   }
+  if (!RegisterAuxiliaryManifest(m_img, path, err, sizeof(err)))
+  {
+    CLog::Log(LOGERROR, "PS5AddonLoader: cannot register trusted helpers for {}: {}", path, err);
+    ps5elf::unload(m_img);
+    m_img = nullptr;
+    return false;
+  }
 
   const ps5elf::Stats st = ps5elf::stats(m_img);
-  if (st.tls != 0)
-    CLog::Log(LOGWARNING,
-              "PS5AddonLoader: {} uses {} TLS relocation(s), which are not yet applied; "
-              "the add-on may misbehave if it relies on thread-local storage",
-              path, st.tls);
-  if (st.other != 0)
-    CLog::Log(LOGWARNING, "PS5AddonLoader: {} has {} unhandled relocation(s)", path, st.other);
-
   // Run the add-on's constructors (C++ static initializers) before use.
   if (debug)
     CLog::Log(LOGINFO, "PS5AddonDebug: phase=constructors-enter module={} image={}", path,

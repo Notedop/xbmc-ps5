@@ -1,0 +1,95 @@
+Release the emulator state that each opened track allocates.
+
+usf_clear() mallocs an 8 MB save-state buffer and usf_startup() maps about
+17 MB of emulated N64 memory, but the decoder never called usf_shutdown(), so
+every opened track leaked roughly 24 MB. On PS5 a few tracks exhausted memory
+and lazyusf crashed in memset(-1, ...) (see 0002). ReadTag() also allocated a
+state into the playing instance's ctx.state without freeing it, and the Init()
+failure path used delete instead of delete[] and left a dangling pointer for
+the destructor to free again. Init() now also fails when the first render
+fails instead of reporting a bogus sample rate.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.usf.
+
+--- a/src/USFCodec.h
++++ b/src/USFCodec.h
+@@ -57,6 +57,7 @@
+   bool ReadTag(const std::string& filename, kodi::addon::AudioDecoderInfoTag& tag) override;
+ 
+ private:
++  void ReleaseState();
+   bool CheckEndReached(uint8_t* buffer, int size);
+   USFContext ctx;
+   bool m_firstRoundDone = false;
+--- a/src/USFCodec.cpp
++++ b/src/USFCodec.cpp
+@@ -181,7 +181,18 @@
+ 
+ CUSFCodec::~CUSFCodec()
+ {
++  ReleaseState();
++}
++
++void CUSFCodec::ReleaseState()
++{
++  if (!ctx.state)
++    return;
++  // usf_clear() already allocates the save-state buffer; usf_shutdown()
++  // releases it along with the ROM pages and emulated RDRAM.
++  usf_shutdown(ctx.state);
+   delete[] ctx.state;
++  ctx.state = nullptr;
+ }
+ 
+ bool CUSFCodec::Init(const std::string& filename,
+@@ -194,13 +205,15 @@
+                      AudioEngineDataFormat& format,
+                      std::vector<AudioEngineChannel>& channellist)
+ {
++  ReleaseState();
+   ctx.pos = 0;
++  m_firstRoundDone = false;
+   ctx.state = new char[usf_get_state_size()];
+   usf_clear(ctx.state);
+   if (psf_load(filename.c_str(), &psf_file_system, 0x21, usf_load, ctx.state, psf_info_meta, &ctx,
+                0, nullptr, nullptr) < 0)
+   {
+-    delete ctx.state;
++    ReleaseState();
+     return false;
+   }
+   totaltime = ctx.len;
+@@ -214,8 +227,12 @@
+   bitspersample = 16;
+   bitrate = 0.0;
+ 
+-  int32_t srate;
+-  usf_render(ctx.state, NULL, 0, &srate);
++  int32_t srate = 0;
++  if (usf_render(ctx.state, NULL, 0, &srate) || srate <= 0)
++  {
++    ReleaseState();
++    return false;
++  }
+   samplerate = ctx.sample_rate = srate;
+ 
+   ctx.len = srate * 4 * (totaltime) / 1000;
+@@ -257,9 +274,8 @@
+ 
+ bool CUSFCodec::ReadTag(const std::string& filename, kodi::addon::AudioDecoderInfoTag& tag)
+ {
++  // Tags need no emulator state; ctx.state belongs to the playing stream.
+   USFContext usf;
+-  ctx.state = new char[usf_get_state_size()];
+-  usf_clear(ctx.state);
+ 
+   if (psf_load(filename.c_str(), &psf_file_system, 0x21, nullptr, nullptr, psf_info_meta, &usf, 0,
+                nullptr, nullptr) <= 0)
+@@ -276,7 +292,6 @@
+   tag.SetSamplerate(usf.sample_rate);
+   tag.SetDuration(usf.len / 1000);
+ 
+-  delete[] usf.state;
+   return true;
+ }
+ 

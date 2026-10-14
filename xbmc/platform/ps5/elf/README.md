@@ -410,6 +410,16 @@ reader completion, buffer reset, worker join and reader reset. These log only
 lifecycle transitions, not frame or download loops. The existing video-buffer
 timeout alone is not proof of a decoder teardown failure.
 
+Other add-ons get a patch series: PS5 configuration applies every
+`tools/ps5/patches/addons/<addon-id>/NNNN-name.patch` in order through
+`tools/ps5/apply-patch-series.cmake`, which records applied patches and their
+hashes in `<source>/.ps5-applied-patches` and refuses a tree whose recorded
+patches changed. Each patch is applied with `apply-source-patch.cmake` at fuzz
+0. [`tools/ps5/patches/addons/README.md`](../../../../tools/ps5/patches/addons/README.md)
+lists the series and their upstream status. PS5 configuration also pins
+`CMAKE_INSTALL_LIBDIR=lib/kodi`, so add-ons using GNUInstallDirs install to
+`lib/kodi/addons/<addon-id>`.
+
 From this repository root in Linux/WSL, with the already installed corrected
 adaptive build:
 

@@ -1,0 +1,42 @@
+Report helper library load failures from Init() and ReadTag().
+
+Both functions return bool but returned -1 when in_wsr_*.so could not be
+loaded, which converts to true: Kodi then used the decoder with no player
+API and dereferenced a null function table.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.wsr.
+
+--- a/src/WSRCodec.cpp
++++ b/src/WSRCodec.cpp
+@@ -51,12 +51,12 @@
+     std::string source = kodi::addon::GetAddonPath(LIBRARY_PREFIX + std::string("in_wsr_") +
+                                                    std::to_string(m_usedLib) + LIBRARY_SUFFIX);
+     if (!LoadDll(source))
+-      return -1;
++      return false;
+     if (!REGISTER_DLL_SYMBOL(WSRPlayerSetUp))
+-      return -1;
++      return false;
+     m_wsrPlayerApi = WSRPlayerSetUp();
+     if (!m_wsrPlayerApi)
+-      return -1;
++      return false;
+   }
+ 
+   int track = 0;
+@@ -317,12 +317,12 @@
+         kodi::addon::GetAddonPath(LIBRARY_PREFIX + std::string("in_wsr_track") + LIBRARY_SUFFIX);
+ 
+     if (!LoadDll(source))
+-      return -1;
++      return false;
+     if (!REGISTER_DLL_SYMBOL(WSRPlayerSetUp))
+-      return -1;
++      return false;
+     m_wsrPlayerApi = WSRPlayerSetUp();
+     if (!m_wsrPlayerApi)
+-      return -1;
++      return false;
+   }
+ 
+   int track = 0;

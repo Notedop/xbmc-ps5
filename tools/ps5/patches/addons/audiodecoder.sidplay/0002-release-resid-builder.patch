@@ -1,0 +1,78 @@
+Release the reSID builder and its SID emulations with the decoder.
+
+Init() created a ReSIDBuilder (and the reSID engines it owns) with new and
+never deleted it, leaking it on every played track; a second Init() on the
+same instance also leaked the previous SidTune. Keep the builder as a member,
+detach it from the player before deleting it, and release everything on
+destruction and re-initialisation.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.sidplay.
+
+--- a/src/SIDCodec.cpp
++++ b/src/SIDCodec.cpp
+@@ -15,8 +15,22 @@
+ 
+ CSIDCodec::~CSIDCodec()
+ {
+-  if (tune)
+-    delete tune;
++  Release();
++}
++
++void CSIDCodec::Release()
++{
++  if (m_builder)
++  {
++    // Hand the SID emulations back before the builder deletes them.
++    config.sidEmulation = nullptr;
++    player.config(config);
++    delete m_builder;
++    m_builder = nullptr;
++  }
++  player.load(nullptr);
++  delete tune;
++  tune = nullptr;
+ }
+ 
+ bool CSIDCodec::Init(const std::string& filename,
+@@ -29,6 +43,8 @@
+                      AudioEngineDataFormat& format,
+                      std::vector<AudioEngineChannel>& channellist)
+ {
++  Release();
++
+   int track = 1;
+   const std::string toLoad = kodi::addon::CInstanceAudioDecoder::GetTrack("sid", filename, track);
+ 
+@@ -64,11 +80,11 @@
+   config.precision = 16;
+   config.rightVolume = 255;
+   config.sampleFormat = SID2_LITTLE_SIGNED;
+-  ReSIDBuilder* rs = new ReSIDBuilder("Resid Builder");
+-  rs->create(player.info().maxsids);
+-  rs->filter(true);
+-  rs->sampling(48000);
+-  config.sidEmulation = rs;
++  m_builder = new ReSIDBuilder("Resid Builder");
++  m_builder->create(player.info().maxsids);
++  m_builder->filter(true);
++  m_builder->sampling(48000);
++  config.sidEmulation = m_builder;
+   pos = 0;
+   track = track;
+ 
+--- a/src/SIDCodec.h
++++ b/src/SIDCodec.h
+@@ -35,9 +35,12 @@
+   bool ReadTag(const std::string& filename, kodi::addon::AudioDecoderInfoTag& tag) override;
+ 
+ private:
++  void Release();
++
+   sidplay2 player;
+   sid2_config_t config;
+   SidTune* tune = nullptr;
++  ReSIDBuilder* m_builder = nullptr;
+   int64_t pos;
+   int track;
+ };

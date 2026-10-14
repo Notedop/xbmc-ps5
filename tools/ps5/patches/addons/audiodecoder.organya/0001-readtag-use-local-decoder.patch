@@ -1,0 +1,44 @@
+Read tags with a local decoder instead of the playing stream's members.
+
+ReadTag() reopened m_file and stored a new decoder in m_tune without
+destroying it, leaking a decoder (with its sample data) per tag read and
+replacing the decoder of a stream that is playing on the same instance.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.organya.
+
+--- a/src/OrganyaCodec.cpp
++++ b/src/OrganyaCodec.cpp
+@@ -133,14 +133,17 @@
+ 
+ bool COrganyaCodec::ReadTag(const std::string& filename, kodi::addon::AudioDecoderInfoTag& tag)
+ {
+-  if (!m_file.OpenFile(filename, 0))
++  // Use a local decoder: m_file/m_tune belong to the stream being played.
++  kodi::vfs::CFile file;
++  if (!file.OpenFile(filename, 0))
+     return false;
+ 
++  org_decoder_t* tune = nullptr;
+   try
+   {
+     std::string temp = kodi::addon::GetAddonPath("resources/samples");
+-    m_tune = org_decoder_create(&m_file, temp.c_str(), m_cfgLoopCnt > 1 ? m_cfgLoopCnt : 1);
+-    if (!m_tune)
++    tune = org_decoder_create(&file, temp.c_str(), m_cfgLoopCnt > 1 ? m_cfgLoopCnt : 1);
++    if (!tune)
+       return false;
+   }
+   catch (...)
+@@ -148,9 +151,10 @@
+     return false;
+   }
+ 
+-  m_tune->state.sample_rate = m_cfgSampleRate;
++  tune->state.sample_rate = m_cfgSampleRate;
+   tag.SetSamplerate(m_cfgSampleRate);
+-  tag.SetDuration(org_decoder_get_total_samples(m_tune) / m_cfgSampleRate);
++  tag.SetDuration(org_decoder_get_total_samples(tune) / m_cfgSampleRate);
++  org_decoder_destroy(tune);
+   return true;
+ }
+ 

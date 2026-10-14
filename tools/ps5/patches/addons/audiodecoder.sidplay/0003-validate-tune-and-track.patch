@@ -1,0 +1,49 @@
+Reject tunes that fail to load and remember the selected sub-song.
+
+"if (!tune)" tested the pointer returned by new, which is never null, so an
+invalid file was handed to the player anyway; test the SidTune status and the
+player's load/config results instead. "track = track" assigned the local to
+itself, leaving the member uninitialised, so seeking backwards restarted an
+arbitrary sub-song.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.sidplay.
+
+--- a/src/SIDCodec.cpp
++++ b/src/SIDCodec.cpp
+@@ -61,11 +61,18 @@
+   tune = new SidTune(data, len);
+   delete[] data;
+ 
+-  if (!tune)
++  if (!*tune)
++  {
++    Release();
+     return false;
++  }
+ 
+   tune->selectSong(track);
+-  player.load(tune);
++  if (player.load(tune) < 0)
++  {
++    Release();
++    return false;
++  }
+   config.clockDefault = SID2_CLOCK_PAL;
+   config.clockForced = false;
+   config.clockSpeed = SID2_CLOCK_CORRECT;
+@@ -86,9 +93,13 @@
+   m_builder->sampling(48000);
+   config.sidEmulation = m_builder;
+   pos = 0;
+-  track = track;
++  this->track = track;
+ 
+-  player.config(config);
++  if (player.config(config) < 0)
++  {
++    Release();
++    return false;
++  }
+ 
+   channels = 1;
+   samplerate = 48000;

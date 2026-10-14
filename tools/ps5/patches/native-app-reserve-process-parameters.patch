@@ -1,0 +1,80 @@
+Reserve file-backed room after RELRO for the PS5 process parameters.
+
+sce_module_writer places the process parameters and parameter blocks (about
+0x340 bytes) directly after the RELRO content. It requires them to end before
+the data segment, and it writes them at RELRO's file residue
+(relro_file + address - relro_start). The linker script only left
+page-alignment slack there, so the layout failed ("LLVM layout leaves no room
+for PS5 process parameters") once the add-on export tables grew RELRO to
+within 0x340 bytes of a page boundary.
+
+A bare `. += N` gap is not enough. It adds address space but no file bytes,
+and lld keeps the next segment's file offset tight. The parameters then
+overwrote the preserved original .dynamic, and the in-process add-on resolver
+rejected it ("original host dynamic metadata missing or invalid").
+
+So reserve a zero-filled PROGBITS section in the RELRO segment. The converter
+ignores it when classifying sections and overwrites its bytes with the
+parameters. It also now fails packaging if the parameters would land on
+another section's file bytes.
+
+--- a/tooling/native/ps5-pie-base.ld	2026-10-14 23:30:02.071994252 +0200
++++ b/tooling/native/ps5-pie-base.ld	2026-10-14 23:30:27.820567229 +0200
+@@ -64,6 +64,13 @@
+     .rela.dyn : { *(.rela.dyn) } : relro
+     .rela.plt : { *(.rela.plt) } : relro
+ 
++    /* File-backed room for the PS5 process parameters and their blocks
++     * (about 0x340 bytes), which the converter writes right after the RELRO
++     * content. A bare location-counter gap has no file bytes: lld would place
++     * the next segment's file offset inside it and the parameters would
++     * overwrite the preserved original .dynamic. */
++    .ps5.process_param_reserve : { BYTE(0); . += 0xfff; } : relro
++
+     . = ALIGN(CONSTANT(MAXPAGESIZE));
+     .dynamic : {
+         *(.dynamic)
+--- a/tooling/native/sce_module_writer.cpp	2026-10-14 23:30:02.075994341 +0200
++++ b/tooling/native/sce_module_writer.cpp	2026-10-14 23:30:27.820567229 +0200
+@@ -168,6 +168,10 @@
+            name == ".gnu.hash" || name.starts_with(".rela.");
+ }
+ 
++// Zero-filled, file-backed room after RELRO. The converter overwrites it with
++// the process parameters; it is neither RELRO content nor data.
++constexpr std::string_view kProcessParameterReserve = ".ps5.process_param_reserve";
++
+ bool relro_section(std::string_view name)
+ {
+     return (metadata_section(name) && name != ".dynamic") ||
+@@ -651,7 +655,7 @@
+ 
+     for (const Section &input : image.sections)
+     {
+-        if (!input.allocated())
++        if (!input.allocated() || input.name == kProcessParameterReserve)
+             continue;
+         const std::uint64_t end = input.address + input.size;
+         if (input.executable())
+@@ -702,6 +706,21 @@
+     const std::uint64_t blocks_address = align_up(process_address + process_parameters.size(), 8);
+     const std::uint64_t relro_end = blocks_address + blocks.data.size();
+     require(relro_end <= data_start, "LLVM layout leaves no room for PS5 process parameters");
++    // The parameters are written at RELRO's file residue. Those file bytes must
++    // belong to RELRO, not to the next segment (the preserved .dynamic).
++    {
++        const std::uint64_t relro_file_start = relro_origin(image, relro_start).file_offset;
++        const std::uint64_t relro_file_end = relro_file_start + (relro_end - relro_start);
++        for (const Section &input : image.sections)
++        {
++            if (!input.allocated() || input.no_bits() || input.address < relro_end ||
++                input.name == kProcessParameterReserve)
++                continue;
++            const std::uint64_t file_end = input.file_offset + input.data.size();
++            require(file_end <= relro_file_start || input.file_offset >= relro_file_end,
++                    "PS5 process parameters would overwrite file bytes of " + input.name);
++        }
++    }
+ 
+     std::vector<Import> imports;
+     std::vector<const Stub *> module_order;

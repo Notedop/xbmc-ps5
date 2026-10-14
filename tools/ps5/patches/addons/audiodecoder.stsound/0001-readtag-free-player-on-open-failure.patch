@@ -1,0 +1,24 @@
+Free the YM player when ReadTag() cannot open the file.
+
+The early return leaked the ymMusicCreate() object on every failed open.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.stsound.
+
+--- a/src/YMCodec.cpp
++++ b/src/YMCodec.cpp
+@@ -101,9 +101,15 @@
+ bool CYMCodec::ReadTag(const std::string& filename, kodi::addon::AudioDecoderInfoTag& tag)
+ {
+   YMMUSIC* tune = ymMusicCreate();
++  if (!tune)
++    return false;
++
+   kodi::vfs::CFile file;
+   if (!file.OpenFile(filename))
++  {
++    ymMusicDestroy(tune);
+     return false;
++  }
+ 
+   int len = file.GetLength();
+   char* data = new char[len];

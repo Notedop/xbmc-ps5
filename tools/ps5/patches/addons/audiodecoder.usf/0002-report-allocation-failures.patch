@@ -1,0 +1,59 @@
+Report lazyusf allocation failures instead of crashing.
+
+large_alloc() returned MAP_FAILED (-1) from mmap() while callers only test for
+NULL, so an out-of-memory condition became memset((void*)-1, ...) and a
+SYSTEM_WRITE_ADDRESS_WRAPAROUND fault on PS5. Map MAP_FAILED to NULL, reject
+uploads when usf_clear() could not allocate the save state, and set
+last_error when usf_startup() fails so usf_render() reports the failure
+(it returned a NULL error, i.e. success, before).
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.usf (lib/lazyusf).
+
+--- a/lib/lazyusf/memory.c
++++ b/lib/lazyusf/memory.c
+@@ -63,7 +63,9 @@
+ 
+ void * large_alloc(size_t size)
+ {
+-	return mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++	void * p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++	/* Callers test for NULL; MAP_FAILED would be dereferenced. */
++	return p == MAP_FAILED ? NULL : p;
+ }
+ 
+ void large_free(void * p, size_t size)
+--- a/lib/lazyusf/usf.c
++++ b/lib/lazyusf/usf.c
+@@ -101,6 +101,8 @@
+ {
+     uint32_t temp;
+     
++    /* usf_clear() ignores a failed save-state allocation. */
++    if ( !USF_STATE->savestatespace ) return -1;
+     if ( size < 4 ) return -1;
+     temp = get_le32( data ); data += 4; size -= 4;
+ 
+@@ -168,6 +170,12 @@
+ 
+ static int usf_startup(usf_state_t * state)
+ {
++    if ( !state->savestatespace )
++    {
++        state->last_error = "No save state loaded";
++        return -1;
++    }
++
+     // Detect the Ramsize before the memory allocation
+ 	
+ 	if(get_le32(state->savestatespace + 4) == 0x400000) {
+@@ -180,7 +188,10 @@
+ 		state->RdramSize = 0x800000;
+ 
+ 	if ( !Allocate_Memory(state) )
++    {
++        state->last_error = "Failed to allocate emulator memory";
+         return -1;
++    }
+ 
+ 	StartEmulationFromSave(state, USF_STATE->savestatespace);
+     

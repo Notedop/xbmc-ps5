@@ -1,0 +1,32 @@
+Release the GBA emulator state when the decoder is destroyed.
+
+The destructor only calls soundShutdown()/CPUCleanUp() when ctx.inited is
+set, but nothing ever set it, so each played track leaked the 32 MB ROM
+buffer plus the emulated RAM blocks and the sound buffers. On PS5 this
+exhausts memory after a handful of tracks. Set the flag once the emulator is
+initialised, and fail Init() (after releasing partial allocations) when
+CPULoadRom() cannot allocate.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.gsf.
+
+--- a/src/GSFCodec.cpp
++++ b/src/GSFCodec.cpp
+@@ -280,11 +280,17 @@
+     return false;
+ 
+   ctx.system.cpuIsMultiBoot = (ctx.state.entry >> 24 == 2);
+-  CPULoadRom(&ctx.system, ctx.state.data, ctx.state.data_size);
++  if (!CPULoadRom(&ctx.system, ctx.state.data, ctx.state.data_size))
++  {
++    // CPULoadRom() can fail after allocating part of the emulated memory.
++    CPUCleanUp(&ctx.system);
++    return false;
++  }
+   soundInit(&ctx.system, &ctx.output);
+   soundReset(&ctx.system);
+   CPUInit(&ctx.system);
+   CPUReset(&ctx.system);
++  ctx.inited = true;
+ 
+   format = AUDIOENGINE_FMT_S16NE;
+   channellist = {AUDIOENGINE_CH_FL, AUDIOENGINE_CH_FR};

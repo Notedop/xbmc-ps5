@@ -1,0 +1,104 @@
+Load the same-named m3u playlist of multi-track files.
+
+NSF, GBS, HES, KSS and AY files carry no track lengths or names, so every
+track played for libgme's 2.5 minute default. Rips ship them in a same-named
+.m3u (e.g. "Game.nsf" + "Game.m3u"). For files with more than one track,
+load that playlist through Kodi's VFS with gme_load_m3u_data(); it supplies
+track order, names, lengths and loop points. A malformed playlist is ignored
+and the file is reopened with its own tracks. gme_type_multitrack() and
+gme_clear_playlist() are declared but not defined by the vendored libgme, so
+neither is used.
+
+Upstream: generic feature, suitable for xbmc/audiodecoder.gme.
+
+--- a/src/GMECodec.cpp
++++ b/src/GMECodec.cpp
+@@ -10,9 +10,56 @@
+ 
+ #include <kodi/Filesystem.h>
+ 
++#include <vector>
++
+ namespace
+ {
+ constexpr int kFadeMs = 8000;
++constexpr int64_t kMaxPlaylistBytes = 1024 * 1024;
++
++// Multi-track formats such as NSF carry no track lengths or names; rips keep
++// them in a same-named .m3u that libgme can apply to the loaded file.
++// The vendored libgme declares but does not define gme_type_multitrack() and
++// gme_clear_playlist(); use the raw track count and reopen instead.
++bool LoadPlaylist(gme_t* gme, const std::string& path)
++{
++  if (gme_track_count(gme) <= 1)
++    return true;
++  const size_t dot = path.find_last_of('.');
++  const size_t slash = path.find_last_of("/\\");
++  if (dot == std::string::npos || (slash != std::string::npos && dot < slash))
++    return true;
++  const std::string playlist = path.substr(0, dot) + ".m3u";
++  if (!kodi::vfs::FileExists(playlist, true))
++    return true;
++
++  kodi::vfs::CFile file;
++  if (!file.OpenFile(playlist, 0))
++    return true;
++  const int64_t size = file.GetLength();
++  if (size <= 0 || size > kMaxPlaylistBytes)
++    return true;
++  std::vector<char> data(static_cast<size_t>(size));
++  if (file.Read(data.data(), data.size()) != static_cast<ssize_t>(data.size()))
++    return true;
++  return !gme_load_m3u_data(gme, data.data(), static_cast<long>(data.size()));
++}
++
++gme_t* OpenFile(const std::string& path)
++{
++  gme_t* gme = nullptr;
++  if (gme_open_file(path.c_str(), &gme, 48000) || !gme)
++    return nullptr;
++  if (LoadPlaylist(gme, path))
++    return gme;
++
++  // A rejected playlist may be partially parsed; use the file's own tracks.
++  gme_delete(gme);
++  gme = nullptr;
++  if (gme_open_file(path.c_str(), &gme, 48000) || !gme)
++    return nullptr;
++  return gme;
++}
+ } // namespace
+ 
+ CGMECodec::CGMECodec(const kodi::addon::IInstanceInfo& instance) : CInstanceAudioDecoder(instance)
+@@ -42,7 +89,8 @@
+   if (track > 0)
+     --track;
+ 
+-  if (gme_open_file(toLoad.c_str(), &ctx.gme, 48000) || !ctx.gme)
++  ctx.gme = OpenFile(toLoad);
++  if (!ctx.gme)
+     return false;
+ 
+   channels = 2;
+@@ -87,8 +135,8 @@
+   int track = 0;
+   const std::string toLoad = kodi::addon::CInstanceAudioDecoder::GetTrack("gme", filename, track);
+ 
+-  gme_t* gme = nullptr;
+-  if (gme_open_file(toLoad.c_str(), &gme, 48000) || !gme)
++  gme_t* gme = OpenFile(toLoad);
++  if (!gme)
+     return false;
+ 
+   gme_info_t* out = nullptr;
+@@ -118,8 +166,8 @@
+ 
+ int CGMECodec::TrackCount(const std::string& fileName)
+ {
+-  gme_t* gme = nullptr;
+-  if (gme_open_file(fileName.c_str(), &gme, 48000) || !gme)
++  gme_t* gme = OpenFile(fileName);
++  if (!gme)
+     return 1;
+ 
+   int result = gme_track_count(gme);

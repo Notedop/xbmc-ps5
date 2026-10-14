@@ -22,6 +22,11 @@
 #               experimental: the GL driver does not start in its sandbox)
 #   PS5_HOST    console IP for FTP upload (optional)
 #   PS5_DEPLOY_JOBS concurrent FTP uploads (default 3, range 1..8)
+#   PS5_TEST_BINARY_ADDON  1 includes the isolated loader probe (default 0)
+#   PS5_ADAPTIVE_TEST  1 stages adaptive and its direct DASH test (default 0)
+#   PS5_ADAPTIVE_PREFIX  installed adaptive depends prefix (optional)
+#   PS5_ADDON_ELFS  colon-separated trusted installed .so files whose runtime
+#                   archive members must be retained (export policy only)
 set -euo pipefail
 
 export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
@@ -38,6 +43,37 @@ PACKAGE_ZIP="${PACKAGE_ZIP:-0}"
 HB="$PS5_PAYLOAD_SDK/target/user/homebrew"
 LLD="$PS5_PAYLOAD_SDK/bin/prospero-lld"
 AR="$PS5_PAYLOAD_SDK/bin/prospero-ar"
+PS5_TEST_BINARY_ADDON="${PS5_TEST_BINARY_ADDON:-0}"
+TEST_ADDON="$BUILD/test-addons/test.binary.ps5"
+case "$PS5_TEST_BINARY_ADDON" in
+  0) ;;
+  1) bash "$ROOT/tools/ps5/stage-test-addon.sh" "$TEST_ADDON" --check ;;
+  *) echo "!! PS5_TEST_BINARY_ADDON must be 0 or 1" >&2; exit 1 ;;
+esac
+
+PS5_ADAPTIVE_TEST="${PS5_ADAPTIVE_TEST:-0}"
+case "$PS5_ADAPTIVE_TEST" in
+  0) ;;
+  1)
+    ADAPTIVE_PREFIX="${PS5_ADAPTIVE_PREFIX:-$ROOT/build/ps5-depends-test/x86_64-unknown-freebsd-debug}"
+    ADAPTIVE_DATA="$ADAPTIVE_PREFIX/share/kodi/addons/inputstream.adaptive"
+    ADAPTIVE_LIBRARY="$(python3 - "$ADAPTIVE_DATA/addon.xml" <<'PY'
+import os
+import sys
+import xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot()
+extension = root.find("./extension[@point='kodi.inputstream']")
+name = extension.get("library_freebsd", "") if extension is not None else ""
+if not name or name != os.path.basename(name):
+    sys.exit("Adaptive manifest must name a FreeBSD library without a directory")
+print(name)
+PY
+)"
+    ADAPTIVE_ELF="$ADAPTIVE_PREFIX/lib/kodi/addons/inputstream.adaptive/$ADAPTIVE_LIBRARY"
+    [ -f "$ADAPTIVE_ELF" ] || { echo "!! adaptive library missing: $ADAPTIVE_ELF" >&2; exit 1; }
+    ;;
+  *) echo "!! PS5_ADAPTIVE_TEST must be 0 or 1" >&2; exit 1 ;;
+esac
 
 [ -f "$BUILD/kodi.bin" ] || { echo "!! $BUILD/kodi.bin not found: build Kodi first"; exit 1; }
 # A failed/incomplete Kodi build leaves kodi.bin stale relative to its own
@@ -66,6 +102,14 @@ echo "==> 1. staging Kodi's data into $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 DESTDIR="$STAGE" cmake --install "$BUILD" >"$STAGE/install.log" 2>&1 || { tail -20 "$STAGE/install.log"; exit 1; }
 [ -d "$STAGE/app0/share/kodi" ] || { echo "!! install produced no app0/share/kodi"; exit 1; }
+if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
+  bash "$ROOT/tools/ps5/stage-test-addon.sh" "$TEST_ADDON" "$STAGE/app0/share/kodi"
+fi
+if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
+  cp -a "$ADAPTIVE_DATA" "$STAGE/app0/share/kodi/addons/"
+  cp -L "$ADAPTIVE_ELF" "$STAGE/app0/share/kodi/addons/inputstream.adaptive/$ADAPTIVE_LIBRARY"
+  cp -a "$ROOT/addons/plugin.video.ps5.adaptive.test" "$STAGE/app0/share/kodi/addons/"
+fi
 
 echo "==> 2. app directory from the demo template"
 APP="$STAGE/app"
@@ -74,8 +118,35 @@ for entry in Makefile assets runtime sce_sys tooling tools include; do
   [ -e "$APP_TEMPLATE/$entry" ] && cp -a "$APP_TEMPLATE/$entry" "$APP/"
 done
 cp -a "$APP_TEMPLATE/.deps" "$APP/.deps"        # SDK copy incl. libSceAgc/AgcDriver/VideoOut stubs
+# Keep the original plaintext import tables mapped for the in-process resolver.
+# The converter still builds its separate Sony metadata for the system loader.
+patch --batch --forward -d "$APP" -p1 < "$ROOT/tools/ps5/patches/native-app-preserve-addon-metadata.patch"
+patch --batch --forward -d "$APP" -p1 < "$ROOT/tools/ps5/patches/native-app-host-runtime-exports.patch"
+cat >> "$APP/tooling/native/ps5-pie.ld" <<'LD'
+
+/* The native title has no mapped ELF header; expose its actual image bounds. */
+PROVIDE_HIDDEN(__ps5_addon_image_base = ADDR(.text));
+PROVIDE_HIDDEN(__ps5_addon_image_end = ADDR(.bss) + SIZEOF(.bss));
+PROVIDE_HIDDEN(__ps5_addon_dynsym_end = ADDR(.dynsym) + SIZEOF(.dynsym));
+ASSERT(ADDR(.text) == 0, "PS5 add-on resolver requires zero-based title text")
+LD
 rm -rf "$APP/src" "$APP/vendor" "$APP/build" "$APP/dist"
 mkdir -p "$APP/src" "$APP/vendor"
+ADDON_ELFS=()
+if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
+  ADDON_ELFS+=("$ADAPTIVE_ELF")
+fi
+if [ -n "${PS5_ADDON_ELFS:-}" ]; then
+  IFS=: read -r -a SELECTED_ADDON_ELFS <<< "$PS5_ADDON_ELFS"
+  ADDON_ELFS+=("${SELECTED_ADDON_ELFS[@]}")
+fi
+if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
+  ADDON_ELFS+=("$TEST_ADDON/test_binary_ps5.so")
+fi
+python3 "$ROOT/tools/ps5/prepare-addon-exports.py" --sdk "$PS5_PAYLOAD_SDK" \
+  --output "$APP/vendor" "${ADDON_ELFS[@]}"
+"$PS5_PAYLOAD_SDK/bin/prospero-clang" --target=x86_64-unknown-freebsd \
+  -c "$APP/vendor/addon-imports.S" -o "$APP/vendor/addon-imports.o"
 cp "$APP_TEMPLATE/src/runtime_shims.c" "$APP/src/"
 # The GL template's shims stub mkstemps/openlog; shims/native-app/libc_posix.c
 # has real ones -> drop the stubs, keep the rest (GL TLS hook, pclose).
@@ -95,6 +166,7 @@ cp "$HERE/shims/native-app/libc_posix.c" "$APP/src/"   # POSIX/BSD functions (ti
 cp "$HERE/shims/native-app/libc_locale.c" "$APP/src/"  # C-locale xlocale layer for libc++
 cp "$HERE/shims/native-app/libc_net.c" "$APP/src/"     # getaddrinfo & co on Sony's resolve
 cp "$HERE/shims/native-app/thread_stack.c" "$APP/src/" # >= 1 MiB thread stacks (--wrap=pthread_create)
+cp "$HERE/shims/native-app/pthread_tls.c" "$APP/src/"
 cp "$HERE/shims/native-app/pipe_fallback.c" "$APP/src/" # pipe() via socketpair, fcntl F_SETFD as success (--wrap=pipe, --wrap=fcntl)
 cp "$HERE/shims/native-app/stdio_tee.c" "$APP/src/"    # fd 1/2 -> klog (--wrap=write): Python fatal init errors, aborts
 # libScePosixForWebKit is a browser-only system module: a title never gets it,
@@ -190,14 +262,15 @@ MAIN_O="$BUILD/CMakeFiles/kodi.dir/xbmc/platform/ps5/main.cpp.o"
 # (lld refuses the multi-relocation-section object that produces), so the
 # archives go straight into the boilerplate's lld invocation via a response
 # file, injected the same way ps5-opengl's builder injects its malloc wraps.
-# Binary add-on imports are resolved at run time against the eboot's own
-# dynamic symbol table (HostExports.cpp), so there is no generated export
-# object to add here - which is deliberate: the FSELF converter crashes on any
-# such object.
-{ echo "$MAIN_O"; cat "$APP/vendor/kodi-whole.txt"; } > "$APP/vendor/kodi-whole.rsp"
+# Host definitions are published by LLVM's dynsym, not a generated pointer
+# binding table. The small import-anchor object retains real system imports
+# requested only by add-ons; the converter now translates their relocations.
+{ echo "$MAIN_O"; echo "$APP/vendor/addon-imports.o"; cat "$APP/vendor/kodi-whole.txt"; } > "$APP/vendor/kodi-whole.rsp"
 LINK_SCRIPT="$APP/tools/build.sh"
 [ "$(grep -c -- '--wrap=malloc_usable_size \\$' "$LINK_SCRIPT")" = 1 ] || { echo "!! unexpected link line in $LINK_SCRIPT"; exit 1; }
-sed -i "/--wrap=malloc_usable_size \\\\$/a\\    --error-limit=0 --wrap=pthread_create --wrap=pipe --wrap=fcntl --wrap=chdir --wrap=write --wrap=fopen --whole-archive @$APP/vendor/kodi-whole.rsp --no-whole-archive \\\\" "$LINK_SCRIPT"
+sed -i "/--wrap=malloc_usable_size \\\\$/a\\    --error-limit=0 --wrap=pthread_create --wrap=pthread_setspecific --wrap=pipe --wrap=fcntl --wrap=chdir --wrap=write --wrap=fopen --whole-archive @$APP/vendor/kodi-whole.rsp --no-whole-archive \\\\" "$LINK_SCRIPT"
+sed -i "s|--version-script \"\\\$native/app-symbols.map\"|--undefined-version --version-script \"$APP/vendor/addon-symbols.map\" --export-dynamic-symbol-list=\"$APP/vendor/addon-dynamic.list\" @$APP/vendor/addon-roots.rsp|" "$LINK_SCRIPT"
+grep -q 'addon-dynamic.list' "$LINK_SCRIPT" || { echo "!! failed to inject add-on export policy"; exit 1; }
 grep -q "kodi-whole.rsp" "$LINK_SCRIPT" || { echo "!! failed to inject the whole-archive list"; exit 1; }
 
 # External libraries as a linker GROUP (circular deps resolve inside a group),
@@ -210,12 +283,12 @@ BUILTINS="$(clang-18 --print-resource-dir)/lib/linux/libclang_rt.builtins-x86_64
   printf 'SEARCH_DIR("%s")\n' "$APP/.deps/native/ps5-payload-sdk/target/lib"
   printf 'EXTERN(ps5_agc_gate2_run)\n'
   # Pull the unwinder's dynamic-frame registration from libunwind.a: the binary
-  # add-on loader calls __register_frame/__deregister_frame (ElfLoader.cpp) to
+  # add-on loader calls the whole-section API (ElfLoader.cpp) to
   # register a loaded add-on's .eh_frame, but nothing else in a static eboot
   # references them, so without EXTERN the archive members are left out and the
   # FSELF converter reports them undefined.
-  printf 'EXTERN(__register_frame)\n'
-  printf 'EXTERN(__deregister_frame)\n'
+  printf 'EXTERN(__unw_add_dynamic_eh_frame_section)\n'
+  printf 'EXTERN(__unw_remove_dynamic_eh_frame_section)\n'
   printf 'GROUP (\n'
   while read -r lib; do [ -n "$lib" ] && printf '  "%s"\n' "$lib"; done < "$APP/vendor/kodi-deps.txt"
   for lib in "$PS5_PAYLOAD_SDK/target/lib/libunwind.a" "$PS5_PAYLOAD_SDK/target/lib/libc++abi.a" \
@@ -327,6 +400,8 @@ if [ ! -s "$DIST/eboot.bin" ]; then
   exit 1
 fi
 
+python3 "$ROOT/tools/ps5/verify-addon-exports.py" "$APP/build/llvm-pie.elf" "${ADDON_ELFS[@]}"
+
 echo "    imports per system module (first provider in NEEDED order, as the converter binds):"
 python3 - "$APP/build/llvm-pie.elf" "$APP/.deps/native/ps5-payload-sdk/target/lib" "$PS5_PAYLOAD_SDK/bin/llvm-nm" "$APP_TEMPLATE/build/llvm-pie.elf" <<'PY'
 import subprocess, sys, os, re
@@ -356,6 +431,17 @@ PY
 echo "==> 6. Kodi data into the title folder"
 mkdir -p "$DIST/share"
 cp -a "$STAGE/app0/share/kodi" "$DIST/share/"
+if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
+  touch "$DIST/kodi-addon-debug"
+fi
+if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
+  (cd "$DIST/share/kodi/addons/test.binary.ps5" &&
+    sha256sum --check --status "$TEST_ADDON/artifacts.sha256")
+  {
+    printf 'build-id: %s\n' "$(<"$TEST_ADDON/build-id.txt")"
+    cat "$TEST_ADDON/artifacts.sha256"
+  } > "$DIST/test-binary-addon-build.txt"
+fi
 chmod -R 0755 "$DIST"
 du -sh "$DIST" | awk '{print "    title folder size: "$1}'
 

@@ -1,8 +1,11 @@
 #include "platform/ps5/elf/ElfLoader.h"
 
 #include <cerrno>
+#include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -30,7 +33,8 @@ constexpr u32 PF_X = 1, PF_W = 2, PF_R = 4;
 
 constexpr i64 DT_NULL=0, DT_HASH=4, DT_STRTAB=5, DT_SYMTAB=6, DT_RELA=7, DT_RELASZ=8,
               DT_RELAENT=9, DT_SYMENT=11, DT_INIT=12, DT_PLTGOT=3, DT_PLTRELSZ=2,
-              DT_JMPREL=23, DT_INIT_ARRAY=25, DT_INIT_ARRAYSZ=27, DT_GNU_HASH=0x6ffffef5;
+              DT_JMPREL=23, DT_INIT_ARRAY=25, DT_INIT_ARRAYSZ=27, DT_FINI=13,
+              DT_FINI_ARRAY=26, DT_FINI_ARRAYSZ=28, DT_GNU_HASH=0x6ffffef5;
 
 constexpr u16 SHN_UNDEF = 0;
 constexpr u8 STB_WEAK = 2;
@@ -52,6 +56,13 @@ namespace ps5elf
 
 struct Image
 {
+  struct Destructor
+  {
+    void (*function)(void*);
+    void* argument;
+    void* dso;
+    Destructor* next;
+  };
   u8* base = nullptr;      // load bias (mapping - trunc(min_vaddr))
   u8* map = nullptr;       // actual mmap start
   size_t span = 0;         // mmap length
@@ -64,8 +75,17 @@ struct Image
   void (*init)() = nullptr;
   void (**init_array)() = nullptr;
   size_t init_arrayn = 0;
+  void (*fini)() = nullptr;
+  void (**fini_array)() = nullptr;
+  size_t fini_arrayn = 0;
+  Destructor* destructors = nullptr;
+  Image* next = nullptr;
+  bool initialized = false;
+  bool unloading = false;
   HostResolver resolver = nullptr;
   void* user = nullptr;
+  Diagnostic diagnostic = nullptr;
+  void* diagnostic_user = nullptr;
   u8* eh_frame_hdr = nullptr; // PT_GNU_EH_FRAME (.eh_frame_hdr), for the unwinder
   bool eh_registered = false;
   Stats st{};
@@ -73,6 +93,105 @@ struct Image
 
 namespace
 {
+std::mutex g_images_mutex;
+Image* g_images = nullptr;
+
+bool contains(const Image* img, const void* pointer)
+{
+  const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
+  const uintptr_t start = reinterpret_cast<uintptr_t>(img->map);
+  return address >= start && address - start < img->span;
+}
+
+// Never forward add-on registrations to the process runtime: it would retain
+// function pointers into memory that unload() is about to release.
+int module_atexit(void (*function)(void*), void* argument, void* dso)
+{
+  if (!function)
+    return -1;
+  auto* entry = static_cast<Image::Destructor*>(std::malloc(sizeof(Image::Destructor)));
+  if (!entry)
+    return -1;
+  std::lock_guard<std::mutex> lock(g_images_mutex);
+  for (Image* img = g_images; img; img = img->next)
+  {
+    if ((dso && contains(img, dso)) || (!dso && contains(img, reinterpret_cast<void*>(function))))
+    {
+      *entry = {function, argument, dso, img->destructors};
+      img->destructors = entry;
+      return 0;
+    }
+  }
+  std::free(entry);
+  return -1;
+}
+
+void finalize(Image* img, void* dso, bool all)
+{
+  for (;;)
+  {
+    Image::Destructor* entry = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(g_images_mutex);
+      auto** link = &img->destructors;
+      while (*link && !all && (*link)->dso != dso)
+        link = &(*link)->next;
+      if (!*link)
+        return;
+      entry = *link;
+      *link = entry->next;
+    }
+    const auto function = entry->function;
+    void* argument = entry->argument;
+    std::free(entry); // remove before calling, including recursive finalize()
+    function(argument);
+  }
+}
+
+void module_finalize(void* dso)
+{
+  // A module-specific CRT passes its __dso_handle. Process-wide finalization
+  // belongs to the host and must not tear down unrelated add-ons.
+  if (!dso)
+    return;
+  Image* owner = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_images_mutex);
+    for (Image* img = g_images; img; img = img->next)
+      if (contains(img, dso))
+      {
+        owner = img;
+        break;
+      }
+  }
+  if (owner)
+    finalize(owner, dso, false);
+}
+
+void report(Diagnostic diagnostic, void* user, const char* fmt, ...)
+{
+  if (!diagnostic)
+    return;
+  char message[512];
+  va_list args;
+  va_start(args, fmt);
+  std::vsnprintf(message, sizeof(message), fmt, args);
+  va_end(args);
+  diagnostic(user, message);
+}
+
+void report(const Image* img, const char* fmt, ...)
+{
+  if (!img || !img->diagnostic)
+    return;
+  char message[512];
+  va_list args;
+  va_start(args, fmt);
+  std::vsnprintf(message, sizeof(message), fmt, args);
+  va_end(args);
+  img->diagnostic(img->diagnostic_user, message);
+}
+
 u32 gnu_hash_symcount(const u32* gh)
 {
   // Derive the highest symbol index + 1 from a GNU hash table.
@@ -120,7 +239,20 @@ bool resolve(Image* img, u32 symidx, u64* out, char* err, size_t errlen)
     return false;
   }
   const char* name = img->strtab + s.st_name;
-  void* h = img->resolver ? img->resolver(name, img->user) : nullptr;
+  void* h = nullptr;
+  if (std::strcmp(name, "__cxa_atexit") == 0)
+    h = reinterpret_cast<void*>(&module_atexit);
+  else if (std::strcmp(name, "__cxa_finalize") == 0)
+    h = reinterpret_cast<void*>(&module_finalize);
+  else if (std::strcmp(name, "__cxa_thread_atexit") == 0 ||
+           std::strcmp(name, "__cxa_thread_atexit_impl") == 0 ||
+           std::strcmp(name, "atexit") == 0)
+  {
+    std::snprintf(err, errlen, "unsupported unload-unsafe destructor registration: %s", name);
+    return false;
+  }
+  else
+    h = img->resolver ? img->resolver(name, img->user) : nullptr;
   if (h)
   {
     *out = reinterpret_cast<u64>(h);
@@ -154,7 +286,19 @@ bool apply_rela(Image* img, const Rela* r, size_t n, char* err, size_t errlen)
       {
         u64 v = 0;
         if (!resolve(img, sym, &v, err, errlen))
+        {
+          const char* name = "<invalid-symbol-index>";
+          if (img->symtab && sym < img->symcount)
+          {
+            const Sym& unresolved = img->symtab[sym];
+            name = unresolved.st_name < img->strsz ? img->strtab + unresolved.st_name
+                                                   : "<invalid-name-offset>";
+          }
+          report(img,
+                 "phase=reloc-unresolved type=%u offset=0x%llx symbol=%s symbol-index=%u error=%s",
+                 type, static_cast<unsigned long long>(r[i].r_offset), name, sym, err);
           return false;
+        }
         *where = v + static_cast<u64>(r[i].r_addend);
         img->st.glob_dat++;
         break;
@@ -163,7 +307,19 @@ bool apply_rela(Image* img, const Rela* r, size_t n, char* err, size_t errlen)
       {
         u64 v = 0;
         if (!resolve(img, sym, &v, err, errlen))
+        {
+          const char* name = "<invalid-symbol-index>";
+          if (img->symtab && sym < img->symcount)
+          {
+            const Sym& unresolved = img->symtab[sym];
+            name = unresolved.st_name < img->strsz ? img->strtab + unresolved.st_name
+                                                   : "<invalid-name-offset>";
+          }
+          report(img,
+                 "phase=reloc-unresolved type=%u offset=0x%llx symbol=%s symbol-index=%u error=%s",
+                 type, static_cast<unsigned long long>(r[i].r_offset), name, sym, err);
           return false;
+        }
         *where = v;
         img->st.jump_slot++;
         break;
@@ -183,9 +339,14 @@ bool apply_rela(Image* img, const Rela* r, size_t n, char* err, size_t errlen)
 } // namespace
 
 Image* load(const void* image, size_t image_len, HostResolver resolver, void* user,
-            char* err, size_t errlen)
+            char* err, size_t errlen, Diagnostic diagnostic, void* diagnostic_user)
 {
-  auto fail = [&](const char* m) -> Image* { std::snprintf(err, errlen, "%s", m); return nullptr; };
+  report(diagnostic, diagnostic_user, "phase=load-enter image=%p bytes=%zu", image, image_len);
+  auto fail = [&](const char* m) -> Image* {
+    std::snprintf(err, errlen, "%s", m);
+    report(diagnostic, diagnostic_user, "phase=load-reject reason=%s", m);
+    return nullptr;
+  };
   if (image_len < sizeof(Ehdr))
     return fail("image too small");
   const auto* e = static_cast<const Ehdr*>(image);
@@ -206,10 +367,12 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
   const Phdr* dynph = nullptr;
   bool has_tls = false;
   u64 eh_frame_hdr_v = 0; // PT_GNU_EH_FRAME vaddr; resolved to a pointer after base is known
+  u16 load_segments = 0;
   for (u16 i = 0; i < e->e_phnum; ++i)
   {
     if (ph[i].p_type == PT_LOAD)
     {
+      ++load_segments;
       min_v = ph[i].p_vaddr < min_v ? ph[i].p_vaddr : min_v;
       u64 end = ph[i].p_vaddr + ph[i].p_memsz;
       max_v = end > max_v ? end : max_v;
@@ -226,9 +389,18 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
 
   const u64 base_v = trunc_page(min_v, pg);
   const size_t span = round_page(max_v, pg) - base_v;
+  report(diagnostic, diagnostic_user,
+         "phase=map-plan page=%zu load-segments=%u vaddr=0x%llx..0x%llx span=0x%zx tls=%s eh-frame-hdr=0x%llx",
+         pg, load_segments, static_cast<unsigned long long>(min_v),
+         static_cast<unsigned long long>(max_v), span, has_tls ? "yes" : "no",
+         static_cast<unsigned long long>(eh_frame_hdr_v));
   void* m = mmap(nullptr, span, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (m == MAP_FAILED)
+  {
+    report(diagnostic, diagnostic_user, "phase=map-reserve result=failed span=0x%zx errno=%d (%s)",
+           span, errno, std::strerror(errno));
     return fail("reservation mmap failed");
+  }
 
   auto* img = new Image();
   img->map = static_cast<u8*>(m);
@@ -237,9 +409,14 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
   if (eh_frame_hdr_v) img->eh_frame_hdr = img->base + eh_frame_hdr_v;
   img->resolver = resolver;
   img->user = user;
+  img->diagnostic = diagnostic;
+  img->diagnostic_user = diagnostic_user;
   (void)has_tls;
+  report(img, "phase=map-reserved map=%p bias=%p span=0x%zx", img->map, img->base, img->span);
 
   // Copy each PT_LOAD in, RW (route B: write first, flip to X later).
+  constexpr u16 kMaxLoggedSegments = 16;
+  u16 logged_rw_segments = 0;
   for (u16 i = 0; i < e->e_phnum; ++i)
   {
     if (ph[i].p_type != PT_LOAD)
@@ -248,25 +425,51 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
     u8* segpg = reinterpret_cast<u8*>(trunc_page(reinterpret_cast<u64>(seg), pg));
     size_t seglen = round_page(reinterpret_cast<u64>(seg) + ph[i].p_memsz, pg)
                     - reinterpret_cast<u64>(segpg);
+    if (logged_rw_segments < kMaxLoggedSegments)
+      report(img,
+             "phase=segment-rw-enter index=%u vaddr=0x%llx filesz=0x%llx memsz=0x%llx addr=%p pages=%p+0x%zx flags=0x%x",
+             i, static_cast<unsigned long long>(ph[i].p_vaddr),
+             static_cast<unsigned long long>(ph[i].p_filesz),
+             static_cast<unsigned long long>(ph[i].p_memsz), seg, segpg, seglen, ph[i].p_flags);
     if (mprotect(segpg, seglen, PROT_READ | PROT_WRITE) != 0)
     {
+      if (logged_rw_segments < kMaxLoggedSegments)
+        report(img, "phase=segment-rw-exit index=%u result=failed errno=%d (%s)", i, errno,
+               std::strerror(errno));
       std::snprintf(err, errlen, "mprotect RW failed: %s", std::strerror(errno));
       munmap(m, span);
       delete img;
       return nullptr;
     }
+    if (logged_rw_segments < kMaxLoggedSegments)
+    {
+      report(img, "phase=segment-rw-exit index=%u result=ok", i);
+      ++logged_rw_segments;
+    }
     std::memcpy(seg, static_cast<const u8*>(image) + ph[i].p_offset, ph[i].p_filesz);
     if (ph[i].p_memsz > ph[i].p_filesz) // .bss
       std::memset(seg + ph[i].p_filesz, 0, ph[i].p_memsz - ph[i].p_filesz);
   }
+  if (load_segments > kMaxLoggedSegments)
+    report(img, "phase=segment-rw-summary total=%u unlogged=%u", load_segments,
+           load_segments - kMaxLoggedSegments);
 
   // Parse PT_DYNAMIC.
   const auto* dyn = reinterpret_cast<const Dyn*>(img->base + dynph->p_vaddr);
   const Rela* rela = nullptr; size_t relasz = 0;
   const Rela* jmprel = nullptr; size_t pltrelsz = 0;
   const u32* sysv_hash = nullptr; const u32* gnu_hash = nullptr;
+  size_t dynamic_count = 0;
+  size_t needed_count = 0;
+  bool text_relocations = false;
+  bool invalid_fini_size = false;
   for (const Dyn* d = dyn; d->d_tag != DT_NULL; ++d)
   {
+    ++dynamic_count;
+    if (d->d_tag == 1) // DT_NEEDED
+      ++needed_count;
+    else if (d->d_tag == 22) // DT_TEXTREL
+      text_relocations = true;
     switch (d->d_tag)
     {
       case DT_SYMTAB: img->symtab = reinterpret_cast<const Sym*>(img->base + d->d_val); break;
@@ -281,6 +484,14 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
       case DT_INIT:   img->init = reinterpret_cast<void(*)()>(img->base + d->d_val); break;
       case DT_INIT_ARRAY: img->init_array = reinterpret_cast<void(**)()>(img->base + d->d_val); break;
       case DT_INIT_ARRAYSZ: img->init_arrayn = d->d_val / sizeof(void*); break;
+      case DT_FINI:
+        img->fini = d->d_val ? reinterpret_cast<void(*)()>(img->base + d->d_val) : nullptr;
+        break;
+      case DT_FINI_ARRAY: img->fini_array = reinterpret_cast<void(**)()>(img->base + d->d_val); break;
+      case DT_FINI_ARRAYSZ:
+        invalid_fini_size = d->d_val % sizeof(void*) != 0;
+        img->fini_arrayn = d->d_val / sizeof(void*);
+        break;
       default: break;
     }
   }
@@ -316,6 +527,16 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
     img->symcount = sysv_hash[1]; // nchain
   else if (gnu_hash)
     img->symcount = gnu_hash_symcount(gnu_hash);
+  report(img,
+         "phase=dynamic tags=%zu symtab=%p strtab=%p strsz=%zu symcount=%u hash=%s rela=%zu jmprel=%zu init=%p init-array=%zu needed=%zu textrel=%s",
+         dynamic_count, static_cast<const void*>(img->symtab),
+         static_cast<const void*>(img->strtab), img->strsz, img->symcount,
+         sysv_hash ? "sysv" : (gnu_hash ? "gnu" : "none"), relasz / sizeof(Rela),
+         pltrelsz / sizeof(Rela), reinterpret_cast<void*>(img->init), img->init_arrayn,
+         needed_count, text_relocations ? "yes" : "no");
+  if (needed_count || text_relocations)
+    report(img, "phase=dynamic-unsupported needed=%zu textrel=%s", needed_count,
+           text_relocations ? "yes" : "no");
   // symcount only needed by symbol(); relocations index directly.
 
   // Apply relocations.
@@ -339,8 +560,46 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
   {
     munmap(m, span); delete img; return nullptr;
   }
+  auto valid_array = [&](void (**array)(), size_t count) {
+    if (!count)
+      return true;
+    const uintptr_t start = reinterpret_cast<uintptr_t>(array);
+    const uintptr_t bias = reinterpret_cast<uintptr_t>(img->base);
+    for (u16 i = 0; i < e->e_phnum; ++i)
+      if (ph[i].p_type == PT_LOAD && (ph[i].p_flags & PF_R) &&
+          start >= bias + ph[i].p_vaddr && start - bias - ph[i].p_vaddr < ph[i].p_memsz &&
+          count <= (ph[i].p_memsz - (start - bias - ph[i].p_vaddr)) / sizeof(void*))
+        return true;
+    return false;
+  };
+  auto executable = [&](void (*function)()) {
+    if (!function || reinterpret_cast<uintptr_t>(function) == ~uintptr_t{0})
+      return true;
+    const uintptr_t address = reinterpret_cast<uintptr_t>(function);
+    const uintptr_t bias = reinterpret_cast<uintptr_t>(img->base);
+    for (u16 i = 0; i < e->e_phnum; ++i)
+      if (ph[i].p_type == PT_LOAD && (ph[i].p_flags & PF_X) &&
+          address >= bias + ph[i].p_vaddr &&
+          address - bias - ph[i].p_vaddr < ph[i].p_memsz)
+        return true;
+    return false;
+  };
+  bool valid_finalizers = !invalid_fini_size &&
+                          reinterpret_cast<uintptr_t>(img->fini) != ~uintptr_t{0} &&
+                          valid_array(img->fini_array, img->fini_arrayn) &&
+                          executable(img->fini);
+  if (valid_finalizers)
+    for (size_t i = 0; i < img->fini_arrayn; ++i)
+      valid_finalizers = valid_finalizers && executable(img->fini_array[i]);
+  if (!valid_finalizers)
+  {
+    munmap(m, span); delete img; return fail("invalid finalizer array or function");
+  }
+  report(img, "phase=relocations relative=%u glob-dat-or-64=%u jump-slot=%u tls=%u other=%u",
+         img->st.relative, img->st.glob_dat, img->st.jump_slot, img->st.tls, img->st.other);
 
   // Final protections per p_flags (route B flip: code becomes R+X now).
+  u16 logged_final_segments = 0;
   for (u16 i = 0; i < e->e_phnum; ++i)
   {
     if (ph[i].p_type != PT_LOAD)
@@ -352,23 +611,51 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
     u8* segpg = reinterpret_cast<u8*>(trunc_page(reinterpret_cast<u64>(seg), pg));
     size_t seglen = round_page(reinterpret_cast<u64>(seg) + ph[i].p_memsz, pg)
                     - reinterpret_cast<u64>(segpg);
+    if (logged_final_segments < kMaxLoggedSegments)
+      report(img,
+             "phase=segment-final-protection-enter index=%u addr=%p pages=%p+0x%zx prot=%c%c%c",
+             i, seg, segpg, seglen, (prot & PROT_READ) ? 'r' : '-',
+             (prot & PROT_WRITE) ? 'w' : '-', (prot & PROT_EXEC) ? 'x' : '-');
     if (mprotect(segpg, seglen, prot) != 0)
     {
+      if (logged_final_segments < kMaxLoggedSegments)
+        report(img, "phase=segment-final-protection-exit index=%u result=failed errno=%d (%s)", i,
+               errno, std::strerror(errno));
       std::snprintf(err, errlen, "final mprotect failed: %s", std::strerror(errno));
       munmap(m, span); delete img; return nullptr;
     }
+    if (logged_final_segments < kMaxLoggedSegments)
+    {
+      report(img, "phase=segment-final-protection-exit index=%u result=ok", i);
+      ++logged_final_segments;
+    }
+  }
+  if (load_segments > kMaxLoggedSegments)
+    report(img, "phase=segment-final-protection-summary total=%u unlogged=%u", load_segments,
+           load_segments - kMaxLoggedSegments);
+  report(img, "phase=load-exit result=ok bias=%p map=%p span=0x%zx", img->base, img->map,
+         img->span);
+  {
+    std::lock_guard<std::mutex> lock(g_images_mutex);
+    img->next = g_images;
+    g_images = img;
   }
   return img;
 }
 
-// libgcc's unwinder keeps a registry of .eh_frame sections. A JIT-mapped
-// object is invisible to it until registered, so a C++ exception thrown inside
-// a binary add-on would otherwise reach std::terminate instead of its own
-// catch. __register_frame takes the .eh_frame; we locate it from the
-// PT_GNU_EH_FRAME header (.eh_frame_hdr), whose 4-byte prologue is followed by
-// an encoded pointer to .eh_frame.
+// A mapped add-on is invisible to the unwinder until registered. SDK libunwind's
+// __register_frame accepts a single FDE, unlike libgcc's whole-section API.
+#if defined(TARGET_PS5)
+extern "C" void __unw_add_dynamic_eh_frame_section(const void*) __attribute__((weak));
+extern "C" void __unw_remove_dynamic_eh_frame_section(const void*) __attribute__((weak));
+#define PS5ELF_REGISTER_FRAME __unw_add_dynamic_eh_frame_section
+#define PS5ELF_DEREGISTER_FRAME __unw_remove_dynamic_eh_frame_section
+#else
 extern "C" void __register_frame(const void*) __attribute__((weak));
 extern "C" void __deregister_frame(const void*) __attribute__((weak));
+#define PS5ELF_REGISTER_FRAME __register_frame
+#define PS5ELF_DEREGISTER_FRAME __deregister_frame
+#endif
 
 namespace
 {
@@ -386,9 +673,9 @@ u8* eh_frame_from_hdr(u8* hdr)
   const u8* vp = p;
   switch (fmt)
   {
-    case 0x03: { int32_t v; std::memcpy(&v, vp, 4); val = v; break; }           // sdata4
-    case 0x0b: { uint32_t v; std::memcpy(&v, vp, 4); val = (int32_t)v; break; } // udata4 (treat signed)
-    case 0x01: { uintptr_t v; std::memcpy(&v, vp, sizeof v); val = (long long)v; break; } // uleb-ish/abs ptr
+    case 0x03: { uint32_t v; std::memcpy(&v, vp, 4); val = v; break; } // udata4
+    case 0x0b: { int32_t v; std::memcpy(&v, vp, 4); val = v; break; } // sdata4
+    case 0x00: { uintptr_t v; std::memcpy(&v, vp, sizeof v); val = (long long)v; break; } // absptr
     default: return nullptr;
   }
   if (app == 0x10) // DW_EH_PE_pcrel: relative to the location of eh_frame_ptr
@@ -401,18 +688,56 @@ u8* eh_frame_from_hdr(u8* hdr)
 
 void run_init(Image* img)
 {
-  if (!img) return;
-  if (img->eh_frame_hdr && __register_frame && !img->eh_registered)
+  if (!img || img->initialized || img->unloading) return;
+  img->initialized = true;
+  report(img, "phase=unwind-enter eh-frame-hdr=%p register-frame=%s",
+         static_cast<void*>(img->eh_frame_hdr), PS5ELF_REGISTER_FRAME ? "available" : "absent");
+  if (img->eh_frame_hdr && PS5ELF_REGISTER_FRAME && PS5ELF_DEREGISTER_FRAME &&
+      !img->eh_registered)
   {
     if (u8* eh = eh_frame_from_hdr(img->eh_frame_hdr))
     {
-      __register_frame(eh);
+      report(img, "phase=unwind-register-enter eh-frame=%p", static_cast<void*>(eh));
+      PS5ELF_REGISTER_FRAME(eh);
       img->eh_registered = true;
+      report(img, "phase=unwind-register-exit result=called eh-frame=%p", static_cast<void*>(eh));
     }
+    else
+      report(img, "phase=unwind-register-skip reason=unsupported-eh-frame-encoding");
   }
-  if (img->init) img->init();
+  else if (!img->eh_frame_hdr)
+    report(img, "phase=unwind-register-skip reason=no-PT_GNU_EH_FRAME");
+  else if (!PS5ELF_REGISTER_FRAME || !PS5ELF_DEREGISTER_FRAME)
+    report(img, "phase=unwind-register-skip reason=registration-API-unavailable");
+  report(img, "phase=unwind-exit registration-call=%s",
+         img->eh_registered ? "completed" : "not-performed");
+
+  constexpr size_t kMaxLoggedConstructors = 32;
+  if (img->init)
+  {
+    report(img, "phase=ctor-entry kind=DT_INIT index=0 address=%p",
+           reinterpret_cast<void*>(img->init));
+    img->init();
+    report(img, "phase=ctor-exit kind=DT_INIT index=0 address=%p",
+           reinterpret_cast<void*>(img->init));
+  }
   for (size_t i = 0; i < img->init_arrayn; ++i)
-    if (img->init_array[i]) img->init_array[i]();
+  {
+    if (!img->init_array[i])
+      continue;
+    const bool log_constructor = i < kMaxLoggedConstructors;
+    if (log_constructor)
+      report(img, "phase=ctor-entry kind=DT_INIT_ARRAY index=%zu address=%p", i,
+             reinterpret_cast<void*>(img->init_array[i]));
+    img->init_array[i]();
+    if (log_constructor)
+      report(img, "phase=ctor-exit kind=DT_INIT_ARRAY index=%zu address=%p", i,
+             reinterpret_cast<void*>(img->init_array[i]));
+  }
+  if (img->init_arrayn > kMaxLoggedConstructors)
+    report(img, "phase=ctor-summary init-array=%zu only-first=%zu-logged", img->init_arrayn,
+           kMaxLoggedConstructors);
+  report(img, "phase=init-exit result=returned");
 }
 
 void* symbol(Image* img, const char* name)
@@ -431,19 +756,61 @@ Stats stats(const Image* img) { return img ? img->st : Stats{}; }
 
 static void deregister_eh(Image* img)
 {
-  if (img && img->eh_registered && __deregister_frame)
+  if (!img || !img->eh_registered)
+    return;
+  if (!PS5ELF_DEREGISTER_FRAME)
   {
-    if (u8* eh = eh_frame_from_hdr(img->eh_frame_hdr))
-      __deregister_frame(eh);
-    img->eh_registered = false;
+    report(img, "phase=unwind-deregister-skip reason=removal-API-unavailable");
+    return;
   }
+  if (u8* eh = eh_frame_from_hdr(img->eh_frame_hdr))
+  {
+    report(img, "phase=unwind-deregister-enter eh-frame=%p", static_cast<void*>(eh));
+    PS5ELF_DEREGISTER_FRAME(eh);
+    img->eh_registered = false;
+    report(img, "phase=unwind-deregister-exit result=called");
+  }
+  else
+    report(img, "phase=unwind-deregister-skip reason=eh-frame-pointer-unavailable");
 }
 
 void unload(Image* img)
 {
+  if (!img || img->unloading)
+    return;
+  img->unloading = true;
+  if (img)
+    report(img, "phase=unload-enter bias=%p map=%p span=0x%zx unwind-registration-call=%s", img->base,
+           img->map, img->span, img->eh_registered ? "completed" : "not-performed");
+  if (img->initialized)
+  {
+    report(img, "phase=finalizers-enter fini-array=%zu", img->fini_arrayn);
+    // Honor CRT finalizer order. A CRT may call __cxa_finalize at its own
+    // position in the array; drain any registrations left by import-only DSOs.
+    for (size_t i = img->fini_arrayn; i != 0; --i)
+      if (img->fini_array[i - 1] &&
+          reinterpret_cast<uintptr_t>(img->fini_array[i - 1]) != ~uintptr_t{0})
+        img->fini_array[i - 1]();
+    if (img->fini)
+      img->fini();
+    finalize(img, nullptr, true);
+    report(img, "phase=finalizers-exit result=returned");
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_images_mutex);
+    Image** link = &g_images;
+    while (*link && *link != img)
+      link = &(*link)->next;
+    if (*link)
+      *link = img->next;
+  }
   deregister_eh(img);
-  if (!img) return;
-  if (img->map) munmap(img->map, img->span);
+  if (img->map)
+  {
+    const int result = munmap(img->map, img->span);
+    report(img, "phase=unmap-exit result=%s errno=%d address=%p span=0x%zx",
+           result == 0 ? "ok" : "failed", result == 0 ? 0 : errno, img->map, img->span);
+  }
   delete img;
 }
 

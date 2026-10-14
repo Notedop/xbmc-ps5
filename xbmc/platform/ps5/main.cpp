@@ -757,11 +757,11 @@ int main(int argc, char* argv[])
   static char debugFlag[] = "--debug";
 
   // Switches that stay in place (unlike reset/uninstall) are read here, once,
-  // and each found switch sets an environment variable that the rest of the
-  // port (the hardware decoder) reads.
+  // and each found switch sets an environment variable consumed by its feature.
   const std::vector<std::pair<std::string, const char*>> switches = {
       {app0 + "/kodi-debug", "KODI_PS5_DEBUG"},
       {app0 + "/kodi-video-debug", "KODI_PS5_VIDEO_DEBUG"},
+      {app0 + "/kodi-addon-debug", "KODI_PS5_ADDON_DEBUG"},
       {app0 + "/kodi-software-video", "KODI_PS5_SOFTWARE_VIDEO"},
   };
   for (const auto& sw : switches)
@@ -777,6 +777,9 @@ int main(int argc, char* argv[])
     args.push_back(debugFlag);
     Klog("[kodi-ps5] kodi-debug: debug logging on\n");
   }
+  const char* addonDebug = getenv("KODI_PS5_ADDON_DEBUG");
+  if (addonDebug && addonDebug[0] != '\0' && std::strcmp(addonDebug, "0") != 0)
+    Klog("[kodi-ps5] binary add-on diagnostics enabled\n");
 
   CAppParamParser appParamParser;
   appParamParser.Parse(args.data(), static_cast<int>(args.size()));

@@ -28,6 +28,9 @@
 #include "windowing/WinSystem.h"
 
 #include <cstdlib>
+#if defined(TARGET_PS5)
+#include <cstring>
+#endif
 #include <iomanip>
 #include <iterator>
 #include <memory>
@@ -246,11 +249,25 @@ void CVideoPlayerVideo::OpenStream(CDVDStreamInfo& hint, std::unique_ptr<CDVDVid
 
 void CVideoPlayerVideo::CloseStream(bool bWaitForBuffers)
 {
+#if defined(TARGET_PS5)
+  const char* enabled = std::getenv("KODI_PS5_ADDON_DEBUG");
+  const bool debug = enabled && enabled[0] != '\0' && std::strcmp(enabled, "0") != 0;
+  if (debug)
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=video-close-enter wait={}", bWaitForBuffers);
+#endif
   // wait until buffers are empty
   if (bWaitForBuffers && m_speed > 0)
   {
+#if defined(TARGET_PS5)
+    if (debug)
+      CLog::Log(LOGINFO, "PS5AddonDebug: phase=video-drain-enter");
+#endif
     SendMessage(std::make_shared<CDVDMsg>(CDVDMsg::VIDEO_DRAIN), 0);
     m_messageQueue.WaitUntilEmpty();
+#if defined(TARGET_PS5)
+    if (debug)
+      CLog::Log(LOGINFO, "PS5AddonDebug: phase=video-drain-exit");
+#endif
   }
 
   m_messageQueue.Abort();

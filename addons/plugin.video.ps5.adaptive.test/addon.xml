@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<addon id="plugin.video.ps5.adaptive.test" name="PS5 Adaptive Playback Test" version="0.0.1" provider-name="kodi-ps5">
+  <requires>
+    <import addon="xbmc.python" version="3.0.0"/>
+    <import addon="inputstream.adaptive" version="22.3.23"/>
+  </requires>
+  <extension point="xbmc.python.pluginsource" library="default.py">
+    <provides>video</provides>
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <platform>all</platform>
+    <summary lang="en_GB">Direct non-DRM DASH playback through InputStream Adaptive</summary>
+    <description lang="en_GB">Opens a public Big Buck Bunny DASH sample without YouTube, API credentials or a local HTTP server. Diagnostic test only.</description>
+    <license>GPL-2.0-or-later</license>
+  </extension>
+</addon>

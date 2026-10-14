@@ -21,13 +21,15 @@ namespace ps5elf
 // Kodi). Returns nullptr if unknown; the loader treats that as an error unless
 // the reference is weak. `user` is passed through from elf_load.
 using HostResolver = void* (*)(const char* name, void* user);
+using Diagnostic = void (*)(void* user, const char* message);
 
 struct Image; // opaque
 
 // Load a shared object from an in-memory image. Returns nullptr on failure and
 // writes a reason into errbuf. Does not run constructors (call run_init).
 Image* load(const void* image, size_t image_len, HostResolver resolver, void* user,
-            char* errbuf, size_t errlen);
+            char* errbuf, size_t errlen, Diagnostic diagnostic = nullptr,
+            void* diagnostic_user = nullptr);
 
 // Run DT_INIT then DT_INIT_ARRAY (C++ static constructors). Call once, after
 // load, before using the object.
@@ -47,6 +49,10 @@ struct Stats
 };
 Stats stats(const Image* img);
 
+// Caller must first destroy Kodi instances and quiesce all add-on threads and
+// callbacks. Runs DT_FINI_ARRAY in reverse order, DT_FINI and remaining
+// module-owned __cxa_atexit registrations while unwind data is still live.
+// atexit and thread-local destructor imports are rejected until safely scoped.
 void unload(Image* img);
 
 } // namespace ps5elf

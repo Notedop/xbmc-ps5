@@ -1,99 +1,196 @@
 /*
  * Stage-2 binary add-on for the PS5 in-process ELF loader.
- *
- * It is NOT linked against Kodi: like every Kodi binary add-on it exports the
- * C entry points the add-on ABI defines (ADDON_Create / ADDON_Destroy), and it
- * reaches Kodi only through the function table Kodi hands it at create time
- * (the add-on dev-kit's "interface" pointer). That keeps the symbol surface
- * tiny - exactly what the loader's export table must satisfy - and is why the
- * toolchain probe showed only libc/libc++ imports, nothing Kodi-specific.
- *
- * What it proves on the console, logged through the interface's log callback:
- *   1. the loader mapped and relocated this .so and ran its constructor,
- *   2. a call from Kodi into the .so works (ADDON_Create),
- *   3. a call from the .so back into Kodi works (the log callback),
- *   4. a C++ exception thrown and caught inside the .so works (needs the
- *      loader's .eh_frame registration),
- *   5. heap and a vtable work (operator new, virtual dispatch).
+ * Uses this checkout's dev-kit ABI, with no direct Kodi or graphics imports.
  */
-#include <exception>
-#include <stdexcept>
-#include <string>
+#include <kodi/addon-instance/Screensaver.h>
 
-// Minimal slice of the add-on ABI we need: the create-time context carries a
-// logger. The real kodi-dev-kit header defines far more; we declare only what
-// this test calls, by the same layout, so we need not compile against it.
-extern "C"
-{
-  typedef void (*KodiLog)(void* kodiBase, int level, const char* msg);
-  struct AddonToKodiFuncTable_Addon // prefix matches the dev-kit; only addon_log used
-  {
-    void* kodiBase;
-    void* (*free_string)(void*, char*);
-    void* (*free_string_array)(void*, char**, int);
-    void* (*get_addon_path)(void*);
-    void* (*get_lib_path)(void*);
-    KodiLog addon_log;
-  };
-  struct AddonGlobalInterface
-  {
-    const char* libPath;
-    const char* dataPath;
-    AddonToKodiFuncTable_Addon* toKodi;
-    void* toAddon;
-  };
-}
+#include <pthread.h>
+#include <system_error>
+#include <thread>
+
+#ifndef PS5_TEST_BUILD_ID
+#error Build this probe with tools/ps5/build-test-addon.sh
+#endif
 
 namespace
 {
-int g_ctorRan = 0;
-struct Ctor { Ctor() { g_ctorRan = 0xC0FFEE; } };
-Ctor g_ctor;
+volatile int g_ctorRan = 0;
+volatile int g_deletions = 0;
 
-struct Base { virtual int tag() const { return 1; } virtual ~Base() = default; };
-struct Derived : Base { int tag() const override { return 0x5151; } };
-
-void Log(AddonGlobalInterface* g, const char* msg)
+struct ConstructorProbe
 {
-  if (g && g->toKodi && g->toKodi->addon_log)
-    g->toKodi->addon_log(g->toKodi->kodiBase, 1 /*INFO*/, msg); // call back into Kodi
+  ConstructorProbe() { g_ctorRan = 0xC0FFEE; }
+} g_constructorProbe;
+
+struct Base
+{
+  virtual int Tag() const = 0;
+  virtual ~Base() { ++g_deletions; }
+};
+
+struct Derived : Base
+{
+  int Tag() const override { return 0x5151; }
+};
+
+// Keep allocation, virtual dispatch and throw/catch real even in optimized builds.
+__attribute__((noinline)) Base* Allocate() { return new Derived; }
+__attribute__((noinline)) int Dispatch(const Base* object) { return object->Tag(); }
+__attribute__((noinline)) void Release(Base* object) { delete object; }
+__attribute__((noinline)) void Throw() { throw 0x5151; }
+
+bool Check(const char* name, bool passed)
+{
+  kodi::Log(passed ? ADDON_LOG_INFO : ADDON_LOG_ERROR, "[test.binary.ps5] %s: %s",
+            name, passed ? "PASS" : "FAIL");
+  return passed;
 }
+
+struct ThreadProbe
+{
+  pthread_key_t key;
+  int error = 0;
+  bool values = false;
+  bool destroyed = false;
+};
+
+void DestroyThreadValue(void* value)
+{
+  static_cast<ThreadProbe*>(value)->destroyed = true;
+}
+
+bool CheckThread()
+{
+  ThreadProbe probe{};
+  int error = pthread_key_create(&probe.key, DestroyThreadValue);
+  if (error != 0)
+  {
+    kodi::Log(ADDON_LOG_ERROR, "[test.binary.ps5] pthread_key_create error=%d", error);
+    return false;
+  }
+  bool joined = false;
+  try
+  {
+    std::thread worker([&probe]() {
+      probe.error = pthread_setspecific(probe.key, &probe);
+      if (probe.error != 0)
+        return;
+      probe.values = pthread_getspecific(probe.key) == &probe;
+      probe.error = pthread_setspecific(probe.key, nullptr);
+      if (probe.error != 0)
+        return;
+      probe.values = probe.values && pthread_getspecific(probe.key) == nullptr;
+      probe.error = pthread_setspecific(probe.key, &probe);
+    });
+    worker.join();
+    joined = true;
+  }
+  catch (const std::system_error& exception)
+  {
+    kodi::Log(ADDON_LOG_ERROR, "[test.binary.ps5] std::thread error: %s", exception.what());
+  }
+  error = pthread_key_delete(probe.key);
+  if (probe.error != 0 || error != 0)
+    kodi::Log(ADDON_LOG_ERROR, "[test.binary.ps5] TLS set error=%d delete error=%d",
+              probe.error, error);
+  return joined && probe.error == 0 && error == 0 && probe.values && probe.destroyed;
+}
+
+class Screensaver : public kodi::addon::CInstanceScreensaver
+{
+public:
+  explicit Screensaver(const kodi::addon::IInstanceInfo& instance) : CInstanceScreensaver(instance)
+  {
+    kodi::Log(ADDON_LOG_INFO, "[test.binary.ps5] instance created; properties=%dx%d",
+              Width(), Height());
+  }
+
+  ~Screensaver() override
+  {
+    kodi::Log(ADDON_LOG_INFO, "[test.binary.ps5] instance destroyed");
+  }
+
+  bool Start() override
+  {
+    kodi::Log(ADDON_LOG_INFO, "[test.binary.ps5] Start enter; build=%s", PS5_TEST_BUILD_ID);
+    m_rendered = false;
+    m_passed = Check("static constructor", g_ctorRan == 0xC0FFEE);
+    m_passed = Check("Kodi properties callback", Width() > 0 && Height() > 0) && m_passed;
+
+    const int before = g_deletions;
+    Base* object = Allocate();
+    const int tag = Dispatch(object);
+    Release(object);
+    m_passed = Check("heap and virtual dispatch", tag == 0x5151 && g_deletions == before + 1) &&
+               m_passed;
+
+    kodi::Log(ADDON_LOG_INFO, "[test.binary.ps5] throw/catch enter");
+    bool caught = false;
+    try
+    {
+      Throw();
+    }
+    catch (int value)
+    {
+      caught = value == 0x5151;
+    }
+    m_passed = Check("C++ throw/catch", caught) && m_passed;
+    kodi::Log(ADDON_LOG_INFO, "[test.binary.ps5] thread/TSD enter");
+    m_passed = Check("std::thread/TSD values and exit destructor", CheckThread()) && m_passed;
+    kodi::Log(m_passed ? ADDON_LOG_INFO : ADDON_LOG_ERROR,
+              "[test.binary.ps5] Start exit; success=%d", m_passed);
+    return m_passed;
+  }
+
+  void Render() override
+  {
+    if (!m_rendered)
+    {
+      m_rendered = true;
+      kodi::Log(ADDON_LOG_INFO, "[test.binary.ps5] first Render");
+      if (m_passed)
+        kodi::Log(ADDON_LOG_INFO, "[test.binary.ps5] STAGE 2 RUNTIME PASS; build=%s",
+                  PS5_TEST_BUILD_ID);
+    }
+  }
+
+  void Stop() override
+  {
+    kodi::Log(m_passed && m_rendered ? ADDON_LOG_INFO : ADDON_LOG_ERROR,
+              "[test.binary.ps5] Stop; started=%d rendered=%d", m_passed, m_rendered);
+    m_passed = false;
+  }
+
+private:
+  bool m_passed = false;
+  bool m_rendered = false;
+};
+
+class Addon : public kodi::addon::CAddonBase
+{
+public:
+  ADDON_STATUS Create() override
+  {
+    kodi::Log(ADDON_LOG_INFO, "[test.binary.ps5] Create; build=%s", PS5_TEST_BUILD_ID);
+    return Check("static constructor at Create", g_ctorRan == 0xC0FFEE)
+               ? ADDON_STATUS_OK
+               : ADDON_STATUS_PERMANENT_FAILURE;
+  }
+
+  ADDON_STATUS CreateInstance(const kodi::addon::IInstanceInfo& instance,
+                              KODI_ADDON_INSTANCE_HDL& handle) override
+  {
+    if (!instance.IsType(ADDON_INSTANCE_SCREENSAVER))
+    {
+      kodi::Log(ADDON_LOG_ERROR, "[test.binary.ps5] FAIL: unexpected instance type");
+      return ADDON_STATUS_UNKNOWN;
+    }
+    handle = new Screensaver(instance);
+    return ADDON_STATUS_OK;
+  }
+
+  ~Addon() override { kodi::Log(ADDON_LOG_INFO, "[test.binary.ps5] add-on destroyed"); }
+};
 } // namespace
 
-extern "C" int ADDON_Create(void* instance, const char* /*globalApiVersion*/, void* /*unused*/)
-{
-  auto* g = static_cast<AddonGlobalInterface*>(instance);
-  Log(g, "[test.binary.ps5] ADDON_Create: the loader called into the .so");
-  Log(g, g_ctorRan == 0xC0FFEE ? "[test.binary.ps5] global constructor ran"
-                               : "[test.binary.ps5] FAIL: constructor did not run");
-
-  int caught = 0;
-  try { throw std::runtime_error("intentional"); }
-  catch (const std::exception& e) { caught = 1; }
-  Log(g, caught ? "[test.binary.ps5] exception thrown and caught inside the .so (eh_frame OK)"
-                : "[test.binary.ps5] FAIL: exception not caught");
-
-  Base* b = new Derived();            // heap + vtable
-  int t = b->tag();
-  delete b;
-  Log(g, t == 0x5151 ? "[test.binary.ps5] heap + vtable OK"
-                     : "[test.binary.ps5] FAIL: vtable dispatch wrong");
-
-  Log(g, "[test.binary.ps5] STAGE 2 PASS");
-  return 0; // ADDON_STATUS_OK
-}
-
-extern "C" void ADDON_Destroy() {}
-
-// Kodi's binary loader resolves these alongside ADDON_Create (DllAddon.h):
-// ADDON_GetTypeVersion is required, ADDON_GetTypeMinVersion optional. Return
-// the ABI version string Kodi expects for the add-on type; for this loader
-// test the value only has to be non-null and stable.
-extern "C" const char* ADDON_GetTypeVersion(int /*type*/)
-{
-  return "1.0.0";
-}
-extern "C" const char* ADDON_GetTypeMinVersion(int /*type*/)
-{
-  return "1.0.0";
-}
+ADDONCREATOR(Addon)

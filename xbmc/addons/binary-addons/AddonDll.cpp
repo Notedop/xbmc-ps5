@@ -32,9 +32,24 @@
 #endif
 
 #include <algorithm>
+#if defined(TARGET_PS5)
+#include <cstdlib>
+#include <cstring>
+#endif
 #include <utility>
 
 using namespace KODI::MESSAGING;
+
+#if defined(TARGET_PS5)
+namespace
+{
+bool Ps5AddonDebugEnabled()
+{
+  const char* enabled = std::getenv("KODI_PS5_ADDON_DEBUG");
+  return enabled && enabled[0] != '\0' && std::strcmp(enabled, "0") != 0;
+}
+} // namespace
+#endif
 
 namespace ADDON
 {
@@ -150,8 +165,20 @@ bool CAddonDll::LoadDll()
     return true;
 
   std::string strFileName = LibPath();
+#if defined(TARGET_PS5)
+  if (Ps5AddonDebugEnabled())
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=interface-load-enter addon={} library={}", Name(),
+              strFileName);
+#endif
   if (strFileName.empty())
+  {
+#if defined(TARGET_PS5)
+    if (Ps5AddonDebugEnabled())
+      CLog::Log(LOGINFO, "PS5AddonDebug: phase=interface-load-exit addon={} result=empty-path",
+                Name());
+#endif
     return false;
+  }
 
   /* Load the Dll */
   m_pDll = std::make_unique<DllAddon>();
@@ -159,6 +186,11 @@ bool CAddonDll::LoadDll()
   m_pDll->EnableDelayedUnload(false);
   if (!m_pDll->Load())
   {
+#if defined(TARGET_PS5)
+    if (Ps5AddonDebugEnabled())
+      CLog::Log(LOGINFO, "PS5AddonDebug: phase=interface-load-exit addon={} result=failed",
+                Name());
+#endif
     m_pDll.reset();
 
     std::string heading =
@@ -168,6 +200,10 @@ bool CAddonDll::LoadDll()
     return false;
   }
 
+#if defined(TARGET_PS5)
+  if (Ps5AddonDebugEnabled())
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=interface-load-exit addon={} result=ok", Name());
+#endif
   return true;
 }
 
@@ -178,6 +214,11 @@ ADDON_STATUS CAddonDll::Create(KODI_ADDON_INSTANCE_STRUCT* firstKodiInstance)
 
   if (!LoadDll())
   {
+#if defined(TARGET_PS5)
+    if (Ps5AddonDebugEnabled())
+      CLog::Log(LOGINFO, "PS5AddonDebug: phase=addon-create-export-exit addon={} status={} reason=load-failed",
+                Name(), ADDON_STATUS_PERMANENT_FAILURE);
+#endif
     return ADDON_STATUS_PERMANENT_FAILURE;
   }
 
@@ -185,21 +226,57 @@ ADDON_STATUS CAddonDll::Create(KODI_ADDON_INSTANCE_STRUCT* firstKodiInstance)
   for (unsigned int id = ADDON_GLOBAL_MAIN; id <= ADDON_GLOBAL_MAX; ++id)
   {
     if (!CheckAPIVersion(id))
+    {
+#if defined(TARGET_PS5)
+      if (Ps5AddonDebugEnabled())
+        CLog::Log(LOGINFO,
+                  "PS5AddonDebug: phase=addon-create-export-exit addon={} status={} reason=global-api-mismatch type={}",
+                  Name(), ADDON_STATUS_PERMANENT_FAILURE, id);
+#endif
       return ADDON_STATUS_PERMANENT_FAILURE;
+    }
   }
 
   /* Allocate the helper function class to allow crosstalk over
      helper add-on headers */
   if (!Interface_Base::InitInterface(this, m_interface, firstKodiInstance))
+  {
+#if defined(TARGET_PS5)
+    if (Ps5AddonDebugEnabled())
+      CLog::Log(LOGINFO,
+                "PS5AddonDebug: phase=addon-create-export-exit addon={} status={} reason=interface-init-failed",
+                Name(), ADDON_STATUS_PERMANENT_FAILURE);
+#endif
     return ADDON_STATUS_PERMANENT_FAILURE;
+  }
 
   /* Call Create to make connections, initializing data or whatever is
      needed to become the AddOn running */
+#if defined(TARGET_PS5)
+  if (Ps5AddonDebugEnabled())
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=addon-create-export-enter addon={}", Name());
+#endif
   ADDON_STATUS status = m_pDll->Create(&m_interface);
+#if defined(TARGET_PS5)
+  if (Ps5AddonDebugEnabled())
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=addon-create-export-exit addon={} status={}", Name(),
+              status);
+#endif
 
   // "C" ABI related call, if on add-on used.
   if (status == ADDON_STATUS_OK && m_interface.toAddon->create)
+  {
+#if defined(TARGET_PS5)
+    if (Ps5AddonDebugEnabled())
+      CLog::Log(LOGINFO, "PS5AddonDebug: phase=c-addon-create-enter addon={}", Name());
+#endif
     status = m_interface.toAddon->create(m_interface.firstKodiInstance, &m_interface.addonBase);
+#if defined(TARGET_PS5)
+    if (Ps5AddonDebugEnabled())
+      CLog::Log(LOGINFO, "PS5AddonDebug: phase=c-addon-create-exit addon={} status={}", Name(),
+                status);
+#endif
+  }
 
   if (status == ADDON_STATUS_OK)
   {
@@ -229,11 +306,26 @@ ADDON_STATUS CAddonDll::Create(KODI_ADDON_INSTANCE_STRUCT* firstKodiInstance)
 
 void CAddonDll::Destroy()
 {
+#if defined(TARGET_PS5)
+  if (Ps5AddonDebugEnabled())
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=addon-destroy-enter addon={} initialized={}", Name(),
+              m_initialized);
+#endif
   /* Unload library file */
   if (m_pDll)
   {
     if (m_interface.toAddon->destroy)
+    {
+#if defined(TARGET_PS5)
+      if (Ps5AddonDebugEnabled())
+        CLog::Log(LOGINFO, "PS5AddonDebug: phase=c-addon-destroy-enter addon={}", Name());
+#endif
       m_interface.toAddon->destroy(m_interface.addonBase);
+#if defined(TARGET_PS5)
+      if (Ps5AddonDebugEnabled())
+        CLog::Log(LOGINFO, "PS5AddonDebug: phase=c-addon-destroy-exit addon={}", Name());
+#endif
+    }
     m_pDll->Unload();
   }
 
@@ -248,6 +340,10 @@ void CAddonDll::Destroy()
   ResetSettings(ADDON_SETTINGS_ID);
 
   m_initialized = false;
+#if defined(TARGET_PS5)
+  if (Ps5AddonDebugEnabled())
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=addon-destroy-exit addon={} result=returned", Name());
+#endif
 }
 
 ADDON_STATUS CAddonDll::CreateInstance(KODI_ADDON_INSTANCE_STRUCT* instance)
@@ -268,7 +364,17 @@ ADDON_STATUS CAddonDll::CreateInstance(KODI_ADDON_INSTANCE_STRUCT* instance)
   if (!CheckAPIVersion(instance->info->type))
     return ADDON_STATUS_PERMANENT_FAILURE;
 
+#if defined(TARGET_PS5)
+  if (Ps5AddonDebugEnabled())
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=instance-create-enter addon={} type={}", Name(),
+              instance->info->type);
+#endif
   status = m_interface.toAddon->create_instance(m_interface.addonBase, instance);
+#if defined(TARGET_PS5)
+  if (Ps5AddonDebugEnabled())
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=instance-create-exit addon={} type={} status={}",
+              Name(), instance->info->type, status);
+#endif
 
   if (instance->info)
   {
@@ -286,8 +392,18 @@ void CAddonDll::DestroyInstance(const KODI_ADDON_INSTANCE_STRUCT* instance)
   auto it = m_usedInstances.find(instance->info->kodi);
   if (it != m_usedInstances.end())
   {
+#if defined(TARGET_PS5)
+    if (Ps5AddonDebugEnabled())
+      CLog::Log(LOGINFO, "PS5AddonDebug: phase=instance-destroy-enter addon={} type={}", Name(),
+                instance->info->type);
+#endif
     m_interface.toAddon->destroy_instance(m_interface.addonBase, it->second);
     m_usedInstances.erase(it);
+#if defined(TARGET_PS5)
+    if (Ps5AddonDebugEnabled())
+      CLog::Log(LOGINFO, "PS5AddonDebug: phase=instance-destroy-exit addon={} result=returned",
+                Name());
+#endif
   }
 
   if (m_usedInstances.empty())
@@ -525,11 +641,27 @@ bool CAddonDll::CheckAPIVersion(int type)
                                       ? CAddonVersion(m_pDll->GetAddonTypeMinVersion(type))
                                       : addonVersion;
 
+#if defined(TARGET_PS5)
+  if (Ps5AddonDebugEnabled())
+    CLog::Log(LOGINFO,
+              "PS5AddonDebug: phase=api-check addon={} type={} kodi-version={} kodi-min={} addon-version={} addon-min={}",
+              Name(), kodi::addon::GetTypeName(type), kodi::addon::GetTypeVersion(type),
+              kodiMinVersion.asString(), addonVersion.asString(), addonMinVersion.asString());
+#endif
+
   /* Check the global usage from addon
    * if not used from addon, empty version is returned
    */
   if (type <= ADDON_GLOBAL_MAX && addonVersion.empty())
+  {
+#if defined(TARGET_PS5)
+    if (Ps5AddonDebugEnabled())
+      CLog::Log(LOGINFO,
+                "PS5AddonDebug: phase=api-check-result addon={} type={} result=not-used",
+                Name(), kodi::addon::GetTypeName(type));
+#endif
     return true;
+  }
 
   /* If a instance (not global) version becomes checked must be the version
    * present.
@@ -537,6 +669,11 @@ bool CAddonDll::CheckAPIVersion(int type)
   if (kodiMinVersion > addonVersion ||
       addonMinVersion > CAddonVersion(kodi::addon::GetTypeVersion(type)))
   {
+#if defined(TARGET_PS5)
+    if (Ps5AddonDebugEnabled())
+      CLog::Log(LOGINFO, "PS5AddonDebug: phase=api-check-result addon={} type={} result=incompatible",
+                Name(), kodi::addon::GetTypeName(type));
+#endif
     CLog::Log(LOGERROR, "Add-on '{}' is using an incompatible API version for type '{}'. Kodi API min version = '{}/{}', add-on API version '{}/{}'",
       Name(),
       kodi::addon::GetTypeName(type),
@@ -556,6 +693,11 @@ bool CAddonDll::CheckAPIVersion(int type)
     return false;
   }
 
+#if defined(TARGET_PS5)
+  if (Ps5AddonDebugEnabled())
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=api-check-result addon={} type={} result=compatible",
+              Name(), kodi::addon::GetTypeName(type));
+#endif
   return true;
 }
 

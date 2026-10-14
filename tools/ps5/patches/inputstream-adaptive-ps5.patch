@@ -1,0 +1,185 @@
+diff --git a/src/utils/log.h b/src/utils/log.h
+index 46e07b8..4660e83 100644
+--- a/src/utils/log.h
++++ b/src/utils/log.h
+@@ -16,6 +16,8 @@
+ #endif
+ 
+ #include <utility>
++#include <cstdlib>
++#include <cstring>
+ 
+ enum LogLevel
+ {
+@@ -80,6 +82,13 @@ inline void Log(const LogLevel level, const char* format, Args&&... args)
+ #endif
+ }
+ 
++inline void PS5StopPhase(const char* phase, const void* object)
++{
++  const char* enabled = std::getenv("KODI_PS5_ADDON_DEBUG");
++  if (enabled && enabled[0] != '\0' && std::strcmp(enabled, "0") != 0)
++    Log(LOGINFO, "[PS5AdaptiveStop] phase=%s object=%p", phase, object);
++}
++
+ #define LogF(level, format, ...) Log((level), ("%s: " format), __FUNCTION__, ##__VA_ARGS__)
+ 
+ } // namespace LOG
+diff --git a/src/Stream.cpp b/src/Stream.cpp
+index 6977522..03e75c9 100644
+--- a/src/Stream.cpp
++++ b/src/Stream.cpp
+@@ -16,20 +16,31 @@ using namespace SESSION;
+ 
+ void CStream::Disable()
+ {
++  LOG::PS5StopPhase("disable-enter", this);
+   m_adStream.Disable();
+   // Stop method stop the downloads, but not the reader.
+   m_adStream.Stop();
++  LOG::PS5StopPhase("downloads-stopped", this);
+   // The reader is an async thread and may still working to read buffer data,
+   // so wait for it to exit before the AdaptiveStream::Dispose call,
+   // otherwise it will cause data access violation on buffers because still in use
+   if (m_streamReader)
++  {
++    LOG::PS5StopPhase("reader-wait-enter", this);
+     m_streamReader->WaitReadSampleAsyncComplete();
++    LOG::PS5StopPhase("reader-wait-exit", this);
++  }
+ 
++  LOG::PS5StopPhase("dispose-enter", this);
+   m_adStream.Dispose();
++  LOG::PS5StopPhase("dispose-exit", this);
+ 
++  LOG::PS5StopPhase("reader-reset-enter", this);
+   Reset();
++  LOG::PS5StopPhase("reader-reset-exit", this);
+ 
+   m_isEnabled = false;
++  LOG::PS5StopPhase("disable-exit", this);
+ }
+ 
+ void CStream::Reset()
+diff --git a/src/common/AdaptiveStream.cpp b/src/common/AdaptiveStream.cpp
+index aac8b75..42eb086 100644
+--- a/src/common/AdaptiveStream.cpp
++++ b/src/common/AdaptiveStream.cpp
+@@ -346,6 +346,8 @@ void adaptive::AdaptiveStream::worker()
+     if (!thread_data_->IsThreadExit())
+     {
+       std::lock_guard<std::mutex> lckWorker(thread_data_->mutexWorker);
++      if (thread_data_->IsThreadExit())
++        break;
+ 
+       DownloadInfo downloadInfo;
+       if (!PrepareNextDownload(downloadInfo))
+@@ -405,6 +407,7 @@ void adaptive::AdaptiveStream::worker()
+     }
+ 
+   } while (!thread_data_->IsThreadExit());
++  LOG::PS5StopPhase("worker-body-exit", this);
+ }
+ 
+ int adaptive::AdaptiveStream::SecondsSinceUpdate() const
+@@ -1379,12 +1382,15 @@ bool adaptive::AdaptiveStream::GenerateSidxSegments(PLAYLIST::CRepresentation* r
+ 
+ void adaptive::AdaptiveStream::Stop()
+ {
++  LOG::PS5StopPhase("stop-enter", this);
+   if (thread_data_)
+   {
+     // Stop downloads
+     thread_data_->StopDownloads();
+     // Wait that worker exit
++    LOG::PS5StopPhase("worker-mutex-enter", this);
+     std::lock_guard<std::mutex> lckWorker(thread_data_->mutexWorker);
++    LOG::PS5StopPhase("worker-mutex-acquired", this);
+   }
+ 
+   // Disable representation only after stopped the worker
+@@ -1393,6 +1399,7 @@ void adaptive::AdaptiveStream::Stop()
+     current_rep_->SetIsEnabled(false);
+ 
+   m_isWaitingForSegment = false;
++  LOG::PS5StopPhase("stop-exit", this);
+ }
+ 
+ void adaptive::AdaptiveStream::clear()
+@@ -1407,15 +1414,23 @@ void adaptive::AdaptiveStream::clear()
+ 
+ void adaptive::AdaptiveStream::Dispose()
+ {
++  // Publish exit before waking a worker waiting for segments.
++  if (thread_data_)
++    thread_data_->RequestExit();
++
++  LOG::PS5StopPhase("segment-reset-enter", this);
+   m_segBuffers.Reset();
++  LOG::PS5StopPhase("segment-reset-exit", this);
+ 
+   segment_read_pos_ = 0;
+   absolute_position_ = 0;
+ 
+   if (thread_data_)
+   {
++    LOG::PS5StopPhase("thread-delete-enter", this);
+     delete thread_data_;
+     thread_data_ = nullptr;
++    LOG::PS5StopPhase("thread-delete-exit", this);
+   }
+ }
+ 
+diff --git a/src/common/AdaptiveStream.h b/src/common/AdaptiveStream.h
+index 658a72c..272cd7d 100644
+--- a/src/common/AdaptiveStream.h
++++ b/src/common/AdaptiveStream.h
+@@ -12,6 +12,7 @@
+ #include "Segment.h"
+ #include "SegmentBuffer.h"
+ #include "samplereader/SampleReader.h"
++#include "utils/log.h"
+ 
+ #include <atomic>
+ #include <condition_variable>
+@@ -225,13 +226,29 @@ enum class EVENT_TYPE
+ 
+       ~THREADDATA()
+       {
+-        m_isThreadExit = true;
+-        cvState.notify_all();
++        RequestExit();
+ 
+         if (m_downloadThread.joinable())
++        {
++          LOG::PS5StopPhase("worker-join-enter", this);
+           m_downloadThread.join();
++          LOG::PS5StopPhase("worker-join-exit", this);
++        }
+       };
+ 
++      void RequestExit()
++      {
++        LOG::PS5StopPhase("worker-exit-request-enter", this);
++        StopDownloads();
++        {
++          // Share the state-wait mutex so exit cannot race with going to sleep.
++          std::lock_guard<std::mutex> lock(mutexWorker);
++          m_isThreadExit = true;
++        }
++        cvState.notify_all();
++        LOG::PS5StopPhase("worker-exit-notified", this);
++      }
++
+       std::mutex mutexRW; // Mutex for buffer reading/writing
+       std::condition_variable cvRW; // Condition variable for reading/writing in the currently downloading segment buffer
+ 
+@@ -259,7 +276,7 @@ enum class EVENT_TYPE
+ 
+     private:
+       std::thread m_downloadThread;
+-      bool m_isThreadExit{false};
++      std::atomic<bool> m_isThreadExit{false};
+       std::atomic<ThState> m_state = ThState::STOPPED;
+     };
+     THREADDATA* thread_data_{nullptr};

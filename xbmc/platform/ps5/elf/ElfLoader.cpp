@@ -5,9 +5,27 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <memory>
 #include <mutex>
+#include <new>
+#include <pthread.h>
+#include <string>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
+
+namespace ps5elf { struct Image; }
+extern "C" __attribute__((visibility("hidden")))
+void* ps5_addon_dlopen(const char*, int, ps5elf::Image*);
+extern "C" __attribute__((visibility("hidden")))
+void* ps5_addon_dlsym(void*, const char*, ps5elf::Image*);
+extern "C" __attribute__((visibility("hidden")))
+int ps5_addon_dlclose(void*, ps5elf::Image*);
+extern "C" __attribute__((visibility("hidden")))
+char* ps5_addon_dlerror(ps5elf::Image*);
 
 // ELF64 (x86-64) types and constants, defined here so the file is identical on
 // the Linux host and the PS5 (FreeBSD) sysroot, whose <elf.h> differ.
@@ -56,6 +74,24 @@ namespace ps5elf
 
 struct Image
 {
+  struct Auxiliary
+  {
+    std::string name;
+    Image* image = nullptr;
+    uintptr_t handle = 0;
+    size_t references = 0;
+    bool transitioning = false;
+  };
+  Image* owner = nullptr;
+  std::string directory;
+  int directory_fd = -1;
+  std::vector<Auxiliary> auxiliaries;
+  u8* import_thunks = nullptr;
+  ~Image()
+  {
+    if (import_thunks)
+      munmap(import_thunks, page());
+  }
   struct Destructor
   {
     void (*function)(void*);
@@ -95,6 +131,59 @@ namespace
 {
 std::mutex g_images_mutex;
 Image* g_images = nullptr;
+// Serializes scope operations, including constructor/finalizer re-entry on
+// this thread. Trusted helper initializers must not wait on another thread
+// performing a loader operation. As for unload(), callers must quiesce code
+// using returned function pointers before closing the last reference.
+std::recursive_mutex g_aux_mutex;
+uintptr_t g_next_handle = 1;
+constexpr uintptr_t kHandleTag = 0x5053000000000000ull;
+constexpr uintptr_t kHandleMask = 0xffff000000000000ull;
+
+struct ErrorState
+{
+  char message[512]{};
+  bool pending = false;
+};
+pthread_key_t g_error_key;
+std::once_flag g_error_once;
+bool g_error_key_ready = false;
+
+ErrorState* error_state()
+{
+  std::call_once(g_error_once, [] {
+    g_error_key_ready = pthread_key_create(&g_error_key, [](void* value) {
+      delete static_cast<ErrorState*>(value);
+    }) == 0;
+  });
+  if (!g_error_key_ready)
+    return nullptr;
+  auto* state = static_cast<ErrorState*>(pthread_getspecific(g_error_key));
+  if (!state)
+  {
+    state = new (std::nothrow) ErrorState;
+    if (state && pthread_setspecific(g_error_key, state) != 0)
+    {
+      delete state;
+      state = nullptr;
+    }
+  }
+  return state;
+}
+
+void auxiliary_error(const char* message)
+{
+  // Host symbol probing can have left a native error. An auxiliary failure
+  // replaces that error rather than revealing it on a second dlerror().
+  ::dlerror();
+  if (auto* state = error_state())
+  {
+    std::snprintf(state->message, sizeof(state->message), "%s", message);
+    state->pending = true;
+  }
+}
+
+bool contains(const Image* img, const void* pointer);
 
 bool contains(const Image* img, const void* pointer)
 {
@@ -214,6 +303,60 @@ u32 gnu_hash_symcount(const u32* gh)
 }
 
 // Resolve the symbol a relocation refers to. Returns false on hard failure.
+int auxiliary_index(const char* name)
+{
+  static const char* const names[] = {"dlopen", "dlsym", "dlclose", "dlerror"};
+  for (int i = 0; i < 4; ++i)
+    if (std::strcmp(name, names[i]) == 0)
+      return i;
+  return -1;
+}
+
+bool create_import_thunks(Image* img, char* err, size_t errlen)
+{
+  if (img->import_thunks)
+    return true;
+  const size_t pg = page();
+  void* memory = mmap(nullptr, pg, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (memory == MAP_FAILED)
+  {
+    std::snprintf(err, errlen, "cannot map scoped dlfcn import thunks: %s", std::strerror(errno));
+    return false;
+  }
+  const void* functions[] = {reinterpret_cast<void*>(&ps5_addon_dlopen),
+                            reinterpret_cast<void*>(&ps5_addon_dlsym),
+                            reinterpret_cast<void*>(&ps5_addon_dlclose),
+                            reinterpret_cast<void*>(&ps5_addon_dlerror)};
+  for (int i = 0; i < 4; ++i)
+  {
+    auto* code = static_cast<u8*>(memory) + i * 32;
+    // SysV x86-64: append the module argument in rdx (two arguments),
+    // rsi (one), or rdi (none), then tail-jump without disturbing the
+    // original caller/stack. Unlike return-address inference this also
+    // preserves scope for optimized add-on tail calls and saved imports.
+    code[0] = 0x48;
+    code[1] = i < 2 ? 0xba : i == 2 ? 0xbe : 0xbf;
+    const uintptr_t identity = reinterpret_cast<uintptr_t>(img);
+    std::memcpy(code + 2, &identity, 8);
+    code[10] = 0x48;
+    code[11] = 0xb8; // movabs target, %rax
+    const uintptr_t target = reinterpret_cast<uintptr_t>(functions[i]);
+    std::memcpy(code + 12, &target, 8);
+    code[20] = 0xff;
+    code[21] = 0xe0; // jmp *%rax
+  }
+  if (mprotect(memory, pg, PROT_READ | PROT_EXEC) != 0)
+  {
+    std::snprintf(err, errlen, "cannot protect scoped dlfcn import thunks: %s",
+                  std::strerror(errno));
+    munmap(memory, pg);
+    return false;
+  }
+  img->import_thunks = static_cast<u8*>(memory);
+  return true;
+}
+
 bool resolve(Image* img, u32 symidx, u64* out, char* err, size_t errlen)
 {
   // A wrong relocation count or entry size would walk past .rela.dyn and hand
@@ -240,7 +383,14 @@ bool resolve(Image* img, u32 symidx, u64* out, char* err, size_t errlen)
   }
   const char* name = img->strtab + s.st_name;
   void* h = nullptr;
-  if (std::strcmp(name, "__cxa_atexit") == 0)
+  const int import_index = auxiliary_index(name);
+  if (import_index >= 0)
+  {
+    if (!create_import_thunks(img, err, errlen))
+      return false;
+    h = img->import_thunks + import_index * 32;
+  }
+  else if (std::strcmp(name, "__cxa_atexit") == 0)
     h = reinterpret_cast<void*>(&module_atexit);
   else if (std::strcmp(name, "__cxa_finalize") == 0)
     h = reinterpret_cast<void*>(&module_finalize);
@@ -273,6 +423,8 @@ bool apply_rela(Image* img, const Rela* r, size_t n, char* err, size_t errlen)
   for (size_t i = 0; i < n; ++i)
   {
     const u32 type = R_TYPE(r[i].r_info);
+    if (type == 0) // R_X86_64_NONE is padding, not an unsupported relocation
+      continue;
     const u32 sym = R_SYM(r[i].r_info);
     u64* where = reinterpret_cast<u64*>(bias + r[i].r_offset);
     switch (type)
@@ -327,11 +479,13 @@ bool apply_rela(Image* img, const Rela* r, size_t n, char* err, size_t errlen)
       case R_X86_64_DTPMOD64:
       case R_X86_64_DTPOFF64:
       case R_X86_64_TPOFF64:
-        img->st.tls++; // not yet supported; left as-is, reported by stats
-        break;
+        img->st.tls++;
+        std::snprintf(err, errlen, "unsupported TLS relocation: %u", type);
+        return false;
       default:
         img->st.other++;
-        break;
+        std::snprintf(err, errlen, "unsupported relocation: %u", type);
+        return false;
     }
   }
   return true;
@@ -358,6 +512,9 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
     return fail("not a shared object (ET_DYN)");
   if (e->e_machine != EM_X86_64)
     return fail("not x86-64");
+  if (e->e_phentsize != sizeof(Phdr) || e->e_phoff > image_len ||
+      e->e_phnum > (image_len - e->e_phoff) / sizeof(Phdr))
+    return fail("invalid program headers");
 
   const size_t pg = page();
   const auto* ph = reinterpret_cast<const Phdr*>(static_cast<const u8*>(image) + e->e_phoff);
@@ -372,6 +529,11 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
   {
     if (ph[i].p_type == PT_LOAD)
     {
+      if (ph[i].p_filesz > ph[i].p_memsz || ph[i].p_offset > image_len ||
+          ph[i].p_filesz > image_len - ph[i].p_offset ||
+          ph[i].p_memsz > ~u64{0} - pg ||
+          ph[i].p_vaddr > ~u64{0} - pg - ph[i].p_memsz)
+        return fail("invalid PT_LOAD extent");
       ++load_segments;
       min_v = ph[i].p_vaddr < min_v ? ph[i].p_vaddr : min_v;
       u64 end = ph[i].p_vaddr + ph[i].p_memsz;
@@ -386,6 +548,8 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
   }
   if (min_v == ~0ull || !dynph)
     return fail("no PT_LOAD or no PT_DYNAMIC");
+  if (has_tls)
+    return fail("unsupported PT_TLS");
 
   const u64 base_v = trunc_page(min_v, pg);
   const size_t span = round_page(max_v, pg) - base_v;
@@ -402,7 +566,12 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
     return fail("reservation mmap failed");
   }
 
-  auto* img = new Image();
+  auto* img = new (std::nothrow) Image();
+  if (!img)
+  {
+    munmap(m, span);
+    return fail("cannot allocate ELF image metadata");
+  }
   img->map = static_cast<u8*>(m);
   img->span = span;
   img->base = static_cast<u8*>(m) - base_v; // load bias
@@ -411,7 +580,6 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
   img->user = user;
   img->diagnostic = diagnostic;
   img->diagnostic_user = diagnostic_user;
-  (void)has_tls;
   report(img, "phase=map-reserved map=%p bias=%p span=0x%zx", img->map, img->base, img->span);
 
   // Copy each PT_LOAD in, RW (route B: write first, flip to X later).
@@ -493,6 +661,12 @@ Image* load(const void* image, size_t image_len, HostResolver resolver, void* us
         img->fini_arrayn = d->d_val / sizeof(void*);
         break;
       default: break;
+    }
+    if (needed_count)
+    {
+      munmap(m, span);
+      delete img;
+      return fail("unsupported DT_NEEDED (explicit auxiliary loading only)");
     }
   }
   // Every table pointer must land inside the mapping we just made. A d_val the
@@ -742,17 +916,353 @@ void run_init(Image* img)
 
 void* symbol(Image* img, const char* name)
 {
-  if (!img || !img->symtab || !img->strtab) return nullptr;
+  if (!img || !name || !img->symtab || !img->strtab) return nullptr;
+  void* weak = nullptr;
   for (u32 i = 0; i < img->symcount; ++i)
   {
     const Sym& s = img->symtab[i];
-    if (s.st_shndx != SHN_UNDEF && std::strcmp(img->strtab + s.st_name, name) == 0)
-      return img->base + s.st_value;
+    const unsigned binding = s.st_info >> 4;
+    const unsigned type = s.st_info & 15;
+    const unsigned visibility = s.st_other & 3;
+    if (s.st_shndx == SHN_UNDEF || s.st_shndx >= 0xff00 ||
+        (binding != 1 && binding != STB_WEAK) ||
+        (visibility != 0 && visibility != 3) ||
+        (type != 0 && type != 1 && type != 2) ||
+        s.st_name >= img->strsz ||
+        !std::memchr(img->strtab + s.st_name, '\0', img->strsz - s.st_name) ||
+        std::strcmp(img->strtab + s.st_name, name) != 0)
+      continue;
+    void* address = img->base + s.st_value;
+    if (!contains(img, address))
+      continue;
+    if (binding == 1)
+      return address;
+    weak = address;
   }
-  return nullptr;
+  return weak;
 }
 
 Stats stats(const Image* img) { return img ? img->st : Stats{}; }
+
+namespace
+{
+bool valid_basename(const std::string& name)
+{
+  if (name.empty() || name.size() > 128 || name[0] == '.' ||
+      name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                             "0123456789._+-") != std::string::npos)
+    return false;
+  return true;
+}
+} // namespace
+
+bool parse_auxiliary_manifest(const char* text, size_t size, const char* primary_name,
+                              std::vector<std::string>& helpers, char* err, size_t errlen)
+{
+  auto fail = [&](size_t line, const char* message) {
+    std::snprintf(err, errlen, "auxiliary manifest line %zu: %s", line, message);
+    helpers.clear();
+    return false;
+  };
+  helpers.clear();
+  if (!text || !primary_name || size > 16 * 1024)
+    return fail(0, "missing or oversized manifest");
+  bool format = false;
+  bool primary = false;
+  size_t number = 0;
+  size_t start = 0;
+  while (start < size)
+  {
+    size_t end = start;
+    while (end < size && text[end] != '\n')
+      ++end;
+    std::string line(text + start, end - start);
+    start = end + 1;
+    ++number;
+    if (!line.empty() && line.back() == '\r')
+      line.pop_back();
+    if (line.find('\0') != std::string::npos)
+      return fail(number, "embedded NUL");
+    if (line.empty() || line[0] == '#')
+      continue;
+    const size_t space = line.find(' ');
+    if (space == std::string::npos || line.find(' ', space + 1) != std::string::npos)
+      return fail(number, "expected '<key> <value>'");
+    const std::string key = line.substr(0, space);
+    const std::string value = line.substr(space + 1);
+    if (!format)
+    {
+      if (key != "format" || value != "1")
+        return fail(number, "first entry must be 'format 1'");
+      format = true;
+      continue;
+    }
+    if (!valid_basename(value))
+      return fail(number, "invalid basename");
+    if (key == "primary")
+    {
+      if (primary)
+        return fail(number, "duplicate primary entry");
+      if (value != primary_name)
+        return fail(number, "manifest belongs to a different primary");
+      primary = true;
+    }
+    else if (key == "helper")
+    {
+      if (value == primary_name || value.size() < 4 ||
+          value.compare(value.size() - 3, 3, ".so") != 0)
+        return fail(number, "helper must be a distinct .so basename");
+      for (const auto& existing : helpers)
+        if (existing == value)
+          return fail(number, "duplicate helper entry");
+      if (helpers.size() >= 64)
+        return fail(number, "too many helpers");
+      helpers.push_back(value);
+    }
+    else
+      return fail(number, "unknown key");
+  }
+  if (!format || !primary)
+    return fail(number, "manifest requires format and primary entries");
+  return true;
+}
+
+bool register_auxiliaries(Image* img, const char* primary_path,
+                          const char* const* names, size_t count, char* err, size_t errlen)
+{
+  std::lock_guard<std::recursive_mutex> lock(g_aux_mutex);
+  auto fail = [&](const char* message) {
+    std::snprintf(err, errlen, "%s", message);
+    return false;
+  };
+  if (!img || img->initialized || img->owner || img->directory_fd >= 0 ||
+      !primary_path || primary_path[0] != '/' || !names || !count)
+    return fail("invalid auxiliary registration");
+  std::vector<Image::Auxiliary> entries;
+  for (size_t i = 0; i < count; ++i)
+  {
+    if (!names[i] || !*names[i] || std::strchr(names[i], '/') ||
+        std::strchr(names[i], '\\') || std::strcmp(names[i], ".") == 0 ||
+        std::strcmp(names[i], "..") == 0)
+      return fail("auxiliary policy requires exact basenames");
+    for (const auto& entry : entries)
+      if (entry.name == names[i])
+        return fail("duplicate auxiliary basename");
+    Image::Auxiliary entry;
+    entry.name = names[i];
+    entries.push_back(std::move(entry));
+  }
+  const std::unique_ptr<char, decltype(&std::free)> canonical(
+      realpath(primary_path, nullptr), &std::free);
+  if (!canonical)
+    return fail("cannot canonicalize auxiliary owner path");
+  std::string directory(canonical.get());
+  directory.resize(directory.find_last_of('/'));
+  if (directory.empty())
+    directory = "/";
+  const int fd = open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0)
+    return fail("cannot open auxiliary owner directory");
+  img->directory = std::move(directory);
+  img->directory_fd = fd;
+  img->auxiliaries = std::move(entries);
+  return true;
+}
+
+namespace
+{
+Image* scope_owner(Image* caller)
+{
+  return caller && caller->owner ? caller->owner : caller;
+}
+
+Image::Auxiliary* owned_handle(Image* caller, void* handle)
+{
+  Image* owner = scope_owner(caller);
+  if (owner)
+    for (auto& entry : owner->auxiliaries)
+      if (entry.handle && entry.handle == reinterpret_cast<uintptr_t>(handle))
+        return &entry;
+  auxiliary_error("invalid, closed or foreign auxiliary handle");
+  return nullptr;
+}
+
+void* auxiliary_open(Image* caller, const char* path, int flags)
+{
+  // This is a primary-add-on capability, not a dependency loader. Allowing
+  // helpers to acquire other helpers would require a dependency graph and
+  // cycle-aware teardown rather than the owner's flat collection.
+  if (caller && caller->owner)
+  {
+    auxiliary_error("auxiliary-to-auxiliary dependency loading is unsupported");
+    return nullptr;
+  }
+  Image* owner = scope_owner(caller);
+  if (!owner || owner->unloading || owner->directory_fd < 0)
+  {
+    auxiliary_error("caller has no active trusted auxiliary scope");
+    return nullptr;
+  }
+  const int binding = flags & (RTLD_LAZY | RTLD_NOW);
+  if (!path || path[0] != '/' ||
+      (flags & ~(RTLD_LAZY | RTLD_NOW)) != 0 ||
+      (binding != RTLD_LAZY && binding != RTLD_NOW))
+  {
+    auxiliary_error("auxiliary dlopen requires an absolute path and RTLD_LOCAL");
+    return nullptr;
+  }
+  const std::unique_ptr<char, decltype(&std::free)> canonical(
+      realpath(path, nullptr), &std::free);
+  if (!canonical)
+  {
+    auxiliary_error("cannot canonicalize auxiliary path");
+    return nullptr;
+  }
+  const std::string requested(canonical.get());
+  const size_t slash = requested.find_last_of('/');
+  const std::string directory = slash == 0 ? "/" : requested.substr(0, slash);
+  const std::string name = requested.substr(slash + 1);
+  Image::Auxiliary* entry = nullptr;
+  if (directory == owner->directory)
+    for (auto& candidate : owner->auxiliaries)
+      if (candidate.name == name)
+        entry = &candidate;
+  if (!entry)
+  {
+    auxiliary_error("auxiliary path is outside the owner's explicit allowlist");
+    return nullptr;
+  }
+  if (entry->transitioning)
+  {
+    auxiliary_error("auxiliary is currently initializing or finalizing");
+    return nullptr;
+  }
+  if (entry->image)
+  {
+    if (entry->references == ~size_t{0})
+    {
+      auxiliary_error("auxiliary reference count exhausted");
+      return nullptr;
+    }
+    ++entry->references;
+    return reinterpret_cast<void*>(entry->handle);
+  }
+  const int open_flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW;
+  int fd = openat(owner->directory_fd, name.c_str(), open_flags);
+  if (fd < 0 && errno == ENOSYS)
+  {
+    // The PS5 shim supports only AT_FDCWD. Packaged add-on directories are
+    // trusted and immutable during loading; verify the pinned directory
+    // identity around the absolute open rather than changing process cwd.
+    struct stat pinned{}, before{}, after{};
+    if (fstat(owner->directory_fd, &pinned) != 0 ||
+        lstat(owner->directory.c_str(), &before) != 0 ||
+        !S_ISDIR(before.st_mode) || pinned.st_dev != before.st_dev ||
+        pinned.st_ino != before.st_ino)
+    {
+      auxiliary_error("trusted auxiliary directory changed before open");
+      return nullptr;
+    }
+    fd = open(requested.c_str(), open_flags);
+    if (fd >= 0 &&
+        (lstat(owner->directory.c_str(), &after) != 0 ||
+         !S_ISDIR(after.st_mode) || pinned.st_dev != after.st_dev ||
+         pinned.st_ino != after.st_ino))
+    {
+      close(fd);
+      auxiliary_error("trusted auxiliary directory changed during open");
+      return nullptr;
+    }
+  }
+  if (fd < 0)
+  {
+    char message[512]{};
+    const int error = errno;
+    std::snprintf(message, sizeof(message),
+                  "cannot open trusted auxiliary file '%s': errno=%d (%s)",
+                  requested.c_str(), error, std::strerror(error));
+    auxiliary_error(message);
+    return nullptr;
+  }
+  struct stat status{};
+  if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) || status.st_size <= 0 ||
+      static_cast<uint64_t>(status.st_size) > 256 * 1024 * 1024)
+  {
+    close(fd);
+    auxiliary_error("auxiliary is not a bounded regular ELF file");
+    return nullptr;
+  }
+  const size_t byte_count = static_cast<size_t>(status.st_size);
+  const std::unique_ptr<u8[]> bytes(new (std::nothrow) u8[byte_count]);
+  if (!bytes)
+  {
+    close(fd);
+    auxiliary_error("cannot allocate auxiliary image buffer");
+    return nullptr;
+  }
+  size_t offset = 0;
+  while (offset < byte_count)
+  {
+    const ssize_t result = read(fd, bytes.get() + offset, byte_count - offset);
+    if (result < 0 && errno == EINTR)
+      continue;
+    if (result <= 0)
+      break;
+    offset += static_cast<size_t>(result);
+  }
+  close(fd);
+  if (offset != byte_count)
+  {
+    auxiliary_error("cannot read complete auxiliary image");
+    return nullptr;
+  }
+  // Synthetic handles occupy a noncanonical x86-64 address range. They are
+  // never pointers or passed to libc, and are not reused after last close.
+  if (g_next_handle >= (uintptr_t{1} << 48))
+  {
+    auxiliary_error("auxiliary handle space exhausted");
+    return nullptr;
+  }
+  char error[512]{};
+  Image* child = load(bytes.get(), byte_count, owner->resolver, owner->user,
+                      error, sizeof(error), owner->diagnostic, owner->diagnostic_user);
+  if (!child)
+  {
+    auxiliary_error(error);
+    return nullptr;
+  }
+  child->owner = owner;
+  entry->image = child;
+  entry->handle = kHandleTag | g_next_handle++;
+  entry->references = 1;
+  entry->transitioning = true;
+  bool failed = false;
+  try
+  {
+    run_init(child);
+  }
+  catch (...)
+  {
+    // This boundary, like primary initialization, must leave the catch before
+    // unmapping: the exception's destructor and typeinfo may be module-owned.
+    failed = true;
+  }
+  entry->transitioning = false;
+  if (failed)
+  {
+    report(child, "phase=auxiliary-init-exit result=failed reason=constructor-threw module=%s",
+           entry->name.c_str());
+    entry->image = nullptr;
+    entry->references = 0;
+    entry->transitioning = true;
+    unload(child);
+    entry->transitioning = false;
+    auxiliary_error("auxiliary constructor threw");
+    return nullptr;
+  }
+  return reinterpret_cast<void*>(entry->handle);
+}
+} // namespace
 
 static void deregister_eh(Image* img)
 {
@@ -776,6 +1286,7 @@ static void deregister_eh(Image* img)
 
 void unload(Image* img)
 {
+  std::lock_guard<std::recursive_mutex> scope_lock(g_aux_mutex);
   if (!img || img->unloading)
     return;
   img->unloading = true;
@@ -796,6 +1307,19 @@ void unload(Image* img)
     finalize(img, nullptr, true);
     report(img, "phase=finalizers-exit result=returned");
   }
+  // Parent finalizers may close helpers or still call into them. Drain any
+  // remaining owned mappings only after those finalizers, before parent EH
+  // and code disappear (helper destructors can call back into the parent).
+  for (auto it = img->auxiliaries.rbegin(); it != img->auxiliaries.rend(); ++it)
+  {
+    Image* child = it->image;
+    it->image = nullptr;
+    it->references = 0;
+    if (child)
+      unload(child);
+  }
+  if (img->directory_fd >= 0)
+    close(img->directory_fd);
   {
     std::lock_guard<std::mutex> lock(g_images_mutex);
     Image** link = &g_images;
@@ -815,3 +1339,80 @@ void unload(Image* img)
 }
 
 } // namespace ps5elf
+
+// Bound only through module-owned import thunks, not title --wrap.
+extern "C" void* ps5_addon_dlopen(const char* path, int flags, ps5elf::Image* caller)
+{
+  if (!ps5elf::error_state())
+    return nullptr;
+  std::lock_guard<std::recursive_mutex> lock(ps5elf::g_aux_mutex);
+  void* handle = ps5elf::auxiliary_open(caller, path, flags);
+  if (handle)
+    ::dlerror(); // discard errors from weak host symbol probes during loading
+  return handle;
+}
+
+extern "C" void* ps5_addon_dlsym(void* handle, const char* name, ps5elf::Image* caller)
+{
+  if ((reinterpret_cast<uintptr_t>(handle) & ps5elf::kHandleMask) != ps5elf::kHandleTag)
+    return ::dlsym(handle, name);
+  std::lock_guard<std::recursive_mutex> lock(ps5elf::g_aux_mutex);
+  auto* entry = ps5elf::owned_handle(caller, handle);
+  if (!entry || !entry->image || entry->transitioning)
+  {
+    ps5elf::auxiliary_error("invalid, closed or foreign auxiliary handle");
+    return nullptr;
+  }
+  void* address = ps5elf::symbol(entry->image, name);
+  if (!address)
+  {
+    char message[512];
+    std::snprintf(message, sizeof(message),
+                  "auxiliary symbol not found or not publicly exported: %s",
+                  name ? name : "<null>");
+    ps5elf::auxiliary_error(message);
+  }
+  return address;
+}
+
+extern "C" int ps5_addon_dlclose(void* handle, ps5elf::Image* caller)
+{
+  if ((reinterpret_cast<uintptr_t>(handle) & ps5elf::kHandleMask) != ps5elf::kHandleTag)
+    return ::dlclose(handle);
+  std::lock_guard<std::recursive_mutex> lock(ps5elf::g_aux_mutex);
+  auto* entry = ps5elf::owned_handle(caller, handle);
+  if (!entry || !entry->image || entry->transitioning || !entry->references)
+  {
+    ps5elf::auxiliary_error("invalid, closed or foreign auxiliary handle");
+    return -1;
+  }
+  if (entry->references == 1 && entry->image == caller)
+  {
+    ps5elf::auxiliary_error("cannot close the currently executing auxiliary module");
+    return -1;
+  }
+  if (--entry->references == 0)
+  {
+    auto* child = entry->image;
+    entry->image = nullptr;
+    entry->transitioning = true;
+    ps5elf::unload(child);
+    entry->transitioning = false;
+  }
+  return 0;
+}
+
+extern "C" char* ps5_addon_dlerror(ps5elf::Image*)
+{
+  if (auto* state = ps5elf::error_state())
+  {
+    if (state->pending)
+    {
+      state->pending = false;
+      return state->message;
+    }
+  }
+  else
+    return const_cast<char*>("cannot allocate title thread's auxiliary error state");
+  return ::dlerror();
+}

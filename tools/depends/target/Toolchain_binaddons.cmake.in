@@ -105,8 +105,13 @@ if(OS STREQUAL ps5)
            " --target=x86_64-unknown-freebsd -idirafter @use_toolchain@/target/include -idirafter @use_toolchain@/target/include_common -fuse-init-array")
   endforeach()
   set(CMAKE_SHARED_LINKER_FLAGS
-      "-nostdlib -fuse-ld=${PS5_LLVM_BINDIR}/ld.lld -Wl,--hash-style=both,--eh-frame-hdr,-z,max-page-size=0x4000")
+      "-nostdlib -nodefaultlibs -fuse-ld=${PS5_LLVM_BINDIR}/ld.lld -Wl,--hash-style=both,--eh-frame-hdr,-z,max-page-size=0x4000")
   set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
+  # prospero-clang only honours -nodefaultlibs, so C add-ons would otherwise get DT_NEEDED.
+  # Executable probes need SDK startfiles/libraries, not host FreeBSD ones. List the
+  # wrapper defaults explicitly so C and C++ implicit libraries match (no extra DT_NEEDED).
+  string(APPEND CMAKE_EXE_LINKER_FLAGS
+         " -nostdlib -fuse-ld=${PS5_LLVM_BINDIR}/ld.lld -lc++ -lc++abi -lunwind -lc -lkernel_web -lSceLibcInternal -lSceNet")
 endif()
 set(ENV{CFLAGS} ${CMAKE_C_FLAGS})
 set(ENV{CXXFLAGS} ${CMAKE_CXX_FLAGS})

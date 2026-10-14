@@ -13,6 +13,8 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace ps5elf
 {
@@ -38,14 +40,41 @@ void run_init(Image* img);
 // Address of an exported symbol by name, or nullptr.
 void* symbol(Image* img, const char* name);
 
+// Opt-in for trusted, ordinary helper DSOs shipped next to this primary image.
+// Call before run_init. Names must be exact basenames, not paths. Only calls
+// bound to this primary image can open helpers in the resulting scope.
+// Helpers cannot open further helpers (no dependency graph is implemented).
+// The owner directory is pinned with a descriptor; symlinks outside it are
+// rejected. Dependency loading (DT_NEEDED), ELF TLS and RTLD_GLOBAL remain
+// unsupported. Scope operations are serialized and reentrant on one thread;
+// trusted helper initializers/finalizers must not join a thread performing
+// another loader operation. Last close has the same quiescence requirement
+// as unload(). Repeated opens share a helper only within this owner.
+bool register_auxiliaries(Image* img, const char* primary_path,
+                          const char* const* names, size_t count,
+                          char* errbuf, size_t errlen);
+
+// Name of the packaging-generated helper allowlist beside a primary image.
+inline constexpr const char* kAuxiliaryManifestName = "ps5-auxiliaries.list";
+
+// Parse a packaged auxiliary manifest. The format is line based:
+//   format 1
+//   primary <primary basename>
+//   helper <helper basename>   (zero or more)
+// Blank lines and lines starting with '#' are ignored. Any other content,
+// a primary mismatch, duplicates or invalid basenames reject the manifest.
+bool parse_auxiliary_manifest(const char* text, size_t size, const char* primary_name,
+                              std::vector<std::string>& helpers,
+                              char* errbuf, size_t errlen);
+
 // Diagnostics: counts of relocation kinds applied (for the test harness/logs).
 struct Stats
 {
   unsigned relative;
   unsigned glob_dat;   // GLOB_DAT + R_X86_64_64
   unsigned jump_slot;
-  unsigned tls;        // TLS relocs seen (not yet supported; reported)
-  unsigned other;      // unhandled types seen
+  unsigned tls;        // rejected TLS relocations (zero on a successful load)
+  unsigned other;      // rejected relocation types (zero on a successful load)
 };
 Stats stats(const Image* img);
 

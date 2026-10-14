@@ -25,6 +25,8 @@
 #   PS5_TEST_BINARY_ADDON  1 includes the isolated loader probe (default 0)
 #   PS5_ADAPTIVE_TEST  1 stages adaptive and its direct DASH test (default 0)
 #   PS5_ADAPTIVE_PREFIX  installed adaptive depends prefix (optional)
+#   PS5_AUDIO_DECODERS space-separated audiodecoder IDs to stage (default empty)
+#   PS5_AUDIO_DECODER_PREFIX installed decoder prefix (default isolated audit install)
 #   PS5_ADDON_ELFS  colon-separated trusted installed .so files whose runtime
 #                   archive members must be retained (export policy only)
 set -euo pipefail
@@ -98,6 +100,16 @@ fi
 [ -f "$APP_TEMPLATE/Makefile" ] && [ -d "$APP_TEMPLATE/.deps/native" ] || {
   echo "!! app template not found at $APP_TEMPLATE (build ps5-opengl's imgui-demo first: make -C $WORK/ps5-opengl imgui-demo)"; exit 1; }
 
+AUDIO_DECODER_IDS=()
+AUDIO_DECODER_ELFS=()
+if [ -n "${PS5_AUDIO_DECODERS:-}" ]; then
+  AUDIO_DECODER_PREFIX="${PS5_AUDIO_DECODER_PREFIX:-$ROOT/build/ps5-audiodecoders/install}"
+  read -r -a AUDIO_DECODER_IDS <<< "$PS5_AUDIO_DECODERS"
+  AUDIO_ELF_LIST="$(python3 "$ROOT/tools/ps5/stage-audio-decoders.py" \
+    --prefix "$AUDIO_DECODER_PREFIX" "${AUDIO_DECODER_IDS[@]}")"
+  mapfile -t AUDIO_DECODER_ELFS <<< "$AUDIO_ELF_LIST"
+fi
+
 echo "==> 1. staging Kodi's data into $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 DESTDIR="$STAGE" cmake --install "$BUILD" >"$STAGE/install.log" 2>&1 || { tail -20 "$STAGE/install.log"; exit 1; }
@@ -112,6 +124,10 @@ if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
 fi
 
 echo "==> 2. app directory from the demo template"
+if [ "${#AUDIO_DECODER_IDS[@]}" -gt 0 ]; then
+  python3 "$ROOT/tools/ps5/stage-audio-decoders.py" --prefix "$AUDIO_DECODER_PREFIX" \
+    --destination "$STAGE/app0/share/kodi" "${AUDIO_DECODER_IDS[@]}"
+fi
 APP="$STAGE/app"
 mkdir -p "$APP"
 for entry in Makefile assets runtime sce_sys tooling tools include; do
@@ -133,6 +149,7 @@ LD
 rm -rf "$APP/src" "$APP/vendor" "$APP/build" "$APP/dist"
 mkdir -p "$APP/src" "$APP/vendor"
 ADDON_ELFS=()
+ADDON_ELFS+=("${AUDIO_DECODER_ELFS[@]}")
 if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
   ADDON_ELFS+=("$ADAPTIVE_ELF")
 fi

@@ -250,6 +250,73 @@ The last asynchronously queued log message alone is not an exact fault site.
 
 ## Existing full binary-add-on builder (follow-on)
 
+### Selected audio decoder deployment
+
+`PS5_AUDIO_DECODERS` selects space-separated decoder IDs from the installed
+prefix `PS5_AUDIO_DECODER_PREFIX` (default `build/ps5-audiodecoders/install`).
+Packaging validates the FreeBSD manifests/binaries, stages resources and binaries,
+and includes the selected imports in title export generation and preflight before
+automatic upload. This is opt-in; it does not build decoders or prove playback.
+
+Installed `lib*.so` companions (excluding symlinks) are staged beside each
+primary and included in the import/export preflight. Staging rejects any
+primary or companion that is not an x86-64 shared object, contains `PT_TLS` or
+`DT_NEEDED`, or uses relocations other than `RELATIVE`, `64`, `GLOB_DAT` and
+`JUMP_SLOT`. When companions exist, staging generates `ps5-auxiliaries.list`:
+
+```text
+format 1
+primary audiodecoder.wsr.so.22.0.3
+helper libin_wsr_0.so
+helper libin_wsr_1.so
+helper libin_wsr_track.so
+```
+
+At load, `CPS5AddonLoader` reads this file from the primary's directory. Its
+`primary` entry must equal the loaded file name; helper entries are exact
+basenames (max 64). Malformed manifests fail the add-on load; absent manifests
+grant no helper scope. Installed add-on data may not supply its own manifest.
+The manifest is part of the packaged title, so the package is the trust root,
+as for the primary binary. No add-on names are compiled into Kodi: a new
+decoder following this layout needs only building and packaging, though new
+imports still require repackaging the title and console validation.
+Per-image executable import thunks route `dlopen`, `dlsym`, `dlclose` and
+`dlerror` without changing native title calls or relying on caller return
+addresses. Helpers bind their defined symbols to their own image; separate
+basenames and separate parents retain independent emulator state. Repeated
+opens within one parent are refcounted. Parent finalizers run while helpers
+remain available, then helpers are finalized before the parent is unmapped.
+Instances and worker threads must still be quiescent before unloading.
+ELF TLS, general `DT_NEEDED` dependencies and helper-to-helper loading remain
+unsupported. WSR and Nosefart playback passed on console (firmware 9.40) with
+manifest-authorized helpers.
+Their bundled extended `.m3u` files (`file::TYPE,track,...`) are NEZplug/GME
+syntax that Kodi's playlist parser does not support on any platform.
+
+`python3 tools/ps5/test-stage-audio-decoders.py` checks staging, generated
+manifests, symlink exclusion and TLS/`DT_NEEDED` rejection.
+The focused loader suite also checks manifest parsing, mapped helper state/pointer relocations,
+optimized tail calls, path restrictions, native handles, concurrent reference
+counts, per-thread errors and parent/helper teardown. Host checks do not prove
+PS5 playback. The PS5 shim rejects directory-relative `openat` with `ENOSYS`;
+the loader then uses the validated absolute path with `O_NOFOLLOW`, checking
+the pinned directory's device/inode before and after opening. Packaged add-on
+directories must remain trusted and immutable during loading. Regression tests
+exercise this fallback and reject directory replacement.
+Rebuild Kodi before packaging the new loader; the existing
+decoder binaries do not need rebuilding:
+
+```sh
+cmake --build build/ps5-release -j"$(nproc)"
+```
+
+```sh
+PS5_AUDIO_DECODERS="audiodecoder.asap audiodecoder.stsound audiodecoder.wsr audiodecoder.nosefart" \
+  PS5_ADAPTIVE_TEST=1 PS5_TEST_BINARY_ADDON=1 \
+  PS5_HOST=192.168.178.44 PS5_FTP_PORT=2121 \
+  cmake --build build/ps5-release --target ps5-title
+```
+
 Kodi already provides the general builder:
 
 ```sh

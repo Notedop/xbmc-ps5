@@ -131,7 +131,52 @@ the new logging.
   scope. The current non-DRM adaptive milestone is accepted, not universal TLS,
   shared-library dependency or DRM support.
 
-No commits were made. The working tree contains all changes described below.
+### Audio decoder follow-on (2026-10-14 evening)
+
+The binary add-on/adaptive milestone was committed as `3a92d3c40b`; it was not
+pushed. The subsequent audio decoder work remains uncommitted.
+An isolated category audit found 16 decoders passing ELF/export policy.
+Console playback passed for STSound/YM and ASAP/SAP. WSR/WSR and Nosefart/NSF
+failed when their main libraries called native `dlopen` for auxiliary emulators;
+this was not a silent-PCM diagnosis.
+
+The current scoped auxiliary loader is implemented and ready for console
+retesting. It permits exactly three installed helper filenames per WSR/Nosefart
+primary, from the primary's canonical directory. Per-image dlfcn import thunks
+preserve scope across optimized tail calls; each helper binds its own globals
+and has independent state. Host lifecycle/auxiliary regressions, sanitizer
+checks and isolated PS5 runtime compiles pass. Both primaries plus six helpers
+pass combined export preflight. Packaging stages the helpers with the primaries
+and includes their imports; four-decoder staging was verified byte-for-byte.
+The first console retest reached the scoped loader but both WSR and NSF failed
+with `cannot open trusted auxiliary file`. FTP confirmed the WSR helpers were
+deployed. The loader used directory-relative `openat`, whereas the PS5 shim
+returns `ENOSYS` unless the directory is `AT_FDCWD`. A loader-local fallback
+now opens the validated absolute path without changing cwd, retaining
+`O_NOFOLLOW` and checking the pinned directory identity before/after open.
+The host suite models the shim failure and rejects replaced directories.
+Console retest then passed: WSR and NSF played audibly with stop/replay and
+track switching, clean add-on destruction and no helper-load errors
+(`build/ps5-audio-retest-20261014-2211.kodi.log`). Bundled extended `.m3u`
+files fail on any Kodi platform (NEZplug/GME syntax), not a PS5 issue.
+
+The hardcoded WSR/Nosefart allowlist has since been replaced by a staging-
+generated `ps5-auxiliaries.list` per add-on (see the ELF README); staging also
+rejects TLS, `DT_NEEDED` and unsupported relocations. All 16 candidate decoders
+pass these checks; only WSR and Nosefart generate manifests. Host tests and
+isolated PS5 compiles pass. Console retest of the manifest build passed: the
+loader logged manifest-authorized helpers (87 loads), WSR/NSF/YM/SAP played,
+with no helper/decoder errors and clean destruction
+(`build/ps5-audio-manifest-20261014-2222.kodi.log`).
+
+Next: the user rebuilds Kodi and packages with the four-decoder selector in
+`xbmc/platform/ps5/elf/README.md`, retaining adaptive. Test WSR/NSF metadata,
+playback, stop/replay and track changes, then recheck YM/SAP. The existing
+diagnostic capture remains active. Generated per-add-on helper manifests have
+since been implemented (below). Do not commit
+or push the follow-on work without a request.
+
+The working tree contains the audio decoder follow-on changes.
 Preserve the existing dirty work. The user performs full Kodi builds,
 packaging, deployments and console tests.
 

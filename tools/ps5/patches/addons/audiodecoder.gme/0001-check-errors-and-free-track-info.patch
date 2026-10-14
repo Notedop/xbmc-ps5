@@ -1,0 +1,79 @@
+Check libgme errors and free track info.
+
+gme_track_info() allocates a gme_info_t that must be released with
+gme_free_info(); Init() and ReadTag() never freed it, leaking one per tag
+read and track start. Its return value was ignored too, so an invalid track
+number dereferenced a null info. gme_open_file() and gme_start_track()
+errors are now reported instead of continuing with a half-initialised
+emulator.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.gme.
+
+--- a/src/GMECodec.cpp
++++ b/src/GMECodec.cpp
+@@ -37,8 +37,7 @@
+   if (track > 0)
+     --track;
+ 
+-  gme_open_file(toLoad.c_str(), &ctx.gme, 48000);
+-  if (!ctx.gme)
++  if (gme_open_file(toLoad.c_str(), &ctx.gme, 48000) || !ctx.gme)
+     return false;
+ 
+   channels = 2;
+@@ -46,11 +45,14 @@
+   bitspersample = 16;
+   bitrate = 0.0;
+   format = AUDIOENGINE_FMT_S16NE;
+-  gme_info_t* out;
+-  gme_track_info(ctx.gme, &out, track);
++  gme_info_t* out = nullptr;
++  if (gme_track_info(ctx.gme, &out, track) || !out)
++    return false;
+   totaltime = ctx.len = out->play_length;
++  gme_free_info(out);
+   channellist = {AUDIOENGINE_CH_FL, AUDIOENGINE_CH_FR};
+-  gme_start_track(ctx.gme, track);
++  if (gme_start_track(ctx.gme, track))
++    return false;
+ 
+   return true;
+ }
+@@ -76,12 +78,15 @@
+   const std::string toLoad = kodi::addon::CInstanceAudioDecoder::GetTrack("gme", filename, track);
+ 
+   gme_t* gme = nullptr;
+-  gme_open_file(toLoad.c_str(), &gme, 48000);
+-  if (!gme)
++  if (gme_open_file(toLoad.c_str(), &gme, 48000) || !gme)
+     return false;
+ 
+-  gme_info_t* out;
+-  gme_track_info(gme, &out, track > 0 ? track - 1 : 0);
++  gme_info_t* out = nullptr;
++  if (gme_track_info(gme, &out, track > 0 ? track - 1 : 0) || !out)
++  {
++    gme_delete(gme);
++    return false;
++  }
+   tag.SetTrack(track);
+   tag.SetSamplerate(48000);
+   tag.SetChannels(2);
+@@ -96,6 +101,7 @@
+     tag.SetAlbum(out->game);
+   if (out->comment)
+     tag.SetComment(out->comment);
++  gme_free_info(out);
+   gme_delete(gme);
+   return true;
+ }
+@@ -103,8 +109,7 @@
+ int CGMECodec::TrackCount(const std::string& fileName)
+ {
+   gme_t* gme = nullptr;
+-  gme_open_file(fileName.c_str(), &gme, 48000);
+-  if (!gme)
++  if (gme_open_file(fileName.c_str(), &gme, 48000) || !gme)
+     return 1;
+ 
+   int result = gme_track_count(gme);

@@ -1,0 +1,19 @@
+Free the file buffer when ReadTag() cannot parse the ID666 tag.
+
+The early return leaked a copy of the whole file on every rejected tag read.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.snesapu.
+
+--- a/src/SPCCodec.cpp
++++ b/src/SPCCodec.cpp
+@@ -148,7 +148,10 @@
+ 
+   id666 spcTag{0};
+   if (id666_parse(&spcTag, data, len) != 0)
++  {
++    delete[] data;
+     return false;
++  }
+ 
+   if (!isRSNBaseRead)
+   {

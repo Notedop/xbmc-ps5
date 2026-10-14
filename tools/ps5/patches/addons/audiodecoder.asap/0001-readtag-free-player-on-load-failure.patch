@@ -1,0 +1,17 @@
+Free the ASAP player when ReadTag() cannot load a file.
+
+Directory scans read tags of every file; each file ASAP rejected leaked an
+ASAP player object.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.asap.
+
+--- a/src/ASAPCodec.cpp
++++ b/src/ASAPCodec.cpp
+@@ -107,6 +107,7 @@
+   // Now load the module
+   if (!ASAP_Load(asap, toLoad.c_str(), data, len))
+   {
++    ASAP_Delete(asap);
+     delete[] data;
+     return false;
+   }

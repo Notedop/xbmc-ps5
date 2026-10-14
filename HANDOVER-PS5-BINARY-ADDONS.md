@@ -180,6 +180,121 @@ The working tree contains the audio decoder follow-on changes.
 Preserve the existing dirty work. The user performs full Kodi builds,
 packaging, deployments and console tests.
 
+### Decoder leak fixes and patch series (2026-10-14 late)
+
+The manifest build was committed as `050892e6d8` (not pushed). DUMB and SIDPlay
+then built after small PS5 patches. Console testing of all decoders found:
+
+- A `.sap` folder scan loaded/unloaded ASAP ~2,250 times; a crash during that
+  browsing left no fault record (`b_flight.it` itself plays). This is a known
+  risk; it is not fixed.
+- `.genh` needs vgmstream, which is blocked by TLS.
+- USF (N64): some tracks were silent, then the console crashed with
+  `SYSTEM_WRITE_ADDRESS_WRAPAROUND` in `memset` (`rdi=-1`). The symbolized
+  backtrace runs `Allocate_Memory` <- `usf_startup` <- `CUSFCodec::Init`
+  (`build/ps5-audio-decoders-20261014-2130.log`). Root cause: about 24 MB
+  leaked per track, and `MAP_FAILED` was used as a pointer.
+
+An audit of all 18 decoders found similar leaks or bugs in GSF, OpenMPT,
+Organya, DUMB, SIDPlay, ASAP, HVL, SNESAPU, STSound and WSR. The remaining
+decoders were clean. The fixes are now per-add-on patch series in
+`tools/ps5/patches/addons/<id>/`; that directory's README lists every patch
+with its purpose and upstream status. The series are applied by
+`tools/ps5/apply-patch-series.cmake`, which writes a stamp with each patch's
+hash, applies at fuzz 0 and is idempotent.
+
+Host validation passed:
+
+- The series apply cleanly to fresh tarball extractions and to the existing
+  trees, and are idempotent; a tampered patch is rejected.
+- Reconfiguring applied all 16 patches, and the 11 affected decoders rebuilt
+  with no warnings in the patched files.
+- The 18-decoder staging preflight passes.
+- The adaptive regression test passes.
+
+Packaging all 18 decoders then failed with "LLVM layout leaves no room for PS5
+process parameters". The converter puts about 0x340 bytes of process
+parameters after RELRO, and the linker script only left page-alignment slack
+there. `native-app-reserve-process-parameters.patch`, applied by `package.sh`,
+reserves room for them.
+
+The first version of that patch used a bare `. += 0x1000` gap, and it broke
+every add-on on the console ("original host dynamic metadata missing or
+invalid"). The gap had no file bytes: lld kept the data segment's file offset
+tight, so the converter, which writes the parameters at RELRO's file residue,
+overwrote the preserved original `.dynamic`.
+
+The patch now does three things:
+
+- Reserves a zero-filled PROGBITS section `.ps5.process_param_reserve` in the
+  RELRO segment.
+- Has the converter ignore that section when classifying sections.
+- Makes packaging fail if the parameters would land on another section's file
+  bytes.
+
+Verified on the host: `.dynamic` moved to file offset 0x6048000, and its bytes
+appear unchanged in `eboot.bin`.
+
+The first deploy of that build left the old `eboot.bin` on the console. The
+new file had exactly the same size, and the console clock runs ahead, so
+`lftp mirror` skipped it. `package.sh` now re-sends `eboot.bin` explicitly
+after the mirror.
+
+Console retest (2026-10-14, 23:40–23:50):
+
+- Pass: YM (3 files), AHX/HVL, USF (SM64 title, previously failing tracks,
+  and 10–15 skips), GSF (Advance Wars plus about 10 skips). USF and GSF
+  instances are created and destroyed in balanced numbers; no crash.
+- Tracker modules (`OpenMPT_ModPlug`): all four play, but the shown length
+  does not match playback. Kodi reads tags only from OpenMPT (the only one of
+  the three with `tags="true"`), but plays with the first add-on claiming the
+  extension: ModPlug for `.mod`, DUMB for `.it`/`.xm`/`.s3m`. DUMB never sets
+  a loop-terminate callback, so it loops forever, and its `Seek` is a no-op.
+  This is generic Kodi behaviour, not specific to PS5.
+- Decision: ship only OpenMPT for tracker formats and drop DUMB and ModPlug
+  from `PS5_AUDIO_DECODERS`, which leaves 16 decoders. OpenMPT misses only
+  `.abc`, `.pat` and the gzipped `.itgz`/`.mdgz`/`.s3gz`/`.xmgz`. The DUMB
+  patches stay in the series for upstream.
+
+Further console results: SPC, WSR and SAP pass. GME's `.nsf` (Super Mario
+Bros.) showed wrong lengths: every track reported GME's 150 s default and
+looping tracks never ended. NSF carries no lengths or names; rips keep them in
+a same-named `.m3u`, which the add-on never loaded. The new
+`audiodecoder.gme` series (see the patch README):
+
+- frees track info and checks open/info/start errors;
+- fades looping tracks out over the last 8 s and ends at the track length;
+- restores the 1-based track-number correction for m3u entries (the vendored
+  kode54 libgme snapshot had lost it);
+- loads `<basename>.m3u` through Kodi's VFS for files with more than one
+  track. The vendored libgme declares but does not define
+  `gme_type_multitrack()` and `gme_clear_playlist()`, so the patch uses the
+  raw track count and reopens the file if the playlist is rejected.
+
+Host harness (patched libgme, the SMB rip from the console): 18 tracks with the
+m3u names and lengths (e.g. "Running About" 88 s, "Level Complete" 6 s);
+track 0 fades and ends at 88 s, jingles end at 6 s or earlier. The PS5 build
+of the GME add-on is done; it has not been retested on the console.
+
+### Next session
+
+Batch redeploy with the 16-decoder list (DUMB and ModPlug dropped):
+
+```
+PS5_AUDIO_DECODERS="audiodecoder.2sf audiodecoder.asap audiodecoder.gme audiodecoder.gsf audiodecoder.hvl audiodecoder.ncsf audiodecoder.nosefart audiodecoder.openmpt audiodecoder.organya audiodecoder.qsf audiodecoder.sidplay audiodecoder.snesapu audiodecoder.ssf audiodecoder.stsound audiodecoder.usf audiodecoder.wsr" PS5_ADAPTIVE_TEST=1 PS5_TEST_BINARY_ADDON=1 PS5_HOST=192.168.178.44 PS5_FTP_PORT=2121 cmake --build build/ps5-release --target ps5-title
+```
+
+Then retest:
+
+- the four `OpenMPT_ModPlug` files (length shown vs. played, end of song,
+  seek);
+- SMB `.nsf` (m3u names and lengths, fade-out, jingles end);
+- `.sid` (sidplay) and `.org` (organya), which need sample files;
+- 2SF/NCSF/QSF/SSF if samples are available.
+
+Deferred: upstream PRs for the patch series, `.sap` folder-scan churn, TLS
+decoders (timidity, upse, vgmstream), SACD.
+
 ## 2026-10-14 diagnosis and implementation
 
 - The preserved root `kodi.old.log` is the repeat crash run: thread 102169,

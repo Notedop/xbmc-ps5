@@ -1,0 +1,19 @@
+Free the tune when ReadTag() finds no title.
+
+The empty-title early return leaked the loaded tune on every tag read.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.hvl.
+
+--- a/src/HVLCodec.cpp
++++ b/src/HVLCodec.cpp
+@@ -154,7 +154,10 @@
+ 
+   std::string title = tune->ht_Name;
+   if (title.empty())
++  {
++    hvl_FreeTune(tune);
+     return false;
++  }
+ 
+   tag.SetTitle(title);
+   if (tune->ht_SubsongNr + 1 > 1)

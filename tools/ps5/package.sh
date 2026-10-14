@@ -138,6 +138,7 @@ cp -a "$APP_TEMPLATE/.deps" "$APP/.deps"        # SDK copy incl. libSceAgc/AgcDr
 # The converter still builds its separate Sony metadata for the system loader.
 patch --batch --forward -d "$APP" -p1 < "$ROOT/tools/ps5/patches/native-app-preserve-addon-metadata.patch"
 patch --batch --forward -d "$APP" -p1 < "$ROOT/tools/ps5/patches/native-app-host-runtime-exports.patch"
+patch --batch --forward -d "$APP" -p1 < "$ROOT/tools/ps5/patches/native-app-reserve-process-parameters.patch"
 cat >> "$APP/tooling/native/ps5-pie.ld" <<'LD'
 
 /* The native title has no mapped ELF header; expose its actual image bounds. */
@@ -563,7 +564,10 @@ if [ -n "${PS5_HOST:-}" ]; then
    command -v lftp >/dev/null || {
      echo "!! lftp is required for deployment; install lftp or copy the folder manually" >&2; exit 1; }
    echo "==> uploading to ftp://$PS5_HOST:${PS5_FTP_PORT:-2121}/data/homebrew/$TITLE_ID"
-   lftp -e "set cmd:fail-exit yes; mirror -R --delete --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST' '/data/homebrew/$TITLE_ID'; quit" -p "${PS5_FTP_PORT:-2121}" "$PS5_HOST"
+   # mirror skips files whose size matches and whose remote time is newer. The
+   # console clock can run ahead, and a relayout can keep eboot.bin's size, so
+   # always re-send the eboot explicitly.
+   lftp -e "set cmd:fail-exit yes; mirror -R --delete --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST' '/data/homebrew/$TITLE_ID'; put -O '/data/homebrew/$TITLE_ID' '$DIST/eboot.bin'; quit" -p "${PS5_FTP_PORT:-2121}" "$PS5_HOST"
 fi
 echo
 echo "Title folder: $DIST"

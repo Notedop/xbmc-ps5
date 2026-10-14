@@ -99,6 +99,9 @@ set(BUILD_ARGS -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
 if(CORE_PLATFORM_NAME STREQUAL ps5)
   # Add-on test executables cannot run on the build host or use the title runtime.
   list(APPEND BUILD_ARGS -DBUILD_TESTING=OFF)
+  # With OVERRIDE_PATHS, add-ons that include GNUInstallDirs (e.g. audiodecoder.dumb)
+  # would otherwise cache CMAKE_INSTALL_LIBDIR=lib and install to lib/addons.
+  list(APPEND BUILD_ARGS -DCMAKE_INSTALL_LIBDIR=lib/kodi)
 endif()
 
 if(MSVC)
@@ -445,6 +448,17 @@ foreach(addon ${addons})
               RESULT_VARIABLE ps5_patch_result)
             if(NOT ps5_patch_result EQUAL 0)
               message(FATAL_ERROR "Failed to prepare PS5 inputstream.adaptive source")
+            endif()
+          elseif(CORE_PLATFORM_NAME STREQUAL ps5 AND
+                 IS_DIRECTORY "${CORE_SOURCE_DIR}/tools/ps5/patches/addons/${id}")
+            execute_process(
+              COMMAND ${CMAKE_COMMAND} "-DSOURCE_DIR=${SOURCE_DIR}"
+                      "-DSERIES_DIR=${CORE_SOURCE_DIR}/tools/ps5/patches/addons/${id}"
+                      "-DSERIES_NAME=${id}"
+                      -P "${CORE_SOURCE_DIR}/tools/ps5/apply-patch-series.cmake"
+              RESULT_VARIABLE ps5_patch_result)
+            if(NOT ps5_patch_result EQUAL 0)
+              message(FATAL_ERROR "Failed to prepare PS5 ${id} source")
             endif()
           endif()
 

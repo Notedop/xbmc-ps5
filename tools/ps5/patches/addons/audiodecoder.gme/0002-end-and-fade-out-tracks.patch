@@ -1,0 +1,52 @@
+End tracks when libgme does and fade looping tracks out.
+
+ReadPCM() only stopped at the play length and ignored gme_track_ended(), so
+tracks that end by themselves (jingles, or silence detected by libgme) kept
+playing silence until the 2.5 minute default length. Looping tracks were cut
+off abruptly at the play length; fade them out over its last 8 seconds, as
+libgme's own players do. gme_play() errors now end playback.
+
+Upstream: generic behaviour fix, suitable for xbmc/audiodecoder.gme.
+
+--- a/src/GMECodec.cpp
++++ b/src/GMECodec.cpp
+@@ -10,6 +10,11 @@
+ 
+ #include <kodi/Filesystem.h>
+ 
++namespace
++{
++constexpr int kFadeMs = 8000;
++} // namespace
++
+ CGMECodec::CGMECodec(const kodi::addon::IInstanceInfo& instance) : CInstanceAudioDecoder(instance)
+ {
+ }
+@@ -49,20 +54,25 @@
+   if (gme_track_info(ctx.gme, &out, track) || !out)
+     return false;
+   totaltime = ctx.len = out->play_length;
++  const bool loops = out->loop_length > 0 || out->length <= 0;
+   gme_free_info(out);
+   channellist = {AUDIOENGINE_CH_FL, AUDIOENGINE_CH_FR};
+   if (gme_start_track(ctx.gme, track))
+     return false;
++  // Looping tracks never end by themselves; fade out instead of cutting off.
++  if (loops && ctx.len > 2 * kFadeMs)
++    gme_set_fade(ctx.gme, ctx.len - kFadeMs, kFadeMs);
+ 
+   return true;
+ }
+ 
+ int CGMECodec::ReadPCM(uint8_t* buffer, size_t size, size_t& actualsize)
+ {
+-  if (gme_tell(ctx.gme) >= ctx.len)
++  if (gme_track_ended(ctx.gme) || gme_tell(ctx.gme) >= ctx.len)
+     return AUDIODECODER_READ_EOF;
++  if (gme_play(ctx.gme, size / 2, (short*)buffer))
++    return AUDIODECODER_READ_ERROR;
+   actualsize = size;
+-  gme_play(ctx.gme, size / 2, (short*)buffer);
+   return AUDIODECODER_READ_SUCCESS;
+ }
+ 

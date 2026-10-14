@@ -1,0 +1,31 @@
+Map decimal m3u track numbers to libgme's 0-based tracks.
+
+Decimal track numbers in m3u playlists (NSF,01) are 1-based; hexadecimal ones
+(NSF,$00) are 0-based. The vendored kode54 snapshot commented out the
+decimal adjustment that blargg's libgme applies, so every decimal entry
+played the following song and the last entry failed with "invalid track in
+m3u playlist". Restore the upstream rule: subtract one for decimal tracks
+unless the type uses 0-based decimal numbering (flags_ & 0x02, e.g. KSS),
+and reject the resulting -1 of a decimal track 0 as an invalid track.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.gme (and kode54's
+Game_Music_Emu).
+
+--- a/lib/Game_Music_Emu/gme/Gme_File.cpp
++++ b/lib/Game_Music_Emu/gme/Gme_File.cpp
+@@ -102,11 +102,11 @@
+ 		if ( e.track >= 0 )
+ 		{
+ 			*track_io = e.track;
+-			// TODO: really needs to be removed?
+-			//if ( !(type_->flags_ & 0x02) )
+-			//  *track_io -= e.decimal_track;
++			// Decimal m3u tracks are 1-based unless the type says otherwise.
++			if ( !(type_->flags_ & 0x02) )
++				*track_io -= e.decimal_track;
+ 		}
+-		if ( *track_io >= raw_track_count_ )
++		if ( (unsigned) *track_io >= (unsigned) raw_track_count_ )
+ 			return BLARGG_ERR( BLARGG_ERR_FILE_CORRUPT, "invalid track in m3u playlist" );
+ 	}
+ 	else

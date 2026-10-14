@@ -1,0 +1,108 @@
+Read tags with a local module instead of the playing stream's context.
+
+ReadTag() reopened ctx.file and stored the new module in ctx.module without
+destroying it. Each tag read leaked a whole decoded module and, on an
+instance that is playing, replaced the stream's module and file under it.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.openmpt.
+
+--- a/src/OpenMptCodec.cpp
++++ b/src/OpenMptCodec.cpp
+@@ -90,23 +90,26 @@
+ 
+ bool CMPTCodec::ReadTag(const std::string& filename, kodi::addon::AudioDecoderInfoTag& tag)
+ {
+-  if (!ctx.file.OpenFile(filename, ADDON_READ_CACHED))
++  // Use a local module: ctx belongs to the stream being played.
++  kodi::vfs::CFile file;
++  if (!file.OpenFile(filename, ADDON_READ_CACHED))
+     return false;
+ 
+   static openmpt_stream_callbacks callbacks = {vfs_file_fread, vfs_file_fseek, vfs_file_ftell};
+ 
+-  ctx.module = openmpt_module_create2(callbacks, &ctx.file, nullptr, nullptr, nullptr, nullptr,
+-                                      nullptr, nullptr, nullptr);
+-  if (!ctx.module)
++  openmpt_module* module = openmpt_module_create2(callbacks, &file, nullptr, nullptr,
++                                                  nullptr, nullptr,
++                                                  nullptr, nullptr, nullptr);
++  if (!module)
+     return false;
+ 
+-  const char* ckeys = openmpt_module_get_metadata_keys(ctx.module);
++  const char* ckeys = openmpt_module_get_metadata_keys(module);
+   std::string keys = ckeys;
+   openmpt_free_string(ckeys);
+ 
+   if (keys.find("artist") != std::string::npos)
+   {
+-    const char* text = openmpt_module_get_metadata(ctx.module, "artist");
++    const char* text = openmpt_module_get_metadata(module, "artist");
+     if (text)
+     {
+       tag.SetArtist(text);
+@@ -115,7 +118,7 @@
+   }
+   if (keys.find("title") != std::string::npos)
+   {
+-    const char* text = openmpt_module_get_metadata(ctx.module, "title");
++    const char* text = openmpt_module_get_metadata(module, "title");
+     if (text)
+     {
+       tag.SetTitle(text);
+@@ -124,7 +127,7 @@
+   }
+   if (keys.find("album") != std::string::npos)
+   {
+-    const char* text = openmpt_module_get_metadata(ctx.module, "album");
++    const char* text = openmpt_module_get_metadata(module, "album");
+     if (text)
+     {
+       tag.SetAlbum(text);
+@@ -133,7 +136,7 @@
+   }
+   if (keys.find("year") != std::string::npos)
+   {
+-    const char* text = openmpt_module_get_metadata(ctx.module, "year");
++    const char* text = openmpt_module_get_metadata(module, "year");
+     if (text)
+     {
+       tag.SetReleaseDate(text);
+@@ -142,7 +145,7 @@
+   }
+   if (keys.find("genre") != std::string::npos)
+   {
+-    const char* text = openmpt_module_get_metadata(ctx.module, "genre");
++    const char* text = openmpt_module_get_metadata(module, "genre");
+     if (text)
+     {
+       tag.SetGenre(text);
+@@ -151,7 +154,7 @@
+   }
+   if (keys.find("track number") != std::string::npos)
+   {
+-    const char* text = openmpt_module_get_metadata(ctx.module, "track number");
++    const char* text = openmpt_module_get_metadata(module, "track number");
+     if (text)
+     {
+       tag.SetTrack(atoi(text));
+@@ -160,7 +163,7 @@
+   }
+   if (keys.find("comments") != std::string::npos)
+   {
+-    const char* text = openmpt_module_get_metadata(ctx.module, "comments");
++    const char* text = openmpt_module_get_metadata(module, "comments");
+     if (text)
+     {
+       tag.SetComment(text);
+@@ -170,8 +173,9 @@
+ 
+   tag.SetChannels(2);
+   tag.SetSamplerate(48000);
+-  tag.SetDuration(openmpt_module_get_duration_seconds(ctx.module));
++  tag.SetDuration(openmpt_module_get_duration_seconds(module));
+ 
++  openmpt_module_destroy(module);
+   return true;
+ }
+ 

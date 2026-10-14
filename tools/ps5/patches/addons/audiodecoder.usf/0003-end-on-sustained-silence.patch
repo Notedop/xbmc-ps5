@@ -1,0 +1,81 @@
+End untagged tracks on sustained silence, not on the second silent buffer.
+
+Without a length tag the decoder treated the first all-zero buffer after the
+first round as end of track, which also matches quiet intros and pauses, so
+some tracks stopped immediately. Tracks with a length tag are bounded by
+ReadPCM() already and skip the check. Untagged tracks now end after five
+seconds of continuous silence; the counter resets on seek.
+
+Upstream: behaviour change, suitable for xbmc/audiodecoder.usf.
+
+--- a/src/USFCodec.h
++++ b/src/USFCodec.h
+@@ -60,5 +60,5 @@
+   void ReleaseState();
+   bool CheckEndReached(uint8_t* buffer, int size);
+   USFContext ctx;
+-  bool m_firstRoundDone = false;
++  int64_t m_silentBytes = 0;
+ };
+--- a/src/USFCodec.cpp
++++ b/src/USFCodec.cpp
+@@ -207,7 +207,7 @@
+ {
+   ReleaseState();
+   ctx.pos = 0;
+-  m_firstRoundDone = false;
++  m_silentBytes = 0;
+   ctx.state = new char[usf_get_state_size()];
+   usf_clear(ctx.state);
+   if (psf_load(filename.c_str(), &psf_file_system, 0x21, usf_load, ctx.state, psf_info_meta, &ctx,
+@@ -260,6 +260,7 @@
+     usf_restart(ctx.state);
+     ctx.pos = 0;
+   }
++  m_silentBytes = 0;
+ 
+   int64_t left = time * ctx.sample_rate * 4 / 1000 - ctx.pos;
+   while (left > 4096)
+@@ -300,30 +301,28 @@
+ // In addition, in the libs was no way to get the length, also runs
+ // "usf_render" on without giving a sign reached the end.
+ //
+-// This checks the buffer described by usf, if it is zero, the end has
+-// been reached.
++// Without a length tag, treat sustained silence as the end. A single silent
++// buffer is not enough: it also matches quiet intros and pauses.
+ //
+ bool CUSFCodec::CheckEndReached(uint8_t* buffer, int size)
+ {
+-  if (!m_firstRoundDone)
+-  {
+-    m_firstRoundDone = true;
++  constexpr int64_t endSilenceSeconds = 5;
++
++  // A length tag already bounds playback in ReadPCM().
++  if (ctx.len > 0 || !buffer)
+     return false;
+-  }
+ 
+-  if (buffer && buffer[0] == 0)
++  for (int i = 0; i < size; i++)
+   {
+-    for (int i = 0; i < size; i++)
++    if (buffer[i] != 0)
+     {
+-      if (buffer[i] != 0)
+-      {
+-        return false;
+-      }
++      m_silentBytes = 0;
++      return false;
+     }
+-    return true;
+   }
+ 
+-  return false;
++  m_silentBytes += size;
++  return m_silentBytes >= int64_t{ctx.sample_rate} * 4 * endSilenceSeconds;
+ }
+ 
+ //------------------------------------------------------------------------------

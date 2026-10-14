@@ -1,0 +1,18 @@
+Fix a double free when DUMB cannot open the in-memory file.
+
+dumbfile_mem_status deletes its buffer in its destructor, so the explicit
+delete[] on the dumbfile_open_ex() failure path freed it twice.
+
+Upstream: generic bug, suitable for xbmc/audiodecoder.dumb.
+
+--- a/src/DumbCodec.cpp
++++ b/src/DumbCodec.cpp
+@@ -126,7 +126,7 @@
+   DUMBFILE* f = dumbfile_open_ex(&memdata, &mem_dfs);
+   if (!f)
+   {
+-    delete[] memdata.ptr;
++    // memdata's destructor releases ptr.
+     return false;
+   }
+ 

@@ -26,6 +26,10 @@
 #include "windowing/Resolution.h"
 
 #include <memory>
+#if defined(TARGET_PS5)
+#include <cstdlib>
+#include <cstring>
+#endif
 
 extern "C"
 {
@@ -598,7 +602,19 @@ void CInputStreamAddon::EnableStream(int streamId, bool enable)
   if (!m_ifc.inputstream->toAddon->enable_stream)
     return;
 
+#if defined(TARGET_PS5)
+  const char* enabled = std::getenv("KODI_PS5_ADDON_DEBUG");
+  const bool debug = enabled && enabled[0] != '\0' && std::strcmp(enabled, "0") != 0;
+  if (debug)
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=enable-stream-enter stream={} enable={}",
+              streamId, enable);
+#endif
   m_ifc.inputstream->toAddon->enable_stream(m_ifc.inputstream, streamId, enable);
+#if defined(TARGET_PS5)
+  if (debug)
+    CLog::Log(LOGINFO, "PS5AddonDebug: phase=enable-stream-exit stream={} enable={}",
+              streamId, enable);
+#endif
 }
 
 bool CInputStreamAddon::OpenStream(int streamId)

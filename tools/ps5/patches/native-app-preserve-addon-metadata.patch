@@ -1,0 +1,30 @@
+--- a/tooling/native/sce_module_writer.cpp
++++ b/tooling/native/sce_module_writer.cpp
+@@ -171,6 +171,7 @@
+ bool relro_section(std::string_view name)
+ {
++    return (metadata_section(name) && name != ".dynamic") ||
+-    return name == ".got" || name == ".got.plt" || name.starts_with(".data.rel.ro") ||
++           name == ".got" || name == ".got.plt" || name.starts_with(".data.rel.ro") ||
+            name.starts_with(".preinit_array") || name.starts_with(".init_array") ||
+            name.starts_with(".fini_array");
+ }
+@@ -650,7 +651,7 @@
+ 
+     for (const Section &input : image.sections)
+     {
+-        if (!input.allocated() || input.name == ".dynamic")
++        if (!input.allocated())
+             continue;
+         const std::uint64_t end = input.address + input.size;
+         if (input.executable())
+@@ -852,8 +853,7 @@
+ 
+     for (const Section &input : image.sections)
+     {
+-        if (!input.allocated() || input.no_bits() || metadata_section(input.name) ||
+-            input.name == ".dynamic")
++        if (!input.allocated() || input.no_bits())
+             continue;
+         copy_bytes(output, input.file_offset, input.data);
+     }

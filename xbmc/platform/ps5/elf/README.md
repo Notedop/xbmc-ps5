@@ -1,80 +1,387 @@
 # In-process ELF loader (binary add-ons)
 
-A PS5 title has no system dynamic loader, so binary add-ons (shared objects
-Kodi normally `dlopen`s) cannot be loaded the usual way. The on-console
-`kodi-jitprobe` established that a title *can* execute memory it writes if it
-respects W^X: map a page RW, write code, `mprotect` it R+X, then call. (RWX in
-one step faults; the Sce JIT path returned EINVAL. Route B - RW then +X - is
-the one that works, and is what this loader uses.)
+A PS5 title cannot use Kodi's normal `dlopen` path. `DllLoaderContainer`
+selects `CPS5AddonLoader`, which reads an ELF64 x86-64 shared object, maps its
+segments writable, applies relocations, changes code pages to executable
+(never RWX), runs constructors and resolves the `ADDON_*` entry points.
+Kodi's ordinary add-on API checks and instance lifecycle still apply.
 
-## Status
+Supported relocations are `RELATIVE`, `64`, `GLOB_DAT` and `JUMP_SLOT`.
+TLS and other relocation types are counted but not applied. There is no general
+dependency loader. Use only inspected, trusted test binaries: this is not a
+complete system ELF loader.
 
-- [x] **Memory + relocation core** (`ElfLoader.{h,cpp}`). Maps `PT_LOAD`
-      segments RW, applies `R_X86_64_RELATIVE`, `_64`, `_GLOB_DAT`,
-      `_JUMP_SLOT`, resolves undefined symbols via a host callback, flips code
-      to R+X, runs `DT_INIT`/`DT_INIT_ARRAY`. Verified on the host against a
-      synthetic `.so` exercising every reloc kind, a data global, a
-      host-imported function, and a constructor (all checks pass).
-- [ ] **TLS relocations** (`DTPMOD64`/`DTPOFF64`/`TPOFF64`): counted and
-      reported by `Stats`, not yet applied. Needed for add-ons that use
-      `__thread`. Requires allocating a TLS block and wiring the module id.
-- [x] **Host symbol table** (`HostExports.{h,cpp}` + `tools/ps5-gen-addon-exports.py`).
-      Confirmed add-ons call the host through the `AddonGlobalInterface`
-      function-pointer struct (resolved at `ADDON_Create`), *not* named imports
-      - so the only named symbols an add-on needs from the eboot are the C/C++
-      runtime + libc. The generator turns an add-on's undefined-symbol list into
-      an **assembly** export table (asm can name mangled C++ symbols like
-      `_Znwm`), linked into the eboot so addresses bind at link time - no
-      `--export-dynamic` and no runtime dynsym query needed, and any missing
-      symbol is a link error, not a runtime crash. Verified on the host: an
-      add-on importing `operator new/delete` and `memcpy` binds them to the
-      host's own instances (shared allocator) and runs correctly.
-      `HostExports.cpp` ships a **weak, empty** `g_host_exports` so the eboot
-      links and runs before any add-on table exists (Python needs none). The
-      generated assembly table defines a **strong** `g_host_exports` that
-      overrides it once a binary add-on is built.
-- [x] **Wired into the loader factory** (`PS5AddonLoader.{h,cpp}` +
-      `patches/kodi/0017-ps5-binary-addon-inprocess-loader.patch`).
-      `CPS5AddonLoader` implements `LibraryLoader` over `ps5elf`; the
-      `DllLoaderContainer` factory selects it on PS5 instead of the dlopen
-      `SoLoader`, so `CAddonDll`/`DllAddon` reach it unchanged. It reads the
-      add-on .so, loads+relocates it with the `HostExports` resolver, runs the
-      constructors, and returns `ADDON_*` through `ResolveExport`. Compiles
-      against the real Kodi interfaces; runtime-testable once an add-on .so is
-      cross-built.
-- [ ] **First target**: build `inputstream.adaptive` for the PS5 sysroot and
-      load it through the chain end to end.
+Add-ons call Kodi through the official dev-kit function tables. Their named
+imports are runtime functions/data, not arbitrary Kodi APIs. The host resolver
+uses the running title's relocated imports; having a library in the SDK does
+not make all its symbols available to an add-on. Native title conversion
+encodes dynamic import names as NIDs, unlike the plaintext symbols in the probe.
+Packaging preserves the original LLVM symbol/string/relocation/dynamic tables
+in readable segments for the add-on resolver. The converter still creates its
+separate Sony metadata for the system loader; its process parameters must not
+overwrite the preserved tables. Packaging derives an export policy from the
+SDK's actual libc++/libc++abi/libunwind archive definitions and selected trusted
+add-on imports (`PS5_ADDON_ELFS`, colon-separated `.so` paths). Requested runtime
+symbols are rooted at the final native link so unused archive members are not
+silently omitted. The original dynsym exposes linked functions and data; the
+link also creates ordinary relocated import slots for selected non-archive
+imports that Kodi itself might not otherwise reference (`R_X86_64_64`, zero
+addend). These are not a custom export pointer table: the resolver reads their
+original ELF relocations just like imported GOT entries. The
+resolver uses `image base + st_value`, rejecting undefined, reserved-section,
+hidden, local, TLS and IFUNC entries and preferring strong definitions.
+The 26 hidden C++ pointer bindings have been removed. Allocator/POSIX imports
+prefer the title's exported `__wrap_*` definitions, preserving Kodi's heap and
+wrapper policies rather than bypassing them through libc's GOT.
+`pthread_setspecific` must resolve to the title's `__wrap_pthread_setspecific`.
+Its non-inlined, non-tail-call boundary keeps the system call's return address
+inside the title, whose module is registered with the system loader. This
+preserves the system's real TSD allocation, values, errors and exit destructors;
+it does not implement ELF TLS or register manually mapped images as system modules.
+Packaging fails if a selected add-on imports this function without the wrapper.
+The converter retains these definitions only in the original LLVM tables. Its
+separate Sony tables contain compacted system imports; their relocations are
+reindexed, and relocations to host definitions become local `RELATIVE` entries.
+The old generated `g_host_exports` table and link-time assembly-table design
+are retired.
 
-## Testing
+The native title does not map its ELF file header. Packaging supplies hidden
+image-boundary linker symbols for resolver initialization instead of searching
+backward through memory. The preserved LLVM `_DYNAMIC` metadata uses link-time
+virtual addresses, to which the runtime image base is added. Repackage the title
+after changing this setup; a missing boundary reports a loader error.
 
-The core is host-testable because ELF64/x86-64 relocation logic and
-`mmap`+`mprotect` are identical on the build host and PS5. See the harness in
-the project notes; it loads a synthetic `.so` and checks a computed result.
+On PS5 the loader uses SDK libunwind's `__unw_add_dynamic_eh_frame_section`
+before constructors and `__unw_remove_dynamic_eh_frame_section` on unload.
+Its `__register_frame` registers only a single FDE, not an entire section.
+The Linux/libgcc host path retains `__register_frame`. Emitting `.eh_frame` does not by itself prove
+console exception support: check actual registration and throw/catch results.
+`__cxa_atexit` and `__cxa_finalize` imports bind to the loader's module-owned
+registry, never the process CRT. Registration uses the mapped DSO handle;
+callbacks are removed before invocation, run LIFO, and may register more
+callbacks without a registry lock being held. Explicit DSO finalization is
+idempotent. Unload runs `DT_FINI_ARRAY` in reverse order and `DT_FINI`, then
+drains remaining registrations before removing unwind data and unmapping.
+Uninitialized images do not run finalizers, and constructor exceptions clean
+up the partially initialized image. Finalizer arrays must fit a readable
+segment and their functions must be in executable segments.
+**Before unload, Kodi must destroy all instances and quiesce all add-on
+threads/callbacks.** This is not a mechanism for unloading executing code.
+Process-wide `__cxa_finalize(nullptr)` is deliberately not forwarded to the
+host. Imports of ordinary `atexit` or thread-local destructor registration are
+rejected rather than leaving dangling process/thread-exit callbacks.
 
-## Stage 1 (toolchain probe) + exception handling — DONE (host-verified)
-`tools/ps5-isa-toolchain-probe.sh` builds a C++ .so with prospero-clang
-(exceptions, RTTI, a vtable, a global constructor, operator new/delete) and
-loads it through ps5elf. The loader now **registers the add-on's .eh_frame**
-with libgcc's unwinder in run_init (__register_frame, from the PT_GNU_EH_FRAME
-header), so a C++ exception thrown inside a loaded add-on reaches its own catch
-instead of std::terminate — the first blocker stage 1 surfaced, since
-inputstream.adaptive's JSON parser throws. Host harness result: relocations
-all handled (relative/glob_dat/jump_slot), tls=0, other=0, throw/catch works,
-constructor ran. __deregister_frame on unload.
+Focused Linux/WSL validation (no Kodi build or console):
 
-Next: stage 2, a tiny binary add-on bundled in the title, to prove the
-DllAddon seam and two-way calls on the console.
+```sh
+bash tools/ps5/test-elf-loader.sh
+```
 
-## Import resolution — self-dynsym (final design)
-The generated export-table object was abandoned: the FSELF converter
-(ps5-native-tool) segfaults on ANY added defined-data object in the eboot
-(bisected - a 1 KB blob in the same link slot also crashed it; it was never
-relocations, the symbol name, or a constructor). So nothing is added to the
-link. Instead host_export_resolver (HostExports.cpp) reads the eboot's OWN
-dynamic symbol table at run time - walk _DYNAMIC -> DT_SYMTAB/STRTAB, count via
-DT_HASH nchain or the GNU-hash tail, linear-scan by name - and returns the
-address of the eboot's own copy of each C/C++ runtime symbol the add-on
-imports. No generated object, no new data, nothing for the converter to choke
-on. DT pointers are handled whether link-time (static eboot) or pre-relocated.
-Host-verified against a program's own dynsym; tools/ps5-gen-addon-exports.py
-and host_exports.list are retired.
+It checks repeated init, reverse finalization, two simultaneous modules,
+explicit finalization without double destruction, concurrent registrations
+with threads joined before unload, throwing/catching inside global destructors,
+uninitialized unload, rejected malformed finalizers, constructor-failure
+cleanup after exception destruction, and reload. It uses installed Clang/LLVM, matching the
+loader's LLVM ELF layout (GNU ld's `-nostdlib` output may lack the final
+`.eh_frame` terminator required by libgcc's whole-section registration).
+
+### Worker-thread TSD crash (firmware 9.40)
+
+The direct DASH crash at `libkernel + 0x40fcb` is a null module-record read,
+not an invalid TLS relocation or an established bad pthread key. Matching
+firmware disassembly shows `pthread_setspecific` (`+0x40de0`) calling its
+first-use TSD allocator (`+0x40d10`), which calls `+0x40fa0`. That helper walks
+two caller frames to obtain the add-on return address, looks up its registered
+system module (`+0x34080`), and reads flags at offset `0x70` without checking
+for null. The crash's `rax=0`, fault address `0x70`, and saved add-on frame
+`+0x13ac4a` match this path exactly: the module is manually mapped and unknown
+to the system registry. The libc++ proxy has not called `AdaptiveStream::worker`
+yet. Adjacent key-create/delete and get-specific paths do not use this helper.
+
+The title wrapper fixes the caller boundary using ordinary named imports;
+there are no firmware addresses, module-record offsets or kernel patches in
+the runtime fix. The offsets above document only the diagnosed 9.40 capture.
+Decrypted firmware artifacts remain local under Git-ignored `build/ps5-firmware`.
+
+```sh
+bash tools/ps5/test-pthread-tls.sh
+```
+
+This optimized host regression loads an import-only module with `ElfLoader`.
+It rejects the unwrapped caller as an unregistered image, accepts the wrapped
+caller in the host executable, checks per-thread values, clear/set, unchanged
+error returns, exit destructors and repeated unload/reload, and checks export
+preflight rejection without the wrapper. It also compiles the shim with the
+PS5 SDK. It models caller validation; it does not execute Sony's kernel.
+Console playback remains unproven until a repackaged title is tested.
+Probe version `0.0.5` additionally starts and joins a `std::thread`, checks TSD
+values and its exit destructor before allowing the screensaver PASS marker.
+
+## Isolated test add-on
+
+`addons/test.binary.ps5` is a log-only screensaver called **PS5 Binary Loader
+Test**. It uses the current checkout's `CAddonBase`, `CInstanceScreensaver` and
+`ADDONCREATOR`, not handwritten copies of ABI structures.
+
+Build from the repository root in Linux/WSL:
+
+```sh
+bash tools/ps5/build-test-addon.sh
+```
+
+`PS5_PAYLOAD_SDK` and `BUILD` override the SDK and Kodi build directories.
+The default output is `build/ps5-release/test-addons/test.binary.ps5`.
+No Kodi configure, bootstrap or dependency build is needed for this command.
+
+The script uses the existing SDK compiler and headers with the FreeBSD ABI,
+then links a standard import-only `ET_DYN` using the SDK-selected LLVM linker.
+The SCE compiler driver's legacy `.ctors` and executable linker script are
+not suitable for this loader's `.init_array` shared-object contract.
+No second C++ runtime is embedded.
+
+Preflight checks exports, manifest/API version, constructors, unwind header,
+relocation types, dynamic dependencies and 16 KiB page-rounded segment layout.
+The script prints the runtime imports that must resolve on-console. It retains
+an unstripped `.so`, `elf-report.txt`, input/artifact checksums and a build ID.
+An ELF preflight PASS is not a console runtime PASS.
+
+The probe exercises a static constructor, two-way Kodi callbacks, heap
+allocation/deallocation, virtual dispatch, a C++ exception caught inside the
+add-on, a joined `std::thread` with TSD values and an exit destructor, and the
+real Start/Render/Stop/destruction lifecycle. Noinline boundaries
+keep the heap/vtable/exception checks from being folded away by optimization.
+There are no external assets or graphics calls and no per-frame log spam.
+
+## Opt-in packaging and deployment
+
+After rebuilding Kodi for any loader/diagnostic changes:
+
+```sh
+cmake --build build/ps5-release -j"$(nproc)"
+env -u PS5_HOST PS5_TEST_BINARY_ADDON=1 \
+  cmake --build build/ps5-release --target ps5-title
+touch build/ps5-stage/app/dist/PPSA99420/kodi-addon-debug
+```
+
+Use the same `BUILD` override for the probe and packaging if using a nondefault
+build directory. Packaging requires a complete Kodi build and regenerates
+staging; it is not a data-only incremental upload. `PS5_TEST_BINARY_ADDON`
+defaults to `0`. When set to `1`, packaging rejects missing/modified/stale probe
+outputs before clearing staging, then copies the verified manifest and `.so`
+after Kodi installation. Ordinary packaging does not opt into this hook.
+
+The final title contains:
+
+```text
+PPSA99420/
+  kodi-addon-debug
+  test-binary-addon-build.txt
+  share/kodi/addons/test.binary.ps5/
+    addon.xml
+    test_binary_ps5.so
+```
+
+`test-binary-addon-build.txt` records the build ID and artifact hashes.
+The console sandbox library path is
+`/mnt/sandbox/PPSA99420_000/app0/share/kodi/addons/test.binary.ps5/test_binary_ps5.so`.
+
+Close Kodi completely, upload the finished title using the existing FTP/manual
+workflow to `/data/homebrew/PPSA99420`, restart ShadowMountPlus as usual, then
+launch Kodi. Wait for upload completion before launch.
+
+The marker must be created **after** packaging because staging is regenerated.
+If using `PS5_HOST=...` on the packaging target, its automatic FTP upload happens
+before the `touch` above: upload the marker separately after that upload.
+Mirroring can delete console-only markers. Do not assume that an old marker
+survived, or that placing it in staging before packaging will work.
+
+## Console smoke test
+
+`kodi-addon-debug` enables `KODI_PS5_ADDON_DEBUG` at startup independently of
+`kodi-debug` and video diagnostics. Restart after adding/removing it. Leave
+video diagnostic/comparison switches off for this test.
+
+Capture full startup-to-teardown kernel output and Kodi's file log. The latter
+is `$HOME/.kodi/temp/kodi.log`; use the mounted HOME shown in startup output
+rather than guessing its FTP path. The regular kernel sink is asynchronous and
+bounded, so queued lines may be missing after a crash. Crash-sensitive direct
+diagnostic phase markers help distinguish entry from successful return.
+
+1. Confirm the diagnostic switch and intended title/probe identity.
+2. Find/enable **PS5 Binary Loader Test** in Kodi's screensaver/add-on settings.
+   If absent, inspect the deployed files, dependencies/platform, disabled state
+   and any user-installed shadow copy. Do not reset save data or add-on databases.
+3. Select it under **Settings -> Interface -> Screensaver** and use **Preview**.
+   Discovery and selection alone do not load or execute the binary.
+4. Confirm load/constructor/export/API/create phases and every probe PASS,
+   followed by `first Render` and `STAGE 2 RUNTIME PASS` with the matching build
+   ID. A log-only screensaver has no test image; callbacks are the evidence.
+5. Exit Preview with the controller. Confirm `Stop`, instance/add-on destruction
+   and loader release/unmapping when the reference lifecycle permits it.
+6. Repeat Preview three times, then restart Kodi and repeat once. Look for
+   stable teardown and no accumulating live images.
+7. Remove the marker from both local title and console copy, restart, repeat a
+   preview with diagnostics off, and restore the previous screensaver setting.
+
+A failed mandatory probe reports FAIL and returns a real Create/Start failure.
+Runtime PASS is emitted only after the mandatory checks and first Render;
+it does not replace the later teardown/repeat/restart acceptance criteria.
+After a crash, collect the fault report and full logs before trying again.
+Preserve separate run logs rather than overwriting the only comparison copy.
+
+## Failure triage
+
+| Last successful phase / symptom | Inspect first |
+| --- | --- |
+| Not listed | Final/deployed files, manifest/dependencies, disabled state, shadow copy |
+| Cannot locate/read library | Resolved Kodi path, filename/size/permissions |
+| Mapping/protection failure | errno, actual page size, segment overlap, W^X transition |
+| Unresolved import/relocation | Exact symbol/type/offset, host import encoding/GOT, dependency assumptions |
+| Constructor call does not return | Fault address, module base/load bias, matching unstripped `.so` |
+| API/export rejection | Dev-kit exports and matching global/instance versions |
+| Create/Start failure | Function-table boundary/status and first probe FAIL |
+| Exception terminates | Unwinder imports and actual frame-registration outcome |
+| Exit/repeated-preview failure | Instance lifetime, references/callbacks and unmapping |
+
+For an address in the add-on, subtract the logged load bias and symbolize it
+against that run's unstripped `test_binary_ps5.so`, not a newer rebuilt binary.
+Host/title faults require the matching unstripped native title ELF instead.
+The last asynchronously queued log message alone is not an exact fault site.
+
+## Existing full binary-add-on builder (follow-on)
+
+Kodi already provides the general builder:
+
+```sh
+make -j"$(nproc)" -C tools/depends/target/binary-addons
+```
+
+Its `ADDONS` default is `all`; an initial selected build can use, for example:
+
+```sh
+make -j"$(nproc)" -C tools/depends/target/binary-addons ADDONS=inputstream.adaptive
+```
+
+It uses `cmake/addons`, the configured depends toolchain and add-on definitions,
+not the local smoke probe, which has no definition entry in that system. In this
+workspace the generated depends configuration selects FreeBSD/PS5. That is not
+proof every add-on will compile, meet this loader's constraints, be packaged in
+the title, or run on-console.
+
+The PS5 binary-add-on toolchain uses `CORE_SYSTEM_NAME=freebsd` for supported
+add-on metadata (`library_freebsd` and `<platform>freebsd</platform>), while
+`CORE_PLATFORM_NAME=ps5` identifies the console-specific build. It selects the
+SDK's FreeBSD compiler target and `.init_array` constructors, and links shared
+objects with LLVM lld rather than the SDK's executable linker script. Shared
+links use `-nostdlib`, 16 KiB segment alignment and an unwind program header;
+the add-on imports the title runtime instead of embedding another C++ runtime.
+PS5 add-on test executables are disabled because they cannot run on the build
+host. These settings are in `tools/depends/target/Toolchain_binaddons.cmake.in`;
+an older generated toolchain must be regenerated before rebuilding.
+
+The corrected `inputstream.adaptive` build is not yet a console playback
+milestone. The export/unload mechanism above addresses its named runtime
+imports and global destructor lifetime, but only a new user-built title and
+console tests can establish runtime compatibility. Packaging now rejects
+selected binaries whose strong imports are not safely resolver-visible in
+the final original LLVM dynsym/GOT. This is not a playback or DRM test.
+
+### Next user build/package step: selected adaptive, non-DRM only
+
+Console result (firmware 9.40, 2026-10-14): probe 0.0.5 passed, and direct DASH
+played with sound, including a transition from 1080p to hardware-decoded 4K.
+The first stop froze Kodi after audio shutdown and `Closing stream player 2`;
+a retry on the same deployed build completed decoder release, add-on destruction,
+unwind deregistration and unmapping in about 124 ms. The freeze is intermittent.
+The video buffer-timeout warning occurred in both runs and is not a root cause
+by itself. An instrumented quick-stop freeze subsequently reached adaptive's
+`worker-join-enter` for audio stream 1002 after reader completion and buffer reset,
+without worker exit. Video shutdown had not started.
+
+The worker shutdown patch addresses a cross-thread plain-bool data race and a
+missed-wakeup window: exit is now atomic and published under the state-wait mutex,
+before Reset wakes the segment wait. A second exit check under the download mutex
+prevents buffer access if disposal wins that lock. Worker join and safe unload
+are retained. The logs establish the blocked join, not the worker's exact wait.
+Console acceptance now passes on firmware 9.40: repeated quick stops/replays,
+minute-long runs across Kodi restarts, user-reported seeking/fast-forward/backward
+and pause, and a diagnostics-off run with 1080p -> 4K playback and clean stop.
+The diagnostics-off file log contains no add-on phase markers and confirms
+adaptive destruction and return to the GUI. These are the tested PS5 scenarios,
+not exhaustive cross-platform or live-stream validation. YouTube's local
+manifest HTTP-server connection failure remains a separate issue.
+
+ARTE +7 additionally passed user-reported playback, seeking, pause/resume and
+stop tests. Some programmes reported unavailable streams; their cause has not
+been established.
+
+PS5 binary-addons configuration automatically applies
+`tools/ps5/patches/inputstream-adaptive-ps5.patch` to extracted adaptive sources
+before configuring the add-on. Other platforms/add-ons are untouched. The patch
+combines the shutdown fix and opt-in lifecycle diagnostics and rejects
+incompatible or partially patched sources instead of silently building unpatched
+code. For an existing configured adaptive build, use:
+
+```sh
+bash tools/ps5/build-adaptive-addon.sh
+```
+
+This uses the same idempotent patch applicator as the automatic build integration
+and builds/installs only the existing configured add-on.
+It does not reconfigure the binary-addons wrapper or deploy files.
+`PS5_ADDON_BUILD` selects an alternate configured wrapper.
+`python3 tools/ps5/test-adaptive-worker-shutdown.py` runs a host regression
+checking clean patch application/idempotence/conflict rejection and extracting
+the patched synchronization code, covering both waits, 1000 joined
+workers and the buffer-reset/download-lock race without network downloads.
+Both core and adaptive markers use `KODI_PS5_ADDON_DEBUG`, enabled by the
+automatic staging marker below. Preserve the complete Kodi file log before
+closing a frozen run: `enable-stream-enter/exit` distinguishes the add-on
+callback from `video-close-enter` and `video-drain-enter/exit`.
+`[PS5AdaptiveStop]` markers distinguish download-mutex acquisition, asynchronous
+reader completion, buffer reset, worker join and reader reset. These log only
+lifecycle transitions, not frame or download loops. The existing video-buffer
+timeout alone is not proof of a decoder teardown failure.
+
+From this repository root in Linux/WSL, with the already installed corrected
+adaptive build:
+
+```sh
+bash tools/ps5/build-test-addon.sh
+cmake --build build/ps5-release -j"$(nproc)"
+PS5_ADAPTIVE_TEST=1 PS5_TEST_BINARY_ADDON=1 \
+  PS5_HOST=192.168.178.44 PS5_FTP_PORT=2121 \
+  cmake --build build/ps5-release --target ps5-title
+```
+
+`PS5_ADAPTIVE_TEST=1` selects adaptive exports, stages its installed
+manifest/resources/binary and the direct DASH Python test, and adds the
+`kodi-addon-debug` marker **before automatic upload**. `PS5_ADAPTIVE_PREFIX`
+overrides the installed prefix if needed. Do not disable `PS5_HOST` or manually
+merge files after uploading: packaging regenerates staging. The title-side
+wrapper fix alone needs no adaptive rebuild; the stop diagnostics require the
+instrumented adaptive installed by the helper above. `PS5_ADDON_ELFS` remains
+an exports-only option for other selected add-ons, not an automatic stager.
+
+On-console, first run the version `0.0.5` exception/thread/reload probe, then
+the direct DASH test: actual audio/video for at least 30 seconds, stop, replay,
+clean teardown and restart/replay. Capture
+`phase=host-resolver-wrapped symbol=pthread_setspecific` (a title address, not
+the raw libkernel address), the thread/TSD PASS marker and `phase=finalizers-*`
+diagnostics. Missing
+exports, constructors, API mismatch, worker teardown and playback behavior
+remain real failures to investigate, not reasons to add placeholder symbols.
+`dlopen`/`dlsym`/`dlerror` resolve only to existing title imports; this change
+does not provide a Widevine loader. DRM/Widevine, TLS and general dependencies
+remain unsupported.
+
+The wrapper uses a per-platform `.installed-*` stamp; changing `ADDONS` after a
+completed build does not itself invalidate that stamp. Inspect its generated
+configuration/output and `cmake/addons/.success`/`.failure` records before
+treating completion as success. Its configure recipe also cleans untracked
+files in `cmake/addons`; preserve local work there before using it.
+
+After the smoke test passes on-console, choose one real add-on, audit its
+imports/TLS/relocations/dependencies/API versions, and reuse this builder where
+compatible. Full TLS/dependency support, inputstream playback and
+DRM/Widevine are separate milestones, not consequences of a passing probe.

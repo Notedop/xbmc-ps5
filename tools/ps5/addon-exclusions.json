@@ -1,0 +1,22 @@
+{
+  "audiodecoder.dumb": "Selection policy: OpenMPT owns tracker formats; avoid conflicting metadata and loop/seek behavior.",
+  "audiodecoder.modplug": "Selection policy: OpenMPT owns tracker formats; avoid conflicting format selection and metadata.",
+  "audiodecoder.timidity": "Unsupported ELF/emulated TLS requirements in decoder helpers; no PS5 ELF TLS loader.",
+  "audiodecoder.upse": "Unsupported ELF/emulated TLS requirements; no PS5 ELF TLS loader.",
+  "audiodecoder.vgmstream": "Unsupported ELF/emulated TLS requirements; no PS5 ELF TLS loader.",
+  "screensaver.pingpong": "Console test 2026-10-15: black screen only; excluded pending rendering investigation.",
+  "screensaver.rsxs.busyspheres": "Console test 2026-10-15: runs but is extremely slow; temporarily excluded pending performance investigation.",
+  "screensaver.rsxs.colorfire": "Unsupported emulated TLS import __emutls_v._ThreadRuneLocale; no PS5 ELF TLS loader. GL-only audit misses are separately handled by title export generation.",
+  "screensaver.rsxs.cyclone": "Console test 2026-10-15: SIGBUS after teardown/settings, then very slow on retry; excluded pending investigation.",
+  "screensaver.rsxs.euphoria": "Console test 2026-10-15: black screen only; excluded pending rendering investigation.",
+  "screensaver.rsxs.flocks": "Console test 2026-10-15: slow rendering; excluded pending performance investigation.",
+  "screensaver.rsxs.hufosmoke": "Console test 2026-10-15: slow, barely visible rendering; excluded pending investigation.",
+  "screensaver.rsxs.hufotunnel": "Unsupported emulated TLS import __emutls_v._ThreadRuneLocale; no PS5 ELF TLS loader. GL-only audit misses are separately handled by title export generation.",
+  "screensaver.rsxs.hyperspace": "Console test 2026-10-15: freezes Kodi; excluded pending investigation.",
+  "screensaver.rsxs.lattice": "Console test 2026-10-15: slow rendering; excluded pending performance investigation.",
+  "screensaver.rsxs.matrixview": "Console test 2026-10-15: slow rendering; excluded pending performance investigation.",
+  "screensaver.rsxs.skyrocket": "Console test 2026-10-15: slow rendering; excluded pending performance investigation.",
+  "screensaver.rsxs.solarwinds": "Console test 2026-10-15: slow rendering; excluded pending performance investigation.",
+  "screensaver.rsxs.spirographx": "Console test 2026-10-15: slow rendering; excluded pending performance investigation.",
+  "screensaver.rsxs.sundancer2": "Console test 2026-10-15: slow rendering; excluded pending performance investigation."
+}

@@ -137,6 +137,8 @@ public:
 
   static bool ToUtf8(const std::string& strSourceCharset, const std::string& stringSrc, std::string& utf8StringDst, bool failOnBadChar = false);
 
+  static bool ToUtf8(const std::string& strSourceCharset,const std::u16string& stringSrc,std::string& utf8StringDst, bool failOnBadChar = false);
+
   static bool wToUTF8(const std::wstring& wStringSrc, std::string& utf8StringDst, bool failOnBadChar = false);
 
   /*!

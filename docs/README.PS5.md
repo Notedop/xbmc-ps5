@@ -4,6 +4,9 @@ This branch keeps PS5 integration in tracked Kodi source. Configure does **not**
 copy overlays or apply patch files. This document covers everything needed to
 go from a bare Linux (or WSL) machine to a running PS5 package.
 
+Binary add-on build and console-test results are maintained in the
+[PS5 binary add-on status](PS5-BINARY-ADDONS.md) record.
+
 ## 0. Prerequisites
 
 ### 0.1. Build location (WSL users especially)
@@ -198,6 +201,27 @@ Both targets call `tools/ps5/package.sh`, which uses:
 - `APP_TEMPLATE` (default:
   `build/ps5-external/ps5-opengl/build/native-app/PPSA99005`, i.e.
   `$WORK/ps5-opengl/...` - see 0.2)
+
+Both automatically package installed binary add-ons from Kodi's standard
+`lib/kodi/addons` + `share/kodi/addons` layout, including full manifest resources
+and validated helper libraries. Default install roots are
+`build/ps5-depends-test/x86_64-unknown-freebsd-debug`,
+`build/ps5-audiodecoders/install` and `build/ps5-screensavers/install`.
+No per-category selector is needed; no binary-addons `all` build runs during
+deployment. Use colon-separated `PS5_ADDON_PREFIXES` to replace the default
+roots (an explicitly empty value disables discovery).
+
+Missing default roots are reported; missing explicit roots, duplicate IDs,
+invalid manifests/ELFs and unsafe helper/resource layouts fail. Selection and
+explicit exclusion reasons are recorded in
+`build/ps5-stage/installed-addons-report.json` (preflight copy in the Kodi build
+directory). The maintained registry excludes DUMB/ModPlug by tracker-selection
+policy, Timidity/UPSE/vgmstream for TLS requirements, and RSXS Colorfire/Hufotunnel
+for unsupported emutls imports. The other 29 screensavers are packaging
+candidates, **not console-validated**; their imports now reach export generation.
+See [binary add-on packaging/status](PS5-BINARY-ADDONS.md) for exact defaults,
+legacy overrides, focused tests and limitations. `PS5_ADAPTIVE_TEST=1` is only
+needed for the direct DASH test/debug marker, not ordinary adaptive packaging.
 
 Set `PS5_HOST` to upload the packaged title over FTP using `lftp mirror`.
 Install `lftp` on the build host. Deployment uses three concurrent transfers

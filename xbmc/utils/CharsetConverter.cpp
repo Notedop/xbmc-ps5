@@ -434,7 +434,13 @@ bool CCharsetConverter::CInnerConverter::convert(iconv_t type, int multiplier, c
       else if (errno == EILSEQ) //An invalid multibyte sequence has been encountered in the input
       {
         if (failOnInvalidChar)
+        {
+          CLog::Log(LOGERROR,
+                    "{}: iconv() rejected an invalid sequence (EILSEQ): input bytes={}, "
+                    "consumed={}, remaining={}",
+                    __FUNCTION__, inBufSize, inBufSize - inBytesAvail, inBytesAvail);
           break;
+        }
 
         //skip invalid byte
         inBufStart++;
@@ -446,6 +452,11 @@ bool CCharsetConverter::CInnerConverter::convert(iconv_t type, int multiplier, c
       {
         if (!failOnInvalidChar)
           returnV = 0; /* reset error status to use converted part */
+        else
+          CLog::Log(LOGERROR,
+                    "{}: iconv() rejected an incomplete trailing sequence (EINVAL): "
+                    "input bytes={}, consumed={}, remaining={}",
+                    __FUNCTION__, inBufSize, inBufSize - inBytesAvail, inBytesAvail);
 
         break;
       }
@@ -799,6 +810,15 @@ bool CCharsetConverter::ToUtf8(const std::string& strSourceCharset, const std::s
   }
 
   return CInnerConverter::customConvert(strSourceCharset, "UTF-8", stringSrc, utf8StringDst, failOnBadChar);
+}
+
+bool CCharsetConverter::ToUtf8(const std::string& strSourceCharset,
+                             const std::u16string& stringSrc,
+                             std::string& utf8StringDst,
+                             bool failOnBadChar)
+{
+  return CInnerConverter::customConvert(strSourceCharset, "UTF-8", stringSrc, utf8StringDst,
+                                       failOnBadChar);
 }
 
 bool CCharsetConverter::utf8To(const std::string& strDestCharset, const std::string& utf8StringSrc, std::string& stringDst)

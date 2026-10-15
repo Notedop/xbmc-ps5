@@ -12,49 +12,11 @@ import argparse
 from pathlib import Path
 import re
 import shutil
-import struct
 import xml.etree.ElementTree as ET
+from addon_elf import elf_problems
 
 MANIFEST = "ps5-auxiliaries.list"
-ALLOWED_RELOCATIONS = {1: "64", 6: "GLOB_DAT", 7: "JUMP_SLOT", 8: "RELATIVE"}
 BASENAME = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+-]{0,127}")
-
-
-def elf_problems(path):
-    data = path.read_bytes()
-    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
-        return ["not a little-endian ELF64 file"]
-    e_type, e_machine = struct.unpack_from("<HH", data, 16)
-    e_phoff, e_shoff = struct.unpack_from("<QQ", data, 32)
-    e_phentsize, e_phnum, e_shentsize, e_shnum = struct.unpack_from("<HHHH", data, 54)
-    problems = []
-    if e_type != 3 or e_machine != 62:
-        problems.append("not an x86-64 shared object")
-    for index in range(e_phnum):
-        (p_type,) = struct.unpack_from("<I", data, e_phoff + index * e_phentsize)
-        if p_type == 7:
-            problems.append("contains PT_TLS")
-    if not e_shnum:
-        return problems + ["has no section headers to inspect"]
-    sections = [struct.unpack_from("<IIQQQQIIQQ", data, e_shoff + i * e_shentsize)
-                for i in range(e_shnum)]
-    for _, sh_type, _, _, offset, size, _, _, _, entsize in sections:
-        if sh_type == 6:  # SHT_DYNAMIC
-            for entry in range(size // 16):
-                (tag,) = struct.unpack_from("<q", data, offset + entry * 16)
-                if tag == 1:
-                    problems.append("has DT_NEEDED dependencies")
-                    break
-                if tag == 0:
-                    break
-        elif sh_type == 4:  # SHT_RELA
-            for entry in range(size // (entsize or 24)):
-                (info,) = struct.unpack_from("<Q", data, offset + entry * 24 + 8)
-                kind = info & 0xFFFFFFFF
-                if kind not in ALLOWED_RELOCATIONS:
-                    problems.append(f"unsupported relocation type {kind}")
-                    break
-    return problems
 
 
 parser = argparse.ArgumentParser(description=__doc__)

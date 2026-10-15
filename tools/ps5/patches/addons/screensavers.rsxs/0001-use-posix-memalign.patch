@@ -1,0 +1,28 @@
+Use the POSIX aligned-allocation API on non-Windows, non-macOS targets. The PS5 SDK
+intentionally rejects malloc.h and its libc does not provide memalign; the
+existing 16-byte SSE alignment requirement is preserved with posix_memalign.
+Upstream: Generic portability fix.
+
+--- a/lib/Implicit/impShape.h
++++ b/lib/Implicit/impShape.h
+@@ -29,6 +29,6 @@
+-#if defined(TARGET_DARWIN)
+-#include <stdlib.h>
+-#else
+-#include <malloc.h>
+-#endif
+-#include <xmmintrin.h>
++#if defined(WIN32)
++#include <malloc.h>
++#else
++#include <stdlib.h>
++#endif
++#include <xmmintrin.h>
+@@ -98,3 +98,6 @@
+ #else
+-		return memalign(16, size);
++		void* aligned = nullptr;
++		if (posix_memalign(&aligned, 16, size) != 0)
++			return nullptr;
++		return aligned;
+ #endif

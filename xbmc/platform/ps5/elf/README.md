@@ -20,8 +20,10 @@ Packaging preserves the original LLVM symbol/string/relocation/dynamic tables
 in readable segments for the add-on resolver. The converter still creates its
 separate Sony metadata for the system loader; its process parameters must not
 overwrite the preserved tables. Packaging derives an export policy from the
-SDK's actual libc++/libc++abi/libunwind archive definitions and selected trusted
-add-on imports (`PS5_ADDON_ELFS`, colon-separated `.so` paths). Requested runtime
+SDK's actual libc++/libc++abi/libunwind archive definitions and automatically
+discovered installed add-on imports, including their authorized helpers.
+`PS5_ADDON_ELFS` additionally accepts trusted colon-separated `.so` paths for
+exports only; it is not needed for automatically staged binaries. Requested runtime
 symbols are rooted at the final native link so unused archive members are not
 silently omitted. The original dynsym exposes linked functions and data; the
 link also creates ordinary relocated import slots for selected non-archive
@@ -250,13 +252,41 @@ The last asynchronously queued log message alone is not an exact fault site.
 
 ## Existing full binary-add-on builder (follow-on)
 
-### Selected audio decoder deployment
+See the maintained [PS5 binary add-on status](../../../../docs/PS5-BINARY-ADDONS.md)
+for per-add-on build results, console acceptance and unresolved limitations.
 
-`PS5_AUDIO_DECODERS` selects space-separated decoder IDs from the installed
-prefix `PS5_AUDIO_DECODER_PREFIX` (default `build/ps5-audiodecoders/install`).
-Packaging validates the FreeBSD manifests/binaries, stages resources and binaries,
-and includes the selected imports in title export generation and preflight before
-automatic upload. This is opt-in; it does not build decoders or prove playback.
+### Automatic installed binary add-on deployment
+
+Ordinary `ps5-title` packaging automatically discovers binary manifests in
+`share/kodi/addons` and primary libraries in `lib/kodi/addons` under these roots:
+`build/ps5-depends-test/x86_64-unknown-freebsd-debug`,
+`build/ps5-audiodecoders/install`, and `build/ps5-screensavers/install`.
+`PS5_ADDON_PREFIXES` replaces that list with colon-separated installed prefixes;
+an explicitly empty value disables discovery. There is no recursive scan of
+unrelated depends libraries and no compilation of the binary-addons `all` target.
+Missing default roots are reported, but missing explicit roots fail.
+The manifest ID names the destination; its full resource tree and validated
+primary/helpers are copied together. Duplicate IDs (including across prefixes),
+invalid manifests/ELFs, resource escapes and destination collisions fail.
+
+`tools/ps5/addon-exclusions.json` explicitly records tracker-selection exclusions
+(DUMB/ModPlug), known TLS-blocked decoders (Timidity/UPSE/vgmstream), and emutls
+screensavers (RSXS Colorfire/Hufotunnel). Selection and exclusions are printed
+and recorded in `<BUILD>/installed-addons-report.json` before staging, then
+`<STAGE>/installed-addons-report.json` after staging.
+The 29 other screensavers are packaging candidates only, not console passes.
+Old staged-title GL export misses are not blanket exclusions: the selected GL
+imports produce real link anchors and export names, extracting existing
+`libglapi_bridge.a` definitions through the normal GL dependency group.
+The final original-title import preflight remains mandatory and unchanged.
+
+Unset `PS5_AUDIO_DECODERS` means automatic discovery. An explicit value restricts
+only audio to those space-separated IDs; an empty value excludes all audio.
+Explicit DUMB/ModPlug selection overrides tracker policy, never ELF validation.
+`PS5_AUDIO_DECODER_PREFIX` / `PS5_ADAPTIVE_PREFIX` replace their default roots
+only when the generic prefix list is unset.
+See [the packaging/status record](../../../../docs/PS5-BINARY-ADDONS.md) for details.
+This stages installed artifacts; it does not build add-ons or prove playback.
 
 Installed `lib*.so` companions (excluding symlinks) are staged beside each
 primary and included in the import/export preflight. Staging rejects any
@@ -293,8 +323,11 @@ manifest-authorized helpers.
 Their bundled extended `.m3u` files (`file::TYPE,track,...`) are NEZplug/GME
 syntax that Kodi's playlist parser does not support on any platform.
 
-`python3 tools/ps5/test-stage-audio-decoders.py` checks staging, generated
-manifests, symlink exclusion and TLS/`DT_NEEDED` rejection.
+`python3 tools/ps5/test-stage-installed-addons.py` checks generic discovery,
+manifest-ID mapping, full resources, duplicates, invalid manifests/ELFs,
+exclusions/overrides, helper policy and import-list/export generation.
+`python3 tools/ps5/test-stage-audio-decoders.py` retains the legacy audio checks
+for generated manifests, symlink exclusion and TLS/`DT_NEEDED` rejection.
 The focused loader suite also checks manifest parsing, mapped helper state/pointer relocations,
 optimized tail calls, path restrictions, native handles, concurrent reference
 counts, per-thread errors and parent/helper teardown. Host checks do not prove
@@ -311,9 +344,7 @@ cmake --build build/ps5-release -j"$(nproc)"
 ```
 
 ```sh
-PS5_AUDIO_DECODERS="audiodecoder.asap audiodecoder.stsound audiodecoder.wsr audiodecoder.nosefart" \
-  PS5_ADAPTIVE_TEST=1 PS5_TEST_BINARY_ADDON=1 \
-  PS5_HOST=192.168.178.44 PS5_FTP_PORT=2121 \
+PS5_HOST=192.168.178.44 PS5_FTP_PORT=2121 \
   cmake --build build/ps5-release --target ps5-title
 ```
 
@@ -346,10 +377,10 @@ PS5 add-on test executables are disabled because they cannot run on the build
 host. These settings are in `tools/depends/target/Toolchain_binaddons.cmake.in`;
 an older generated toolchain must be regenerated before rebuilding.
 
-The corrected `inputstream.adaptive` build is not yet a console playback
-milestone. The export/unload mechanism above addresses its named runtime
-imports and global destructor lifetime, but only a new user-built title and
-console tests can establish runtime compatibility. Packaging now rejects
+The corrected `inputstream.adaptive` build subsequently passed the console
+scenarios recorded below; this is not acceptance of every newly merged title.
+The export/unload mechanism addresses its named runtime imports and global
+destructor lifetime. Packaging rejects
 selected binaries whose strong imports are not safely resolver-visible in
 the final original LLVM dynsym/GOT. This is not a playback or DRM test.
 
@@ -431,14 +462,14 @@ PS5_ADAPTIVE_TEST=1 PS5_TEST_BINARY_ADDON=1 \
   cmake --build build/ps5-release --target ps5-title
 ```
 
-`PS5_ADAPTIVE_TEST=1` selects adaptive exports, stages its installed
-manifest/resources/binary and the direct DASH Python test, and adds the
+`PS5_ADAPTIVE_TEST=1` requires adaptive (whose installed manifest/resources/binary
+and exports are now included automatically), stages the direct DASH Python test, and adds the
 `kodi-addon-debug` marker **before automatic upload**. `PS5_ADAPTIVE_PREFIX`
 overrides the installed prefix if needed. Do not disable `PS5_HOST` or manually
 merge files after uploading: packaging regenerates staging. The title-side
 wrapper fix alone needs no adaptive rebuild; the stop diagnostics require the
 instrumented adaptive installed by the helper above. `PS5_ADDON_ELFS` remains
-an exports-only option for other selected add-ons, not an automatic stager.
+an exports-only option for additional trusted binaries, not an automatic stager.
 
 On-console, first run the version `0.0.5` exception/thread/reload probe, then
 the direct DASH test: actual audio/video for at least 30 seconds, stop, replay,

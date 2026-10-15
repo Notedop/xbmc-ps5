@@ -216,6 +216,30 @@ TEST_F(TestCharsetConverter, stringCharsetToUtf8)
   EXPECT_STREQ(refstra1.c_str(), varstra1.c_str());
 }
 
+TEST_F(TestCharsetConverter, ToUtf8Utf16Strict)
+{
+  const std::string inputs[] = {"https://umbrellaplug.github.io", "", "a", "caf\xc3\xa9",
+                               "\xf0\x9f\x98\x80", std::string(2048, 'a')};
+  for (const auto& input : inputs)
+  {
+    SCOPED_TRACE(input.size());
+    std::u16string utf16;
+    ASSERT_TRUE(CCharsetConverter::utf8To("UTF-16LE", input, utf16));
+    std::string output = "previous result";
+    ASSERT_TRUE(CCharsetConverter::ToUtf8("UTF-16LE", utf16, output, true));
+    EXPECT_EQ(input, output);
+  }
+}
+
+TEST_F(TestCharsetConverter, ToUtf8Utf16StrictRejectsUnpairedSurrogate)
+{
+  // An unpaired high surrogate in either byte order.
+  const std::u16string input(1, static_cast<char16_t>(0xd8d8));
+  std::string output = "previous result";
+  EXPECT_FALSE(CCharsetConverter::ToUtf8("UTF-16LE", input, output, true));
+  EXPECT_TRUE(output.empty());
+}
+
 TEST_F(TestCharsetConverter, isValidUtf8_1)
 {
   varstra1.clear();

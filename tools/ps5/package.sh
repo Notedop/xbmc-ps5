@@ -23,9 +23,11 @@
 #   PS5_HOST    console IP for FTP upload (optional)
 #   PS5_DEPLOY_JOBS concurrent FTP uploads (default 3, range 1..8)
 #   PS5_TEST_BINARY_ADDON  1 includes the isolated loader probe (default 0)
-#   PS5_ADAPTIVE_TEST  1 stages adaptive and its direct DASH test (default 0)
-#   PS5_ADAPTIVE_PREFIX  installed adaptive depends prefix (optional)
-#   PS5_AUDIO_DECODERS space-separated audiodecoder IDs to stage (default empty)
+#   PS5_ADDON_PREFIXES colon-separated installed Kodi prefixes (default: depends,
+#                      isolated audio decoders and screensavers; no recursive scan)
+#   PS5_ADAPTIVE_TEST  1 requires adaptive and adds its DASH test (default 0)
+#   PS5_ADAPTIVE_PREFIX  override the default adaptive depends prefix (optional)
+#   PS5_AUDIO_DECODERS explicit legacy audio selection (unset: discover automatically)
 #   PS5_AUDIO_DECODER_PREFIX installed decoder prefix (default isolated audit install)
 #   PS5_ADDON_ELFS  colon-separated trusted installed .so files whose runtime
 #                   archive members must be retained (export policy only)
@@ -55,25 +57,7 @@ esac
 
 PS5_ADAPTIVE_TEST="${PS5_ADAPTIVE_TEST:-0}"
 case "$PS5_ADAPTIVE_TEST" in
-  0) ;;
-  1)
-    ADAPTIVE_PREFIX="${PS5_ADAPTIVE_PREFIX:-$ROOT/build/ps5-depends-test/x86_64-unknown-freebsd-debug}"
-    ADAPTIVE_DATA="$ADAPTIVE_PREFIX/share/kodi/addons/inputstream.adaptive"
-    ADAPTIVE_LIBRARY="$(python3 - "$ADAPTIVE_DATA/addon.xml" <<'PY'
-import os
-import sys
-import xml.etree.ElementTree as ET
-root = ET.parse(sys.argv[1]).getroot()
-extension = root.find("./extension[@point='kodi.inputstream']")
-name = extension.get("library_freebsd", "") if extension is not None else ""
-if not name or name != os.path.basename(name):
-    sys.exit("Adaptive manifest must name a FreeBSD library without a directory")
-print(name)
-PY
-)"
-    ADAPTIVE_ELF="$ADAPTIVE_PREFIX/lib/kodi/addons/inputstream.adaptive/$ADAPTIVE_LIBRARY"
-    [ -f "$ADAPTIVE_ELF" ] || { echo "!! adaptive library missing: $ADAPTIVE_ELF" >&2; exit 1; }
-    ;;
+  0|1) ;;
   *) echo "!! PS5_ADAPTIVE_TEST must be 0 or 1" >&2; exit 1 ;;
 esac
 
@@ -100,15 +84,41 @@ fi
 [ -f "$APP_TEMPLATE/Makefile" ] && [ -d "$APP_TEMPLATE/.deps/native" ] || {
   echo "!! app template not found at $APP_TEMPLATE (build ps5-opengl's imgui-demo first: make -C $WORK/ps5-opengl imgui-demo)"; exit 1; }
 
-AUDIO_DECODER_IDS=()
-AUDIO_DECODER_ELFS=()
-if [ -n "${PS5_AUDIO_DECODERS:-}" ]; then
-  AUDIO_DECODER_PREFIX="${PS5_AUDIO_DECODER_PREFIX:-$ROOT/build/ps5-audiodecoders/install}"
-  read -r -a AUDIO_DECODER_IDS <<< "$PS5_AUDIO_DECODERS"
-  AUDIO_ELF_LIST="$(python3 "$ROOT/tools/ps5/stage-audio-decoders.py" \
-    --prefix "$AUDIO_DECODER_PREFIX" "${AUDIO_DECODER_IDS[@]}")"
-  mapfile -t AUDIO_DECODER_ELFS <<< "$AUDIO_ELF_LIST"
+ADDON_ARGS=()
+ADDON_PREFIXES=()
+if [ "${PS5_ADDON_PREFIXES+x}" = x ]; then
+  if [ -n "$PS5_ADDON_PREFIXES" ]; then
+    [[ "$PS5_ADDON_PREFIXES" != :* && "$PS5_ADDON_PREFIXES" != *: && "$PS5_ADDON_PREFIXES" != *::* ]] || {
+      echo "!! PS5_ADDON_PREFIXES contains an empty prefix" >&2; exit 1; }
+    IFS=: read -r -a ADDON_PREFIXES <<< "$PS5_ADDON_PREFIXES"
+    for prefix in "${ADDON_PREFIXES[@]}"; do
+      [ -d "$prefix" ] || { echo "!! configured add-on prefix missing: $prefix" >&2; exit 1; }
+    done
+  fi
+else
+  ADDON_PREFIXES=(
+    "${PS5_ADAPTIVE_PREFIX:-$ROOT/build/ps5-depends-test/x86_64-unknown-freebsd-debug}"
+    "${PS5_AUDIO_DECODER_PREFIX:-$ROOT/build/ps5-audiodecoders/install}"
+    "$ROOT/build/ps5-screensavers/install"
+  )
 fi
+for prefix in "${ADDON_PREFIXES[@]}"; do
+  ADDON_ARGS+=(--prefix "$prefix")
+done
+if [ "${PS5_AUDIO_DECODERS+x}" = x ]; then
+  ADDON_ARGS+=(--audio-selection "$PS5_AUDIO_DECODERS")
+  read -r -a AUDIO_DECODER_IDS <<< "$PS5_AUDIO_DECODERS"
+  for addon in "${AUDIO_DECODER_IDS[@]}"; do
+    [[ "$addon" =~ ^audiodecoder\.[a-z0-9]+$ ]] || {
+      echo "!! invalid audio decoder ID: $addon" >&2; exit 1; }
+    ADDON_ARGS+=(--include "$addon")
+  done
+fi
+if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
+  ADDON_ARGS+=(--include inputstream.adaptive)
+fi
+python3 "$ROOT/tools/ps5/stage-installed-addons.py" "${ADDON_ARGS[@]}" \
+  --report "$BUILD/installed-addons-report.json" > "$BUILD/installed-addons-elfs.txt"
 
 echo "==> 1. staging Kodi's data into $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
@@ -118,16 +128,16 @@ if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
   bash "$ROOT/tools/ps5/stage-test-addon.sh" "$TEST_ADDON" "$STAGE/app0/share/kodi"
 fi
 if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
-  cp -a "$ADAPTIVE_DATA" "$STAGE/app0/share/kodi/addons/"
-  cp -L "$ADAPTIVE_ELF" "$STAGE/app0/share/kodi/addons/inputstream.adaptive/$ADAPTIVE_LIBRARY"
   cp -a "$ROOT/addons/plugin.video.ps5.adaptive.test" "$STAGE/app0/share/kodi/addons/"
+fi
+ADDON_ELF_LIST="$(python3 "$ROOT/tools/ps5/stage-installed-addons.py" "${ADDON_ARGS[@]}" \
+  --report "$STAGE/installed-addons-report.json" --destination "$STAGE/app0/share/kodi")"
+ADDON_ELFS=()
+if [ -n "$ADDON_ELF_LIST" ]; then
+  mapfile -t ADDON_ELFS <<< "$ADDON_ELF_LIST"
 fi
 
 echo "==> 2. app directory from the demo template"
-if [ "${#AUDIO_DECODER_IDS[@]}" -gt 0 ]; then
-  python3 "$ROOT/tools/ps5/stage-audio-decoders.py" --prefix "$AUDIO_DECODER_PREFIX" \
-    --destination "$STAGE/app0/share/kodi" "${AUDIO_DECODER_IDS[@]}"
-fi
 APP="$STAGE/app"
 mkdir -p "$APP"
 for entry in Makefile assets runtime sce_sys tooling tools include; do
@@ -149,11 +159,6 @@ ASSERT(ADDR(.text) == 0, "PS5 add-on resolver requires zero-based title text")
 LD
 rm -rf "$APP/src" "$APP/vendor" "$APP/build" "$APP/dist"
 mkdir -p "$APP/src" "$APP/vendor"
-ADDON_ELFS=()
-ADDON_ELFS+=("${AUDIO_DECODER_ELFS[@]}")
-if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
-  ADDON_ELFS+=("$ADAPTIVE_ELF")
-fi
 if [ -n "${PS5_ADDON_ELFS:-}" ]; then
   IFS=: read -r -a SELECTED_ADDON_ELFS <<< "$PS5_ADDON_ELFS"
   ADDON_ELFS+=("${SELECTED_ADDON_ELFS[@]}")

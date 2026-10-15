@@ -1,0 +1,16 @@
+Avoid building SOIL2's X11 extension path for PS5. PS5 is targeted as FreeBSD,
+which the upstream SOIL2 probe treats as X11 and consequently includes GLX/Xlib
+headers that are not present on the console. Its SOIL_NO_X11 mode uses the GL
+entry points provided by the title instead.
+Upstream: PS5-only platform integration.
+
+--- a/lib/SOIL2/CMakeLists.txt
++++ b/lib/SOIL2/CMakeLists.txt
+@@ -34,4 +34,7 @@
+ target_include_directories(soil2 PUBLIC ${CMAKE_CURRENT_LIST_DIR}/..)
++if(CORE_PLATFORM_NAME STREQUAL "ps5")
++  target_compile_definitions(soil2 PRIVATE SOIL_NO_X11)
++endif()
+ if(CORE_SYSTEM_NAME STREQUAL darwin_embedded OR CORE_SYSTEM_NAME STREQUAL osx OR CORE_SYSTEM_NAME STREQUAL ios)
+   target_link_libraries(soil2 PUBLIC "-framework CoreFoundation")
+ elseif(OPENGLES_FOUND)

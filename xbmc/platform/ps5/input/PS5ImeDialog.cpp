@@ -168,7 +168,10 @@ CPS5ImeDialog::Outcome CPS5ImeDialog::Open(const std::string& title,
 CPS5ImeDialog::Outcome CPS5ImeDialog::Poll(std::string& text)
 {
     if (!m_initialized)
+    {
+        CLog::Log(LOGERROR, "PS5 IME: cannot poll an uninitialized dialog");
         return Outcome::ERROR;
+    }
 
     const auto status = sceImeDialogGetStatus();
 
@@ -197,36 +200,63 @@ CPS5ImeDialog::Outcome CPS5ImeDialog::Poll(std::string& text)
     }
 
     if (result.endStatus != ImeEndStatus::OK)
+    {
+        CLog::Log(LOGERROR, "PS5 IME: unexpected dialog end status {}",
+                  static_cast<int>(result.endStatus));
         return Outcome::ERROR;
+    }
 
     const auto end = std::find(m_text.begin(), m_text.end(), u'\0');
 
     if (end == m_text.end())
+    {
+        CLog::Log(LOGERROR, "PS5 IME: result has no UTF-16 terminator within {} code units",
+                  m_text.size());
         return Outcome::ERROR;
+    }
 
+    size_t surrogatePairs = 0;
     for (auto it = m_text.begin(); it != end; ++it)
     {
         if (*it >= 0xd800 && *it <= 0xdbff)
         {
             if (++it == end || *it < 0xdc00 || *it > 0xdfff)
             {
+                CLog::Log(LOGERROR,
+                          "PS5 IME: result has an unpaired UTF-16 high surrogate at code unit {}",
+                          it - m_text.begin() - 1);
                 return Outcome::ERROR;
             }
+            ++surrogatePairs;
         }
         else if (*it >= 0xdc00 && *it <= 0xdfff)
         {
+            CLog::Log(LOGERROR,
+                      "PS5 IME: result has an unpaired UTF-16 low surrogate at code unit {}",
+                      it - m_text.begin());
             return Outcome::ERROR;
         }
     }
 
-    const std::string utf16Text(reinterpret_cast<const char*>(m_text.data()),
-                                (end - m_text.begin()) * sizeof(char16_t));
+    // The native IME returns UTF-16LE; Kodi's keyboard result is UTF-8.
+    // Keep 16-bit elements so the converter includes a full UTF-16 terminator.
+    const std::u16string utf16Text(m_text.begin(), end);
+    CLog::Log(LOGDEBUG,
+              "PS5 IME: converting result UTF-16LE -> UTF-8: code units={}, bytes={}, "
+              "surrogate pairs={}, password={}, strict=true",
+              end - m_text.begin(), utf16Text.size() * sizeof(char16_t), surrogatePairs,
+              (m_param.option & SCE_IME_OPTION_PASSWORD) != 0);
     if (!CCharsetConverter::ToUtf8("UTF-16LE", utf16Text, text, true))
     {
-        CLog::Log(LOGERROR, "PS5 IME: invalid result text");
+        CLog::Log(LOGERROR,
+                  "PS5 IME: invalid result text: UTF-16 validation passed, code units={}, "
+                  "bytes={}, surrogate pairs={}, password={}, converter=ToUtf8, strict=true",
+                  end - m_text.begin(), utf16Text.size() * sizeof(char16_t), surrogatePairs,
+                  (m_param.option & SCE_IME_OPTION_PASSWORD) != 0);
         return Outcome::ERROR;
     }
 
+    CLog::Log(LOGDEBUG, "PS5 IME: result converted successfully: UTF-8 bytes={}", text.size());
     return Outcome::CONFIRMED;
 }
 

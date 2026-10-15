@@ -38,7 +38,8 @@ def stage(prefix, destination=None):
     return subprocess.run(command + [ADDON], capture_output=True, text=True)
 
 
-with tempfile.TemporaryDirectory(prefix="ps5-stage-test-") as temp:
+(ROOT / "build").mkdir(exist_ok=True)
+with tempfile.TemporaryDirectory(prefix="ps5-stage-test-", dir=ROOT / "build") as temp:
     temp = Path(temp)
     good = prefix_with(temp / "good", {"libhelper_0.so": [], "libhelper_tag.so": ["-DHELPER_ID=2"]})
     (good / "lib/kodi/addons" / ADDON / "libalias.so").symlink_to("libhelper_0.so")

@@ -44,6 +44,9 @@ Other platforms never see these patches.
 | usf | 0002-report-allocation-failures | `MAP_FAILED` was used as a pointer (`memset(-1)` crash) | yes |
 | usf | 0003-end-on-sustained-silence | untagged tracks stopped on their first quiet buffer | yes |
 | wsr | 0001-report-helper-load-failure | `bool` functions returned -1 (true) when a helper failed to load | yes |
+| screensaver.asterwave | 0001-disable-x11-soil2 | select SOIL2's non-X11 path on PS5 | PS5-only |
+| screensaver.matrixtrails | 0001-disable-x11-soil2 | select SOIL2's non-X11 path on PS5 | PS5-only |
+| screensavers.rsxs | 0001-use-posix-memalign | replace SDK-rejected `malloc.h`/`memalign`, preserving 16-byte alignment | see patch |
 
 `inputstream.adaptive` predates this layout and still uses
 `tools/ps5/patches/inputstream-adaptive-ps5.patch` through

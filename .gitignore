@@ -14,7 +14,7 @@ testMain
 # gedit
 *~
 # CLion
-/.idea
+.idea/
 .vscode/
 # Created in vs2017 when using open folder
 .vs/

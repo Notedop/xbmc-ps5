@@ -219,7 +219,9 @@ CPS5ImeDialog::Outcome CPS5ImeDialog::Poll(std::string& text)
         }
     }
 
-    if (!CCharsetConverter::utf16LEtoUTF8(std::u16string(m_text.begin(), end), text))
+    const std::string utf16Text(reinterpret_cast<const char*>(m_text.data()),
+                                (end - m_text.begin()) * sizeof(char16_t));
+    if (!CCharsetConverter::ToUtf8("UTF-16LE", utf16Text, text, true))
     {
         CLog::Log(LOGERROR, "PS5 IME: invalid result text");
         return Outcome::ERROR;

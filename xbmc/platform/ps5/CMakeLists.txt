@@ -1,4 +1,5 @@
-set(SOURCES CPUInfoPS5.cpp
+set(SOURCES AppDirectory.cpp
+            CPUInfoPS5.cpp
             JitProbe.cpp
             GPUInfoPS5.cpp
             MemUtils.cpp
@@ -9,7 +10,8 @@ set(SOURCES CPUInfoPS5.cpp
             strptime.cpp
             )
 
-set(HEADERS CPUInfoPS5.h
+set(HEADERS AppDirectory.h
+            CPUInfoPS5.h
             JitProbe.h
             GPUInfoPS5.h
             PlatformPS5.h

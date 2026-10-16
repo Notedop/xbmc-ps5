@@ -248,25 +248,45 @@ the remote title directory.
 
 ## 5. Runtime debugging
 
-Optional empty marker files in the deployed title's `app0` directory enable
+Startup requires sandbox escape. Writable data lives under
+`/data/homebrew/kodi-psmc/.kodi`; the escape check creates the HOME directory
+if missing and requires that it can be opened. Startup retains `/app0` before
+escape, then finds its mounted path under `/mnt/sandbox/*/app0` by matching
+device and inode. Missing or ambiguous matches stop startup; no title ID,
+sandbox instance suffix or physical installation directory is assumed.
+Packaged resources, Python and system add-ons use `<resolved app0>/share/kodi`.
+Startup supplies `HOME`,
+`KODI_HOME` and `KODI_BIN_HOME` from these separate locations; the shared POSIX
+settings initialization registers the special paths and creates user directories.
+Python's environment, temporary directory and CA bundle are configured separately.
+
+Marker files are read from `/data/homebrew/kodi-psmc` (the writable HOME root):
+`kodi-debug`,
+`kodi-video-debug` and `kodi-addon-debug` remain in place.
+`kodi-jitprobe` runs once and is removed. `kodi-reset` removes only the writable
+`.kodi` tree before startup; `kodi-uninstall` removes that tree and exits.
+Reset/uninstall markers are removed only after successful deletion. Neither
+operation deletes the packaged title or its resources.
+Markers stay outside `.kodi`, so resetting data does not delete them prematurely.
+The application mount does not need to be writable.
+
+Optional empty marker files in the writable HOME root enable
 diagnostics at startup. Restart Kodi after adding or removing them.
 
 | Marker | Effect |
 |---|---|
 | `kodi-debug` | General Kodi debug logging. |
 | `kodi-video-debug` | Detailed video decoding, frame-content, presentation timing and HDR diagnostics, independently of `kodi-debug`. |
-| `kodi-software-video` | Bypass hardware decoding for VP9 only, using FFmpeg for comparison. |
 
-For example, after packaging, add video diagnostics to the local title folder
-before uploading it:
+For example, create this empty file on the console over FTP:
 
-```bash
-touch build/ps5-stage/app/dist/PPSA99420/kodi-video-debug
+```text
+/data/homebrew/kodi-psmc/kodi-video-debug
 ```
 
-The corresponding console path is
-`/mnt/sandbox/PPSA99420_000/app0/kodi-video-debug`. Diagnostic output goes to
+The application mount is resolved at runtime and logged as `app directory`,
+but is not used for markers. Diagnostic output goes to
 the kernel log alongside Kodi messages. Detailed video diagnostics add work
 to the playback path; leave these markers absent for normal playback. Remove
-comparison/debug markers from both the local title folder and the deployed
-copy when finished, since subsequent deployment mirrors the local folder.
+debug markers from the HOME root when finished. Packaging and deployment do not
+create or remove these user-controlled markers.

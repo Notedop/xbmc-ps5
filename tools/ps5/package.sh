@@ -455,7 +455,7 @@ echo "==> 6. Kodi data into the title folder"
 mkdir -p "$DIST/share"
 cp -a "$STAGE/app0/share/kodi" "$DIST/share/"
 if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
-  touch "$DIST/kodi-addon-debug"
+  echo "==> For adaptive diagnostics, create /data/homebrew/kodi-psmc/kodi-addon-debug on the console."
 fi
 if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
   (cd "$DIST/share/kodi/addons/test.binary.ps5" &&

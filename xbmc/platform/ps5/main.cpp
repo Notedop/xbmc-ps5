@@ -9,6 +9,7 @@
 #include "application/AppEnvironment.h"
 #include "application/AppParamParser.h"
 #include "platform/posix/PlatformPosix.h"
+#include "platform/ps5/AppDirectory.h"
 #include "platform/ps5/BuildStamp.h"
 #include "platform/ps5/JitProbe.h"
 #include "platform/ps5/SandboxPS5.h"
@@ -38,42 +39,9 @@ extern "C" int sceKernelSendNotificationRequest(int device, void* request, std::
                                                int blocking);
 extern "C" int sceSystemServiceLoadExec(const char* path, const char* argv[]);
 
-// The main target does not inherit SQLite's include directory.
-extern "C"
-{
-struct sqlite3_vfs;
-sqlite3_vfs* sqlite3_vfs_find(const char* name);
-}
-
-using SqliteSyscall = void (*)(void);
-struct SqliteVfs
-{
-    int version;
-    int fileSize;
-    int maxPath;
-    void* next;
-    const char* name;
-    void* appData;
-    void* open;
-    void* remove;
-    void* access;
-    void* fullPath;
-    void* dlOpen;
-    void* dlError;
-    void* dlSym;
-    void* dlClose;
-    void* randomness;
-    void* sleep;
-    void* currentTime;
-    void* lastError;
-    void* currentTimeInt64;
-    int (*setSystemCall)(sqlite3_vfs*, const char*, SqliteSyscall);
-};
-
 namespace
 {
 constexpr const char* HOME_PATH = "/data/homebrew/kodi-psmc";
-constexpr const char* TITLE_PATH = "/data/homebrew/PPSA99420";
 
 void Klog(const char* text)
 {
@@ -164,9 +132,9 @@ bool MakeDirs(const std::string& path)
     return true;
 }
 
-bool InitializeEnvironment()
+bool InitializeEnvironment(const std::string& title)
 {
-    const std::string resources = std::string(TITLE_PATH) + "/share/kodi";
+    const std::string resources = title + "/share/kodi";
     const std::string temp = std::string(HOME_PATH) + "/.kodi/temp";
     struct stat st{};
     if (stat((resources + "/userdata").c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
@@ -256,15 +224,15 @@ bool ConsumeSwitch(const std::string& path)
 
 bool ApplySwitches(const std::string& data, bool& uninstall)
 {
-    const std::string title = TITLE_PATH;
-    uninstall = SwitchPresent(title + "/kodi-uninstall");
-    const std::string reset = title + (uninstall ? "/kodi-uninstall" : "/kodi-reset");
+    const std::string home = HOME_PATH;
+    uninstall = SwitchPresent(home + "/kodi-uninstall");
+    const std::string reset = home + (uninstall ? "/kodi-uninstall" : "/kodi-reset");
     if ((uninstall || SwitchPresent(reset)) &&
         (!RemoveDataTree(data) || !ConsumeSwitch(reset)))
         return false;
     if (uninstall)
         return true;
-    const std::string jit = title + "/kodi-jitprobe";
+    const std::string jit = home + "/kodi-jitprobe";
     if (SwitchPresent(jit))
     {
         XBMC_PS5_RunJitProbe();
@@ -278,7 +246,7 @@ bool ApplySwitches(const std::string& data, bool& uninstall)
     };
     for (const auto& [file, variable] : switches)
     {
-        if (SwitchPresent(title + "/" + file) && !SetEnvironment(variable, "1"))
+        if (SwitchPresent(home + "/" + file) && !SetEnvironment(variable, "1"))
             return false;
     }
     return true;
@@ -298,8 +266,14 @@ int main(int argc, char* argv[])
     }
     setlocale(LC_NUMERIC, "C");
     Klogf("[kodi-ps5] build %s\n", KODI_PS5_BUILD_STAMP);
-    if (!OpenSandbox())
-        return ExitRequest(EXIT_FAILURE);
+    std::string title;
+    {
+        KODI::PLATFORM::PS5::AppDirectory appDirectory;
+        if (!appDirectory.IsValid() || !OpenSandbox())
+            return ExitRequest(EXIT_FAILURE);
+        if (!appDirectory.Resolve(title))
+            return ExitRequest(EXIT_FAILURE);
+    }
 
     const std::string data = std::string(HOME_PATH) + "/.kodi";
     bool uninstall = false;
@@ -307,7 +281,7 @@ int main(int argc, char* argv[])
         return ExitRequest(EXIT_FAILURE);
     if (uninstall)
         return ExitRequest(EXIT_SUCCESS);
-    if (!InitializeEnvironment())
+    if (!InitializeEnvironment(title))
         return ExitRequest(EXIT_FAILURE);
 
     std::vector<char*> args(argv, argv + argc);

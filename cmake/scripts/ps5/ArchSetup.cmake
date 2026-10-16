@@ -114,7 +114,7 @@ endif()
 # libiconv_open, so Kodi's calls resolve in libiconv.a instead of binding to
 # the console libc's Unicode-only iconv at run time. -liconv is added by the
 # Iconv::Iconv target Kodi links; it need not be repeated here.
-set(SYSTEM_LDFLAGS -lSceAudioOut -lScePad -lSceUserService -lSceImeDialog -lSceRegMgr -lSceNetCtl -lSceSysmodule
+set(SYSTEM_LDFLAGS -lSceNotification -lSceAudioOut -lScePad -lSceUserService -lSceImeDialog -lSceRegMgr -lSceNetCtl -lSceSysmodule
                    -lSceVideodec2 -lprocstat -lsmb2)
 
 # A static libpython needs the libraries its built-in modules use (Kodi's

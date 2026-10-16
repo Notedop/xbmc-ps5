@@ -6,7 +6,9 @@ set(SOURCES CPUInfoPS5.cpp
             PS5InterfaceForCLog.cpp
             SandboxPS5.cpp
             VideoOutInfo.cpp
-            strptime.cpp)
+            strptime.cpp
+            messaging/Ps5NotificationMessage.cpp
+            )
 
 set(HEADERS CPUInfoPS5.h
             JitProbe.h
@@ -15,9 +17,14 @@ set(HEADERS CPUInfoPS5.h
             PS5InterfaceForCLog.h
             SandboxPS5.h
             VideoOutInfo.h
+            messaging/Ps5NotificationMessage.h
             sce/SceAudioOut.h
             sce/SceImeDialog.h
             sce/ScePad.h
-            sce/SceUserService.h)
+            sce/SceNotifications.h
+            sce/SceUserService.h
+)
 
 core_add_library(platform_ps5)
+
+target_link_libraries(${CORE_LIBRARY} PRIVATE SceNotification)

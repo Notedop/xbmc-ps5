@@ -7,7 +7,6 @@ set(SOURCES CPUInfoPS5.cpp
             SandboxPS5.cpp
             VideoOutInfo.cpp
             strptime.cpp
-            messaging/Ps5NotificationMessage.cpp
             )
 
 set(HEADERS CPUInfoPS5.h
@@ -17,7 +16,6 @@ set(HEADERS CPUInfoPS5.h
             PS5InterfaceForCLog.h
             SandboxPS5.h
             VideoOutInfo.h
-            messaging/Ps5NotificationMessage.h
             sce/SceAudioOut.h
             sce/SceImeDialog.h
             sce/ScePad.h

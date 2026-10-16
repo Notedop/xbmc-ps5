@@ -114,13 +114,6 @@ void CDVDVideoCodecPS5::Register()
 
 bool CDVDVideoCodecPS5::Open(CDVDStreamInfo& hints, CDVDCodecOptions& options)
 {
-  if (hints.codec == AV_CODEC_ID_VP9 && std::getenv("KODI_PS5_SOFTWARE_VIDEO") != nullptr)
-  {
-    CLog::Log(LOGINFO,
-              "CDVDVideoCodecPS5: kodi-software-video comparison: VP9 hardware decoding "
-              "bypassed, using FFmpeg");
-    return false;
-  }
 
   // Dolby Vision profile 5 has no HDR10 base layer: its pictures are in the IPT
   // colour space and need per-frame DV reshaping the PS5 hardware does not do,

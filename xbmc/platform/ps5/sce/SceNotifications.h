@@ -2,5 +2,5 @@
 
 extern "C"
 {
-int sceNotificationSend(int userId, bool bUnknown, const char* jsonPayload);
+int sceNotificationSend(int userId, bool isLogged, const char* jsonPayload);
 }

@@ -25,7 +25,7 @@ extern "C" int sceKernelDebugOutText(int channel, const char* text);
 namespace
 {
 constexpr const char* kRequest = "/download0/etahen_jailbreak";
-constexpr const char* kEscapedTitleRoot = "/mnt/sandbox/PPSA99420_000";
+constexpr const char* kEscapedTitleRoot = "/data/homebrew/kodi-psmc";
 
 void Klog(const char* text)
 {
@@ -90,8 +90,13 @@ void Run()
 
 bool KODI::PLATFORM::PS5::IsSandboxOpen()
 {
-  // In escaped mode the jailed title root remains reachable as a real path.
-  DIR* const rootedTitle = opendir(kEscapedTitleRoot);
+  DIR* rootedTitle = opendir(kEscapedTitleRoot);
+  if (!rootedTitle && errno == ENOENT)
+  {
+    if (mkdir(kEscapedTitleRoot, 0777) != 0 && errno != EEXIST)
+      return false;
+    rootedTitle = opendir(kEscapedTitleRoot);
+  }
   if (!rootedTitle)
     return false;
 

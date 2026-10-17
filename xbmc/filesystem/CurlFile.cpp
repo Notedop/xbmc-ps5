@@ -28,6 +28,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(TARGET_PS5)
+#include <sys/socket.h>
+#endif
+
 #ifdef TARGET_POSIX
 #include <errno.h>
 #include <inttypes.h>
@@ -46,6 +50,26 @@ using namespace XCURL;
 using namespace std::chrono_literals;
 
 #define FITS_INT(a) (((a) <= INT_MAX) && ((a) >= INT_MIN))
+
+#if defined(TARGET_PS5)
+// The 64 KiB default limits high-bitrate streaming. Set this before connecting
+// so TCP can negotiate window scaling; PS5 may clamp the requested size.
+static int ConfigurePS5ReceiveBuffer(void*, curl_socket_t socket, curlsocktype purpose)
+{
+  if (purpose != CURLSOCKTYPE_IPCXN)
+    return CURL_SOCKOPT_OK;
+
+  const int savedErrno = errno;
+  const int requested = 1024 * 1024;
+  if (setsockopt(socket, SOL_SOCKET, SO_RCVBUF, &requested, sizeof(requested)) != 0)
+  {
+    const int error = errno;
+    CLog::Log(LOGWARNING, "PS5 curl: unable to enlarge socket receive buffer: errno={}", error);
+  }
+  errno = savedErrno;
+  return CURL_SOCKOPT_OK;
+}
+#endif
 
 namespace
 {
@@ -526,6 +550,14 @@ void CCurlFile::SetCommonOptions(CReadState* state, bool failOnError /* = true *
   CURL_HANDLE* h = state->m_easyHandle;
 
   g_curlInterface.easy_reset(h);
+
+#if defined(TARGET_PS5)
+  const CURLcode socketCallbackResult =
+      g_curlInterface.easy_setopt(h, CURLOPT_SOCKOPTFUNCTION, ConfigurePS5ReceiveBuffer);
+  if (socketCallbackResult != CURLE_OK)
+    CLog::Log(LOGERROR, "PS5 curl: socket callback setup failed: rc={}",
+              static_cast<int>(socketCallbackResult));
+#endif
 
   g_curlInterface.easy_setopt(h, CURLOPT_DEBUGFUNCTION, debug_callback);
 
@@ -1899,6 +1931,10 @@ int8_t CCurlFile::CReadState::FillBuffer(unsigned int want)
       case CURLM_OK:
       {
 #if defined(TARGET_PS5)
+        // Deliver available data without waiting for another socket event.
+        if (m_buffer.getMaxReadSize() >= want)
+          return FILLBUFFER_OK;
+
         /* select() on a PS5 title does not reliably wake on socket readiness
            (clean-room libc/network layer), so the fdset+select path below runs
            the full timeout on every wait and transfers crawl. curl_multi_wait

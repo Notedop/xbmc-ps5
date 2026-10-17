@@ -319,13 +319,14 @@ void CVideoDec2::FreeDirect(DirectMemory& mem)
 
 int32_t CVideoDec2::LoadModule()
 {
-  // Once per process. After the sandbox is opened (SandboxPS5), a load call
-  // fails with ESDKVERSION even for a loaded module, and a decoder whose
-  // module never finished loading crashes on first use (EVO Player's
-  // findings) - so the module is loaded at start-up, before that.
-  static int32_t result = 1;
-  if (result == 1)
-    result = sceSysmoduleLoadModule(kSysmoduleVideodec2);
+  // main() preloads before sandbox escape. Later callers must not reload:
+  // the loader can reject even an already loaded module after escape.
+  static const int32_t result = []
+  {
+    const int32_t status = sceSysmoduleLoadModule(kSysmoduleVideodec2);
+    Log("[kodi-ps5] video decoder module preload: 0x%08x\n", static_cast<uint32_t>(status));
+    return status;
+  }();
   return result;
 }
 

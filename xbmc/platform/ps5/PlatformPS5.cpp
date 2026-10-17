@@ -41,13 +41,13 @@ bool CPlatformPS5::InitStageOne()
   XFILE::CCurlFile::PreloadCaCertsBlob();
   KODI::PLATFORM::PS5::StartNetworkSelfTest(); // kodi-debug only
 
-  // System modules needed later are loaded now: once the sandbox is opened
-  // (after the first frame, see CWinSystemPS5GLContext), loading them fails.
+  // main() preloads before sandbox escape; these calls return the cached result.
   const int32_t videodec = KODI::PLATFORM::PS5::CVideoDec2::LoadModule();
   if (videodec < 0)
     CLog::Log(LOGWARNING, "CPlatformPS5: video decoder module not loaded ({:#x})",
               static_cast<uint32_t>(videodec));
-  KODI::PLATFORM::PS5::CPS5ImeDialog::Preload(); // the native keyboard (logs itself)
+  if (!KODI::PLATFORM::PS5::CPS5ImeDialog::Preload())
+    CLog::Log(LOGWARNING, "CPlatformPS5: native keyboard module not loaded");
 
   return true;
 }

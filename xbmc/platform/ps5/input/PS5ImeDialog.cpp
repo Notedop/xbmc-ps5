@@ -14,9 +14,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 
 extern "C" {
 int sceSysmoduleLoadModule(uint16_t id);
+int sceKernelDebugOutText(int channel, const char* text);
 }
 
 using namespace KODI::PLATFORM::PS5;
@@ -33,16 +35,13 @@ namespace
             constexpr uint16_t IME_DIALOG_MODULE = 0x0096;
 
             const int result = sceSysmoduleLoadModule(IME_DIALOG_MODULE);
-            if (result != 0)
-            {
-                CLog::Log(LOGERROR,
-                          "PS5 IME: cannot load dialog module: {:#x}",
+            // Preloading runs before Kodi's logger and sandbox escape.
+            char message[128];
+            std::snprintf(message, sizeof(message),
+                          "[kodi-ps5] IME dialog module preload: 0x%08x\n",
                           static_cast<uint32_t>(result));
-                return false;
-            }
-
-            CLog::Log(LOGINFO, "PS5 IME: native dialog module ready");
-            return true;
+            sceKernelDebugOutText(0, message);
+            return result == 0;
         }();
 
         return available;

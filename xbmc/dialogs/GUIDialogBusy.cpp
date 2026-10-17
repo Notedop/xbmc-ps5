@@ -15,6 +15,8 @@
 #include "threads/Thread.h"
 #include "utils/log.h"
 
+#include <system_error>
+
 using namespace std::chrono_literals;
 
 class CBusyWaiter : public CThread
@@ -31,7 +33,15 @@ public:
   {
     std::shared_ptr<CEvent> e_done(m_done);
 
-    Create();
+    try
+    {
+      Create();
+    }
+    catch (const std::system_error& error)
+    {
+      CLog::Log(LOGERROR, "Busy dialog could not start its worker: {}", error.what());
+      return false;
+    }
     auto start = std::chrono::steady_clock::now();
     if (!CGUIDialogBusy::WaitOnEvent(*e_done, displaytime, allowCancel))
     {

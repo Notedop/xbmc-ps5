@@ -13,6 +13,8 @@
 #include "platform/ps5/BuildStamp.h"
 #include "platform/ps5/JitProbe.h"
 #include "platform/ps5/SandboxPS5.h"
+#include "platform/ps5/input/PS5ImeDialog.h"
+#include "platform/ps5/video/VideoDec2.h"
 #include "platform/xbmc.h"
 
 #include <cerrno>
@@ -269,7 +271,12 @@ int main(int argc, char* argv[])
     std::string title;
     {
         KODI::PLATFORM::PS5::AppDirectory appDirectory;
-        if (!appDirectory.IsValid() || !OpenSandbox())
+        if (!appDirectory.IsValid())
+            return ExitRequest(EXIT_FAILURE);
+        // Module loads require the original sandbox, before the jailbreak request.
+        KODI::PLATFORM::PS5::CVideoDec2::LoadModule();
+        KODI::PLATFORM::PS5::CPS5ImeDialog::Preload();
+        if (!OpenSandbox())
             return ExitRequest(EXIT_FAILURE);
         if (!appDirectory.Resolve(title))
             return ExitRequest(EXIT_FAILURE);

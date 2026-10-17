@@ -26,6 +26,7 @@ namespace
 {
 constexpr const char* kRequest = "/download0/etahen_jailbreak";
 constexpr const char* kEscapedTitleRoot = "/data/homebrew/kodi-psmc";
+constexpr const char* kSandboxMnt = "/mnt/sandbox";
 
 void Klog(const char* text)
 {
@@ -90,6 +91,11 @@ void Run()
 
 bool KODI::PLATFORM::PS5::IsSandboxOpen()
 {
+  DIR* sandbox = opendir(kSandboxMnt);
+  if (!sandbox)
+    return false;
+  closedir(sandbox);
+
   DIR* rootedTitle = opendir(kEscapedTitleRoot);
   if (!rootedTitle && errno == ENOENT)
   {

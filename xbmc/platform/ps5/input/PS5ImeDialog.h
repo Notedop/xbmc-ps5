@@ -38,7 +38,7 @@ public:
   void Close();
 
   // Load the IME dialog system module now: once the sandbox has been opened
-  // by the jailbreak daemon (after the first frame), module loads fail.
+  // by the jailbreak daemon, module loads fail. Safe before Kodi logging.
   static bool Preload();
   static bool IsActive();
   static void NotifyInputActivity();

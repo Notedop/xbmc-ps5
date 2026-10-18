@@ -33,14 +33,14 @@ using namespace OVERLAY;
 static void LoadTexture(GLenum target
                       , GLsizei width, GLsizei height, GLsizei stride
                       , GLfloat* u, GLfloat* v
-                      , bool alpha, const GLvoid* pixels)
+                      , bool alpha, const GLvoid* pixels, GLint storageFormat = 0)
 {
   int width2  = width;
   int height2 = height;
   char *pixelVector = NULL;
   const GLvoid *pixelData = pixels;
 
-  GLenum internalFormat = alpha ? GL_RED : GL_RGBA;
+  const GLint internalFormat = storageFormat ? storageFormat : (alpha ? GL_RED : GL_RGBA);
   GLenum externalFormat = alpha ? GL_RED : GL_BGRA;
 
   int bytesPerPixel = KODI::UTILS::GL::glFormatElementByteCount(externalFormat);
@@ -104,7 +104,12 @@ COverlayTextureGL::COverlayTextureGL(const CDVDOverlayImage& o, CRect& rSource)
     std::vector<uint32_t> rgba(o.width * o.height);
     m_pma = !!USE_PREMULTIPLIED_ALPHA;
     convert_rgba(o, m_pma, rgba);
+#if defined(TARGET_PS5)
+    LoadTexture(GL_TEXTURE_2D, o.width, o.height, o.width * 4, &m_u, &m_v, false, rgba.data(),
+                GL_RGBA8);
+#else
     LoadTexture(GL_TEXTURE_2D, o.width, o.height, o.width * 4, &m_u, &m_v, false, rgba.data());
+#endif
   }
 
   glBindTexture(GL_TEXTURE_2D, 0);

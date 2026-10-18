@@ -11,7 +11,6 @@
 #include "platform/posix/PlatformPosix.h"
 #include "platform/ps5/AppDirectory.h"
 #include "platform/ps5/BuildStamp.h"
-#include "platform/ps5/JitProbe.h"
 #include "platform/ps5/SandboxPS5.h"
 #include "platform/ps5/input/PS5ImeDialog.h"
 #include "platform/ps5/video/VideoDec2.h"
@@ -234,13 +233,7 @@ bool ApplySwitches(const std::string& data, bool& uninstall)
         return false;
     if (uninstall)
         return true;
-    const std::string jit = home + "/kodi-jitprobe";
-    if (SwitchPresent(jit))
-    {
-        XBMC_PS5_RunJitProbe();
-        if (!ConsumeSwitch(jit))
-            return false;
-    }
+
     const std::pair<const char*, const char*> switches[] = {
         {"kodi-debug", "KODI_PS5_DEBUG"},
         {"kodi-video-debug", "KODI_PS5_VIDEO_DEBUG"},

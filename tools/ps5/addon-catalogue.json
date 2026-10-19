@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "runtime": "piers-ps5-1",
+  "targets": {
+    "inputstream.adaptive": {
+      "url": "https://github.com/xbmc/inputstream.adaptive", "ref": "Piers",
+      "addons": {"inputstream.adaptive": {"bundled": true, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.2sf": {
+      "url": "https://github.com/xbmc/audiodecoder.2sf", "ref": "Piers",
+      "addons": {"audiodecoder.2sf": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.asap": {
+      "url": "https://github.com/xbmc/audiodecoder.asap", "ref": "Piers",
+      "addons": {"audiodecoder.asap": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.gme": {
+      "url": "https://github.com/xbmc/audiodecoder.gme", "ref": "Piers",
+      "addons": {"audiodecoder.gme": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.gsf": {
+      "url": "https://github.com/xbmc/audiodecoder.gsf", "ref": "Piers",
+      "addons": {"audiodecoder.gsf": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.hvl": {
+      "url": "https://github.com/xbmc/audiodecoder.hvl", "ref": "Piers",
+      "addons": {"audiodecoder.hvl": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.ncsf": {
+      "url": "https://github.com/xbmc/audiodecoder.ncsf", "ref": "Piers",
+      "addons": {"audiodecoder.ncsf": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.nosefart": {
+      "url": "https://github.com/xbmc/audiodecoder.nosefart", "ref": "Piers",
+      "addons": {"audiodecoder.nosefart": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.openmpt": {
+      "url": "https://github.com/xbmc/audiodecoder.openmpt", "ref": "Piers",
+      "addons": {"audiodecoder.openmpt": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.organya": {
+      "url": "https://github.com/xbmc/audiodecoder.organya", "ref": "Piers",
+      "addons": {"audiodecoder.organya": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.qsf": {
+      "url": "https://github.com/xbmc/audiodecoder.qsf", "ref": "Piers",
+      "addons": {"audiodecoder.qsf": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.sidplay": {
+      "url": "https://github.com/xbmc/audiodecoder.sidplay", "ref": "Piers",
+      "addons": {"audiodecoder.sidplay": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.snesapu": {
+      "url": "https://github.com/xbmc/audiodecoder.snesapu", "ref": "Piers",
+      "addons": {"audiodecoder.snesapu": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.ssf": {
+      "url": "https://github.com/xbmc/audiodecoder.ssf", "ref": "Piers",
+      "addons": {"audiodecoder.ssf": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.stsound": {
+      "url": "https://github.com/xbmc/audiodecoder.stsound", "ref": "Piers",
+      "addons": {"audiodecoder.stsound": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.usf": {
+      "url": "https://github.com/xbmc/audiodecoder.usf", "ref": "Piers",
+      "addons": {"audiodecoder.usf": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "audiodecoder.wsr": {
+      "url": "https://github.com/xbmc/audiodecoder.wsr", "ref": "Piers",
+      "addons": {"audiodecoder.wsr": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "screensaver.asteroids": {
+      "url": "https://github.com/xbmc/screensaver.asteroids", "ref": "Piers",
+      "addons": {"screensaver.asteroids": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "screensaver.asterwave": {
+      "url": "https://github.com/xbmc/screensaver.asterwave", "ref": "Piers",
+      "addons": {"screensaver.asterwave": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "screensaver.biogenesis": {
+      "url": "https://github.com/xbmc/screensaver.biogenesis", "ref": "Piers",
+      "addons": {"screensaver.biogenesis": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "screensaver.greynetic": {
+      "url": "https://github.com/xbmc/screensaver.greynetic", "ref": "Piers",
+      "addons": {"screensaver.greynetic": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "screensaver.matrixtrails": {
+      "url": "https://github.com/xbmc/screensaver.matrixtrails", "ref": "Piers",
+      "addons": {"screensaver.matrixtrails": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "screensaver.pyro": {
+      "url": "https://github.com/xbmc/screensaver.pyro", "ref": "Piers",
+      "addons": {"screensaver.pyro": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "screensaver.shadertoy": {
+      "url": "https://github.com/xbmc/screensaver.shadertoy", "ref": "Piers",
+      "addons": {"screensaver.shadertoy": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "screensaver.stars": {
+      "url": "https://github.com/xbmc/screensaver.stars", "ref": "Piers",
+      "addons": {"screensaver.stars": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "screensavers.rsxs": {
+      "url": "https://github.com/xbmc/screensavers.rsxs", "ref": "Piers",
+      "addons": {
+        "screensaver.rsxs.drempels": {"bundled": false, "channel": "testing", "revision": 1},
+        "screensaver.rsxs.feedback": {"bundled": false, "channel": "testing", "revision": 1},
+        "screensaver.rsxs.fieldlines": {"bundled": false, "channel": "testing", "revision": 1},
+        "screensaver.rsxs.flux": {"bundled": false, "channel": "testing", "revision": 1},
+        "screensaver.rsxs.helios": {"bundled": false, "channel": "testing", "revision": 1},
+        "screensaver.rsxs.lorenz": {"bundled": false, "channel": "testing", "revision": 1},
+        "screensaver.microcosm.biof": {"bundled": false, "channel": "testing", "revision": 1},
+        "screensaver.rsxs.plasma": {"bundled": false, "channel": "testing", "revision": 1}
+      }
+    }
+  }
+}

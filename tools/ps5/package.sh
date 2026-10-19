@@ -23,8 +23,10 @@
 #   PS5_HOST    console IP for FTP upload (optional)
 #   PS5_DEPLOY_JOBS concurrent FTP uploads (default 3, range 1..8)
 #   PS5_TEST_BINARY_ADDON  1 includes the isolated loader probe (default 0)
-#   PS5_ADDON_PREFIXES colon-separated installed Kodi prefixes (default: depends,
-#                      isolated audio decoders and screensavers; no recursive scan)
+#   PS5_ADDON_PREFIXES colon-separated installed Kodi prefixes (default: repository
+#                      build-record prefixes, else historical depends/audio/screensavers)
+#                      Only catalogue-bundled add-ons are copied; all whitelisted
+#                      candidate ELFs contribute to the title's runtime exports.
 #   PS5_ADAPTIVE_TEST  1 requires adaptive and adds its DASH test (default 0)
 #   PS5_ADAPTIVE_PREFIX  override the default adaptive depends prefix (optional)
 #   PS5_AUDIO_DECODERS explicit legacy audio selection (unset: discover automatically)
@@ -84,8 +86,9 @@ fi
 [ -f "$APP_TEMPLATE/Makefile" ] && [ -d "$APP_TEMPLATE/.deps/native" ] || {
   echo "!! app template not found at $APP_TEMPLATE (build ps5-opengl's imgui-demo first: make -C $WORK/ps5-opengl imgui-demo)"; exit 1; }
 
-ADDON_ARGS=()
+ADDON_ARGS=(--catalogue "$ROOT/tools/ps5/addon-catalogue.json" --bundled-only)
 ADDON_PREFIXES=()
+ADDON_BUILD_RECORD="$ROOT/build/ps5-addon-repository/work/build-record.json"
 if [ "${PS5_ADDON_PREFIXES+x}" = x ]; then
   if [ -n "$PS5_ADDON_PREFIXES" ]; then
     [[ "$PS5_ADDON_PREFIXES" != :* && "$PS5_ADDON_PREFIXES" != *: && "$PS5_ADDON_PREFIXES" != *::* ]] || {
@@ -95,7 +98,31 @@ if [ "${PS5_ADDON_PREFIXES+x}" = x ]; then
       [ -d "$prefix" ] || { echo "!! configured add-on prefix missing: $prefix" >&2; exit 1; }
     done
   fi
+elif [ -f "$ADDON_BUILD_RECORD" ]; then
+  RECORDED_PREFIXES="$(python3 - "$ADDON_BUILD_RECORD" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+try:
+    record = json.loads(Path(sys.argv[1]).read_text())
+    prefixes = record.get("prefixes") if isinstance(record, dict) else None
+    if not isinstance(prefixes, list) or not prefixes:
+        raise ValueError("prefixes must be a nonempty list of absolute installed paths")
+    for prefix in prefixes:
+        if (not isinstance(prefix, str) or not prefix or "\n" in prefix or "\r" in prefix
+                or not Path(prefix).is_absolute() or not Path(prefix).is_dir()):
+            raise ValueError(f"invalid or missing installed prefix: {prefix!r}")
+        print(prefix)
+except (OSError, ValueError) as error:
+    sys.exit(f"PS5 add-on build record: {error}; rebuild the add-on inventory or set PS5_ADDON_PREFIXES")
+PY
+)"
+  mapfile -t ADDON_PREFIXES <<< "$RECORDED_PREFIXES"
 else
+  echo "!! No repository build record; using historical installed add-on prefixes." >&2
+  echo "!! Before publishing new repository candidates, build/install the full candidate inventory" >&2
+  echo "!! and rebuild this title so prepare/verify-addon-exports cover every candidate ELF." >&2
   ADDON_PREFIXES=(
     "${PS5_ADAPTIVE_PREFIX:-$ROOT/build/ps5-depends-test/x86_64-unknown-freebsd-debug}"
     "${PS5_AUDIO_DECODER_PREFIX:-$ROOT/build/ps5-audiodecoders/install}"
@@ -126,12 +153,25 @@ DESTDIR="$STAGE" cmake --install "$BUILD" >"$STAGE/install.log" 2>&1 || { tail -
 [ -d "$STAGE/app0/share/kodi" ] || { echo "!! install produced no app0/share/kodi"; exit 1; }
 if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
   bash "$ROOT/tools/ps5/stage-test-addon.sh" "$TEST_ADDON" "$STAGE/app0/share/kodi"
+  python3 - "$STAGE/app0/share/kodi/addons/test.binary.ps5/addon.xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+manifest = sys.argv[1]
+tree = ET.parse(manifest)
+platform = tree.find("./extension[@point='xbmc.addon.metadata']/platform")
+if platform is None:
+    sys.exit("PS5 binary loader probe lacks platform metadata")
+platform.text = "ps5"
+tree.write(manifest, encoding="utf-8", xml_declaration=True)
+PY
 fi
 if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
   cp -a "$ROOT/addons/plugin.video.ps5.adaptive.test" "$STAGE/app0/share/kodi/addons/"
 fi
 ADDON_ELF_LIST="$(python3 "$ROOT/tools/ps5/stage-installed-addons.py" "${ADDON_ARGS[@]}" \
-  --report "$STAGE/installed-addons-report.json" --destination "$STAGE/app0/share/kodi")"
+  --report "$STAGE/installed-addons-report.json" --destination "$STAGE/app0/share/kodi" \
+  --system-addons-source "$ROOT/addons")"
 ADDON_ELFS=()
 if [ -n "$ADDON_ELF_LIST" ]; then
   mapfile -t ADDON_ELFS <<< "$ADDON_ELF_LIST"
@@ -188,7 +228,8 @@ cp "$HERE/shims/native-app/libc_extras.c" "$APP/src/"  # libc bits the system li
 cp "$HERE/shims/native-app/libc_posix.c" "$APP/src/"   # POSIX/BSD functions (time, tempfiles, tsearch...)
 cp "$HERE/shims/native-app/libc_locale.c" "$APP/src/"  # C-locale xlocale layer for libc++
 cp "$HERE/shims/native-app/libc_net.c" "$APP/src/"     # getaddrinfo & co on Sony's resolve
-cp "$HERE/shims/native-app/thread_stack.c" "$APP/src/" # >= 1 MiB thread stacks (--wrap=pthread_create)
+cp "$HERE/shims/native-app/libc_socket.c" "$APP/src/"  # Python socket redirects, ahead of SDK libkodishim.a
+cp "$HERE/shims/native-app/thread_stack.c" "$APP/src/" # >= 4 MiB default stacks; explicit attrs unchanged
 cp "$HERE/shims/native-app/pthread_tls.c" "$APP/src/"
 cp "$HERE/shims/native-app/pipe_fallback.c" "$APP/src/" # pipe() via socketpair, fcntl F_SETFD as success (--wrap=pipe, --wrap=fcntl)
 cp "$HERE/shims/native-app/stdio_tee.c" "$APP/src/"    # fd 1/2 -> klog (--wrap=write): Python fatal init errors, aborts
@@ -424,6 +465,33 @@ if [ ! -s "$DIST/eboot.bin" ]; then
 fi
 
 python3 "$ROOT/tools/ps5/verify-addon-exports.py" "$APP/build/llvm-pie.elf" "${ADDON_ELFS[@]}"
+python3 - "$ROOT/tools/ps5" "$APP/build/llvm-pie.elf" <<'PY'
+import hashlib
+import json
+import mmap
+from pathlib import Path
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from addon_catalogue import load_catalogue
+
+elf = Path(sys.argv[2])
+stable_origin = (
+    b"https://raw.githubusercontent.com/Notedop/kodi-ps5-binary-addons/"
+    b"main/repo/piers-ps5-1/stable/")
+with elf.open("rb") as stream:
+    with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as image:
+        if image.find(b"repository.ps5\0") < 0 or image.find(stable_origin + b"\0") < 0:
+            sys.exit("PS5 title lacks the official stable repository registration; regenerate "
+                     "CompileInfo.cpp and rebuild Kodi before packaging a runtime receipt")
+digest = hashlib.sha256()
+with elf.open("rb") as stream:
+    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(chunk)
+receipt = dict(schema=1, runtime=load_catalogue()["runtime"],
+               title_sha256=digest.hexdigest())
+elf.with_name("ps5-addon-runtime.json").write_text(json.dumps(receipt, indent=2) + "\n")
+PY
 
 echo "    imports per system module (first provider in NEEDED order, as the converter binds):"
 python3 - "$APP/build/llvm-pie.elf" "$APP/.deps/native/ps5-payload-sdk/target/lib" "$PS5_PAYLOAD_SDK/bin/llvm-nm" "$APP_TEMPLATE/build/llvm-pie.elf" <<'PY'

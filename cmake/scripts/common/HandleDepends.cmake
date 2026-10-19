@@ -68,7 +68,13 @@ function(add_addon_depends addon searchpath)
           list(APPEND extraflags ${archextraflags})
         endif()
 
-        set(BUILD_ARGS -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
+        set(_depends_prefix_path "${CMAKE_PREFIX_PATH}")
+        set(_depends_externalproject_args)
+        if(CORE_PLATFORM_NAME STREQUAL ps5)
+          string(REPLACE ";" "|" _depends_prefix_path "${_depends_prefix_path}")
+          set(_depends_externalproject_args LIST_SEPARATOR "|")
+        endif()
+        set(BUILD_ARGS "-DCMAKE_PREFIX_PATH=${_depends_prefix_path}"
                        -DOUTPUT_DIR=${OUTPUT_DIR}
                        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
                        -DCMAKE_USER_MAKE_RULES_OVERRIDE=${CMAKE_USER_MAKE_RULES_OVERRIDE}
@@ -232,6 +238,7 @@ function(add_addon_depends addon searchpath)
 
         # prepare the setup of the call to externalproject_add()
         set(EXTERNALPROJECT_SETUP PREFIX ${BUILD_DIR}/${id}
+                                  ${_depends_externalproject_args}
                                   CMAKE_ARGS ${extraflags} ${BUILD_ARGS}
                                   PATCH_COMMAND ${PATCH_COMMAND}
                                   ${INSTALL_COMMAND})
@@ -322,4 +329,3 @@ function(add_addon_depends addon searchpath)
   # make the ${addon}_DEPS variable available to the calling script
   set(${addon}_DEPS "${${addon}_DEPS}" PARENT_SCOPE)
 endfunction()
-

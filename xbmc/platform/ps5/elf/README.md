@@ -418,16 +418,16 @@ PS5 binary-addons configuration automatically applies
 before configuring the add-on. Other platforms/add-ons are untouched. The patch
 combines the shutdown fix and opt-in lifecycle diagnostics and rejects
 incompatible or partially patched sources instead of silently building unpatched
-code. For an existing configured adaptive build, use:
+code. Build adaptive through the maintained repository workflow:
 
 ```sh
-bash tools/ps5/build-adaptive-addon.sh
+python3 tools/ps5/addon-repository.py build --only inputstream.adaptive --jobs 4
 ```
 
-This uses the same idempotent patch applicator as the automatic build integration
-and builds/installs only the existing configured add-on.
-It does not reconfigure the binary-addons wrapper or deploy files.
-`PS5_ADDON_BUILD` selects an alternate configured wrapper.
+This uses the same idempotent patch applicator and rebuilds only that source
+target when its inputs change. It does not deploy files. Follow
+[the binary add-on workflow](../../../../docs/PS5-BINARY-ADDONS.md) for title
+packaging and repository publication.
 `python3 tools/ps5/test-adaptive-worker-shutdown.py` runs a host regression
 checking clean patch application/idempotence/conflict rejection and extracting
 the patched synchronization code, covering both waits, 1000 joined

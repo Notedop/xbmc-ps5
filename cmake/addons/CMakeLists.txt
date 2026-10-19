@@ -82,7 +82,14 @@ endif()
 
 include(${CORE_SOURCE_DIR}/cmake/scripts/common/CompilerSettings.cmake)
 
-set(BUILD_ARGS -DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
+set(_addon_prefix_path "${CMAKE_PREFIX_PATH}")
+set(_addon_externalproject_args)
+if(CORE_PLATFORM_NAME STREQUAL ps5)
+  string(REPLACE ";" "|" _addon_prefix_path "${_addon_prefix_path}")
+  set(_addon_externalproject_args LIST_SEPARATOR "|")
+endif()
+
+set(BUILD_ARGS "-DCMAKE_PREFIX_PATH=${_addon_prefix_path}"
                -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
                -DPACKAGE_CONFIG_PATH=${ADDON_DEPENDS_PATH}/lib/pkgconfig
                -DADDON_DEPENDS_PATH=${ADDON_DEPENDS_PATH}
@@ -469,6 +476,7 @@ foreach(addon ${addons})
           externalproject_add(${id}
                               SOURCE_DIR ${SOURCE_DIR}
                               INSTALL_DIR ${ADDON_INSTALL_DIR}
+                              ${_addon_externalproject_args}
                               CMAKE_ARGS ${BUILD_ARGS})
 
           # add a custom step to the external project between the configure and the build step which will always

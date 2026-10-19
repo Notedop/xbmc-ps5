@@ -69,9 +69,9 @@ endif()
 # where is the target environment
 if(NOT "@use_toolchain@" STREQUAL "")
   if("@target_platform@" STREQUAL "webos")
-    list(APPEND CMAKE_FIND_ROOT_PATH @use_toolchain@/@use_host@/sysroot)
+    list(APPEND CMAKE_FIND_ROOT_PATH "@use_toolchain@/@use_host@/sysroot")
   else()
-    list(APPEND CMAKE_FIND_ROOT_PATH @use_toolchain@/sysroot/usr)
+    list(APPEND CMAKE_FIND_ROOT_PATH "@use_toolchain@/sysroot/usr")
   endif()
 endif()
 
@@ -94,6 +94,8 @@ set(CMAKE_CXX_FLAGS_DEBUG "@platform_cppflags_debug@ @platform_cxxflags_debug@ @
 set(CMAKE_CPP_FLAGS "@platform_cppflags@ @platform_includes@")
 set(CMAKE_EXE_LINKER_FLAGS "@platform_ldflags@")
 if(OS STREQUAL ps5)
+  # SDK wrappers do not provide clang-scan-deps; these add-ons use no C++ modules.
+  set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
   execute_process(COMMAND "@use_toolchain@/bin/prospero-llvm-config" --bindir
                   OUTPUT_VARIABLE PS5_LLVM_BINDIR OUTPUT_STRIP_TRAILING_WHITESPACE
                   RESULT_VARIABLE PS5_LLVM_RESULT)

@@ -98,6 +98,12 @@ std::vector<ADDON::RepoInfo> CCompileInfo::LoadOfficialRepoInfos()
     officialRepoInfos.emplace_back(newRepoInfo);
   }
 
+#if defined(TARGET_PS5)
+  officialRepoInfos.push_back(
+      {"repository.ps5",
+       "https://raw.githubusercontent.com/Notedop/kodi-ps5-binary-addons/main/repo/piers-ps5-1/stable/"});
+#endif
+
   return officialRepoInfos;
 }
 

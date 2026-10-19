@@ -30,4 +30,24 @@ set(CMAKE_CXX_STANDARD @CMAKE_CXX_STANDARD@)
 set(CMAKE_CXX_STANDARD_REQUIRED @CMAKE_CXX_STANDARD_REQUIRED@)
 set(CMAKE_CXX_EXTENSIONS @CMAKE_CXX_EXTENSIONS@)
 
+if("@CORE_PLATFORM_NAME@" STREQUAL "ps5")
+  # Add-ons import GL from the title, never from the SDK's shared OSMesa library.
+  find_path(OPENGL_INCLUDE_DIR NAMES GL/gl.h)
+  if(NOT OPENGL_INCLUDE_DIR)
+    message(FATAL_ERROR "PS5 add-ons require OpenGL headers")
+  endif()
+  if(NOT TARGET @APP_NAME_LC@::OpenGl)
+    add_library(@APP_NAME_LC@::OpenGl INTERFACE IMPORTED GLOBAL)
+    set_target_properties(@APP_NAME_LC@::OpenGl PROPERTIES
+                          INTERFACE_INCLUDE_DIRECTORIES "${OPENGL_INCLUDE_DIR}"
+                          INTERFACE_COMPILE_DEFINITIONS HAS_GL=1)
+  endif()
+  # Also satisfy add-on-local FindOpenGl modules using the legacy variables.
+  set(OPENGL_gl_LIBRARY @APP_NAME_LC@::OpenGl)
+  set(OPENGL_LIBRARIES @APP_NAME_LC@::OpenGl)
+  set(OPENGL_INCLUDE_DIRS "${OPENGL_INCLUDE_DIR}")
+  set(OPENGL_DEFINITIONS -DHAS_GL=1)
+  set(OPENGL_FOUND TRUE)
+endif()
+
 include(AddonHelpers)

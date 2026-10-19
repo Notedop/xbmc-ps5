@@ -841,6 +841,8 @@ bool CAddonInfoBuilder::PlatformSupportsAddon(const AddonInfoPtr& addon)
 #else
     #warning no architecture dependant platform tag
 #endif
+#elif defined(TARGET_PS5)
+    "ps5",
 #elif defined(TARGET_FREEBSD)
     "freebsd",
 #elif defined(TARGET_LINUX)

@@ -10,10 +10,14 @@
  */
 #include <errno.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/filio.h>   /* FIONBIO */
 #include <stdarg.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 typedef struct SceNetSockaddr
 {
@@ -72,27 +76,58 @@ static void sce_log(const char* call, int se)
   b[i++]='\n'; b[i]=0;
   sceKernelDebugOutText(0, b);
 }
-static int sce_fail_tagged(const char* call)
+static int sce_errno(void)
 {
   int* e = sceNetErrnoLoc();
-  int se = e ? *e : 0;
+  return e ? *e : 0;
+}
+/* sceNet reports FreeBSD errno numbers (the SDK's <sys/errno.h>), either bare
+   (0x31 = EADDRNOTAVAIL) or as an 0x804101xx code; pass them through. */
+static int errno_from_sce(int se)
+{
+  unsigned v = (unsigned)se;
+  if ((v & 0xffffff00u) == 0x80410100u)
+    v &= 0xffu;
+  if (v >= 1 && v <= ELAST)
+    return (int)v;
+  return se ? EIO : ECONNREFUSED;
+}
+static int sce_fail_tagged(const char* call)
+{
+  int se = sce_errno();
   sce_log(call, se);
-  switch (se & 0xff)
-  {
-    case 0x20: errno = EPIPE; break;
-    case 0x23: errno = EWOULDBLOCK; break;
-    case 0x24: errno = EINPROGRESS; break;
-    case 0x25: errno = EALREADY; break;
-    case 0x28: errno = EISCONN; break;
-    case 0x27: errno = ENOTCONN; break;
-    case 0x3d: errno = ECONNRESET; break;
-    case 0x3e: errno = ECONNREFUSED; break;
-    case 0x40: errno = ETIMEDOUT; break;
-    default:   errno = se ? EIO : ECONNREFUSED; break;
-  }
+  errno = errno_from_sce(se);
   return -1;
 }
-static int sce_fail(void) { return sce_fail_tagged("?"); }
+
+static void format_dest(const struct sockaddr* sa, unsigned int len, char* out, size_t size)
+{
+  char host[INET6_ADDRSTRLEN];
+  if (!sa || len < 2)
+  {
+    snprintf(out, size, "family=? len=%u", len);
+    return;
+  }
+  int family = sa->sa_family;
+  if (family == AF_INET && len >= sizeof(struct sockaddr_in))
+  {
+    const struct sockaddr_in* sin = (const struct sockaddr_in*)sa;
+    if (!inet_ntop(AF_INET, &sin->sin_addr, host, sizeof(host)))
+      snprintf(host, sizeof(host), "<invalid>");
+    snprintf(out, size, "family=AF_INET addr=%s port=%u len=%u", host,
+             (unsigned)ntohs(sin->sin_port), len);
+  }
+  else if (family == AF_INET6 && len >= sizeof(struct sockaddr_in6))
+  {
+    const struct sockaddr_in6* sin6 = (const struct sockaddr_in6*)sa;
+    if (!inet_ntop(AF_INET6, &sin6->sin6_addr, host, sizeof(host)))
+      snprintf(host, sizeof(host), "<invalid>");
+    snprintf(out, size, "family=AF_INET6 addr=%s port=%u len=%u", host,
+             (unsigned)ntohs(sin6->sin6_port), len);
+  }
+  else
+    snprintf(out, size, "family=%d len=%u", family, len);
+}
 
 static int to_sce(const struct sockaddr* sa, unsigned int len, SceNetSockaddr* out, int* outlen)
 {
@@ -126,27 +161,60 @@ int ps5_socket(int domain, int type, int protocol)
   {
     return sce_fail_tagged("socket");
   }
+  int saved_errno = errno;
+  char message[160];
+  snprintf(message, sizeof(message),
+           "[kodi-ps5] pysock socket fd=%d family=%d type=%d bare_type=%d protocol=%d\n",
+           s, domain, type, bare_type, protocol);
+  sceKernelDebugOutText(0, message);
+  errno = saved_errno;
   return s;
 }
 int ps5_close(int fd)
 {
-  return sceNetSocketClose(fd) < 0 ? sce_fail() : 0;
+  return sceNetSocketClose(fd) < 0 ? sce_fail_tagged("close") : 0;
 }
 int ps5_connect(int s, const struct sockaddr* addr, unsigned int len)
 {
   SceNetSockaddr sa; int sl;
-  if (to_sce(addr, len, &sa, &sl)) { errno = EINVAL; return -1; }
-  return sceNetConnect(s, &sa, sl) < 0 ? sce_fail_tagged("connect") : 0;
+  char dest[128];
+  char message[256];
+  if (to_sce(addr, len, &sa, &sl))
+  {
+    format_dest(addr, len, dest, sizeof(dest));
+    snprintf(message, sizeof(message),
+             "[kodi-ps5] pysock connect fd=%d %s: address does not fit SceNetSockaddr\n", s, dest);
+    sceKernelDebugOutText(0, message);
+    errno = EINVAL;
+    return -1;
+  }
+  if (sceNetConnect(s, &sa, sl) >= 0)
+    return 0;
+  int se = sce_errno(); /* before any other sceNet call can replace it */
+  int err = errno_from_sce(se);
+  sce_log("connect", se);
+  int type = 0;
+  int type_len = (int)sizeof(type);
+  int type_ok = sceNetGetsockopt(s, SOL_SOCKET, SO_TYPE, &type, &type_len) >= 0;
+  format_dest(addr, len, dest, sizeof(dest));
+  snprintf(message, sizeof(message),
+           "[kodi-ps5] pysock connect fd=%d type=%s %s: sce=0x%08x errno=%d\n", s,
+           !type_ok ? "?" : type == SOCK_DGRAM ? "SOCK_DGRAM"
+                                : type == SOCK_STREAM ? "SOCK_STREAM" : "other",
+           dest, (unsigned)se, err);
+  sceKernelDebugOutText(0, message);
+  errno = err;
+  return -1;
 }
 int ps5_bind(int s, const struct sockaddr* addr, unsigned int len)
 {
   SceNetSockaddr sa; int sl;
   if (to_sce(addr, len, &sa, &sl)) { errno = EINVAL; return -1; }
-  return sceNetBind(s, &sa, sl) < 0 ? sce_fail() : 0;
+  return sceNetBind(s, &sa, sl) < 0 ? sce_fail_tagged("bind") : 0;
 }
 int ps5_listen(int s, int backlog)
 {
-  return sceNetListen(s, backlog) < 0 ? sce_fail() : 0;
+  return sceNetListen(s, backlog) < 0 ? sce_fail_tagged("listen") : 0;
 }
 long ps5_sendto(int s, const void* buf, unsigned long len, int flags, const struct sockaddr* to, unsigned int tolen)
 {
@@ -178,23 +246,23 @@ int ps5_setsockopt(int s, int level, int opt, const void* val, unsigned int len)
 int ps5_getsockopt(int s, int level, int opt, void* val, unsigned int* len)
 {
   int l = (int)*len; int r = sceNetGetsockopt(s, level, opt, val, &l); *len = (unsigned int)l;
-  return r < 0 ? sce_fail() : 0;
+  return r < 0 ? sce_fail_tagged("getsockopt") : 0;
 }
 int ps5_getsockname(int s, struct sockaddr* name, unsigned int* len)
 {
   SceNetSockaddr sa; int l = (int)sizeof sa;
-  if (sceNetGetsockname(s, &sa, &l) < 0) return sce_fail();
+  if (sceNetGetsockname(s, &sa, &l) < 0) return sce_fail_tagged("getsockname");
   from_sce(&sa, l, name, len); return 0;
 }
 int ps5_getpeername(int s, struct sockaddr* name, unsigned int* len)
 {
   SceNetSockaddr sa; int l = (int)sizeof sa;
-  if (sceNetGetpeername(s, &sa, &l) < 0) return sce_fail();
+  if (sceNetGetpeername(s, &sa, &l) < 0) return sce_fail_tagged("getpeername");
   from_sce(&sa, l, name, len); return 0;
 }
 int ps5_shutdown(int s, int how)
 {
-  return sceNetShutdown(s, how) < 0 ? sce_fail() : 0;
+  return sceNetShutdown(s, how) < 0 ? sce_fail_tagged("shutdown") : 0;
 }
 
 /* Python sets a socket non-blocking with ioctl(fd, FIONBIO, &on) - a raw

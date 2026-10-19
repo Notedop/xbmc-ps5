@@ -70,6 +70,10 @@ bool CSMB2Directory::GetDirectory(const CURL& urlIn, CFileItemList& items)
   {
     std::vector<SMB2::DirEntry> entries;
     r = SMB2::ListDirectory(target, entries);
+    constexpr size_t maxLoggedEntries = 32;
+    size_t loggedEntries = 0;
+    size_t directoryCount = 0;
+    size_t zeroSizeNonDirectoryCount = 0;
     for (const auto& e : entries)
     {
       auto item = std::make_shared<CFileItem>(e.name);
@@ -84,7 +88,26 @@ bool CSMB2Directory::GetDirectory(const CURL& urlIn, CFileItemList& items)
       item->SetProperty(DIR_PROPERTY_STAT_CTIME, e.stat.ctime);
       if (!e.name.empty() && e.name[0] == '.')
         item->SetProperty("file:hidden", true);
+      directoryCount += item->IsFolder();
+      zeroSizeNonDirectoryCount += !item->IsFolder() && e.stat.size == 0;
+      if (loggedEntries < maxLoggedEntries)
+      {
+        CLog::Log(LOGDEBUG,
+                  "[kodi-ps5] SMB entry: parent='{:.256}' name='{:.160}' raw_type=0x{:08x} "
+                  "mapped_directory={} item_folder={} size={}",
+                  urlIn.GetRedacted(), e.name, e.stat.rawType, e.stat.isDirectory, item->IsFolder(),
+                  e.stat.size);
+        ++loggedEntries;
+      }
       fileItems.push_back(std::move(item));
+    }
+    if (r)
+    {
+      CLog::Log(LOGDEBUG,
+                "[kodi-ps5] SMB listing: path='{:.256}' entries={} directories={} "
+                "zero_size_non_directories={} logged={} omitted={}",
+                urlIn.GetRedacted(), entries.size(), directoryCount, zeroSizeNonDirectoryCount,
+                loggedEntries, entries.size() - loggedEntries);
     }
   }
 

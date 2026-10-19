@@ -12,10 +12,14 @@
 #include "FileItemList.h"
 #include "PictureInfoTag.h"
 #include "ServiceBroker.h"
+#include "URL.h"
 #include "network/NetworkFileItemClassify.h"
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
+#include "utils/log.h"
 #include "video/VideoFileItemClassify.h"
+
+#include <chrono>
 
 using namespace KODI;
 
@@ -40,6 +44,11 @@ void CPictureInfoLoader::OnLoaderStart()
 
   m_tagReads = 0;
   m_loadTags = CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_PICTURES_USETAGS);
+
+#if defined(TARGET_PS5)
+  CLog::Log(LOGDEBUG, "[kodi-ps5] Picture metadata: phase=begin path='{:.256}' items={} tags={}",
+            CURL::GetRedacted(m_pVecItems->GetPath()), m_pVecItems->Size(), m_loadTags);
+#endif
 
   if (m_pProgressCallback)
     m_pProgressCallback->SetProgressMax(m_pVecItems->GetFileCount());
@@ -88,7 +97,21 @@ bool CPictureInfoLoader::LoadItemLookup(CFileItem* pItem)
 
   if (m_loadTags)
   { // Nothing found, load tag from file
+#if defined(TARGET_PS5)
+    const auto start = std::chrono::steady_clock::now();
+    CLog::Log(LOGDEBUG,
+              "[kodi-ps5] Picture metadata: phase=read_begin path='{:.256}' listed_bytes={} "
+              "item_folder={} read={}",
+              CURL::GetRedacted(pItem->GetPath()), pItem->GetSize(), pItem->IsFolder(), m_tagReads + 1);
+    const bool loaded = pItem->GetPictureInfoTag()->Load(pItem->GetPath());
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+    CLog::Log(LOGDEBUG,
+              "[kodi-ps5] Picture metadata: phase=read_end path='{:.256}' loaded={} elapsed_ms={}",
+              CURL::GetRedacted(pItem->GetPath()), loaded, elapsed.count());
+#else
     pItem->GetPictureInfoTag()->Load(pItem->GetPath());
+#endif
     m_tagReads++;
   }
 
@@ -103,4 +126,10 @@ void CPictureInfoLoader::OnLoaderFinish()
   // Save loaded items to HD
   if (!m_bStop && m_tagReads > 0)
     m_pVecItems->Save();
+
+#if defined(TARGET_PS5)
+  const bool stopped = m_bStop;
+  CLog::Log(LOGDEBUG, "[kodi-ps5] Picture metadata: phase=end path='{:.256}' reads={} stopped={}",
+            CURL::GetRedacted(m_pVecItems->GetPath()), m_tagReads, stopped);
+#endif
 }

@@ -282,43 +282,8 @@ PY
 grep -q -- "--wrap=malloc" "$APP/tools/build.sh" || { echo "!! template build.sh has no malloc wraps"; exit 1; }
 
 echo "==> 3. Kodi link inputs"
-python3 - "$BUILD" "$APP/vendor" "$HB" "$PS5_PAYLOAD_SDK" "$PS5_OPENGL_PREFIX" <<'PY'
-import os
-import re, sys, os, shlex
-build, vendor, hb, sdk, gl = sys.argv[1:6]
-ninja = open(os.path.join(build, "build.ninja")).read()
-m = re.search(r"^build kodi\.bin:.*?\n(?:  .*\n)*", ninja, re.M)
-blk = m.group(0)
-libs = re.search(r"^  LINK_LIBRARIES = (.*)$", blk, re.M).group(1)
-toks = shlex.split(libs)
-whole, deps, mode = [], [], None
-for t in toks:
-    if t == "-Wl,--whole-archive": mode = "whole"; continue
-    if t == "-Wl,--no-whole-archive": mode = "deps"; continue
-    if mode == "whole":
-        whole.append(t if os.path.isabs(t) else os.path.join(build, t))
-    elif mode == "deps":
-        if t.endswith(".a"):
-            deps.append(t if os.path.isabs(t) else os.path.join(build, t))
-        elif t.startswith("-l"):
-            name = t[2:]
-            for d in (hb + "/lib", gl + "/lib"):
-                p = f"{d}/lib{name}.a"
-                if os.path.exists(p):
-                    deps.append(p); break
-            # -l of a Sony stub (.so only) is covered by the boilerplate's --as-needed target/lib/*.so
-# The payload SDK's own libc.a/libpthread.a belong to the *payload* runtime (they
-# call into crt1.o: kernel_*, __dlopen...). In a native title the clean-room
-# libc.prx provides libc and pthread, as in ps5-opengl's and ProsperoLight's
-# builds; the C++ runtime archives are added explicitly by the caller.
-payload_lib = os.path.realpath(sdk + "/target/lib")
-deps = [d for d in deps if os.path.dirname(os.path.realpath(d)) != payload_lib]
-# de-duplicate, keep orde
-seen = set(); deps = [d for d in deps if not (d in seen or seen.add(d))]
-open(os.path.join(vendor, "kodi-whole.txt"), "w").write("\n".join(whole) + "\n")
-open(os.path.join(vendor, "kodi-deps.txt"), "w").write("\n".join(deps) + "\n")
-print(f"    {len(whole)} Kodi archives, {len(deps)} external libraries")
-PY
+python3 "$ROOT/tools/ps5/kodi-link-inputs.py" \
+  "$BUILD" "$APP/vendor" "$HB" "$PS5_PAYLOAD_SDK" "$PS5_OPENGL_PREFIX"
 MAIN_O="$BUILD/CMakeFiles/kodi.dir/xbmc/platform/ps5/main.cpp.o"
 [ -f "$MAIN_O" ] || { echo "!! $MAIN_O missing"; exit 1; }
 # Kodi's own libraries must be linked whole (self-registering factories live in

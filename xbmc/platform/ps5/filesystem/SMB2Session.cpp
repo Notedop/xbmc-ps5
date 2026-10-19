@@ -73,6 +73,7 @@ Error ClassifyErrno(int err, const std::string& message)
 
 void FillStat(const smb2_stat_64& st, Stat& out)
 {
+  out.rawType = st.smb2_type;
   out.isDirectory = st.smb2_type == SMB2_TYPE_DIRECTORY;
   out.size = st.smb2_size;
   out.mtime = static_cast<int64_t>(st.smb2_mtime);

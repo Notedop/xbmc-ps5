@@ -32,6 +32,18 @@ struct ps5_tls_dtor
 
 static pthread_key_t g_tls_dtor_key;
 static pthread_once_t g_tls_dtor_once = PTHREAD_ONCE_INIT;
+/* Published to registering threads by successful pthread_once completion. */
+static int g_tls_dtor_key_result = -1;
+static unsigned g_tls_dtor_reported;
+
+int sceKernelDebugOutText(int channel, const char* text);
+
+static int ps5_tls_dtor_failure(unsigned stage, const char* message)
+{
+  if (!(__atomic_fetch_or(&g_tls_dtor_reported, stage, __ATOMIC_RELAXED) & stage))
+    sceKernelDebugOutText(0, message);
+  return -1;
+}
 
 static void ps5_run_tls_dtors(void* head)
 {
@@ -47,20 +59,27 @@ static void ps5_run_tls_dtors(void* head)
 
 static void ps5_tls_dtor_key_init(void)
 {
-  pthread_key_create(&g_tls_dtor_key, ps5_run_tls_dtors);
+  g_tls_dtor_key_result = pthread_key_create(&g_tls_dtor_key, ps5_run_tls_dtors);
 }
 
 int __cxa_thread_atexit_impl(void (*fn)(void*), void* obj, void* dso_symbol)
 {
   (void)dso_symbol;
-  pthread_once(&g_tls_dtor_once, ps5_tls_dtor_key_init);
+  if (pthread_once(&g_tls_dtor_once, ps5_tls_dtor_key_init) != 0)
+    return ps5_tls_dtor_failure(1u, "[kodi-ps5] TLS destructor: pthread_once failed\n");
+  if (g_tls_dtor_key_result != 0)
+    return ps5_tls_dtor_failure(2u, "[kodi-ps5] TLS destructor: pthread_key_create failed\n");
   struct ps5_tls_dtor* node = (struct ps5_tls_dtor*)malloc(sizeof(*node));
   if (!node)
-    return -1;
+    return ps5_tls_dtor_failure(4u, "[kodi-ps5] TLS destructor: malloc failed\n");
   node->fn = fn;
   node->obj = obj;
   node->next = (struct ps5_tls_dtor*)pthread_getspecific(g_tls_dtor_key);
-  pthread_setspecific(g_tls_dtor_key, node);
+  if (pthread_setspecific(g_tls_dtor_key, node) != 0)
+  {
+    free(node);
+    return ps5_tls_dtor_failure(8u, "[kodi-ps5] TLS destructor: pthread_setspecific failed\n");
+  }
   return 0;
 }
 

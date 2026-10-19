@@ -52,6 +52,7 @@ struct Stat
   int64_t mtime = 0;
   int64_t atime = 0;
   int64_t ctime = 0;
+  uint32_t rawType = 0;
 };
 
 struct DirEntry

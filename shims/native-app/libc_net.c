@@ -3,18 +3,24 @@
  *  libScePosixForWebKit, which titles do not get, so implement them on
  *  Sony's resolver in libSceNet (loaded in every title): numeric IPv4/IPv6
  *  literals directly, host names via sceNetResolverStartNtoa (IPv4 A records).
+ *  gethostname() is the console's system name; that name resolves to the
+ *  console's own interface addresses (as nss-myhostname does on Linux).
  *  SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include <arpa/inet.h>
 #include <errno.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 int sceNetPoolCreate(const char* name, int size, int flags);
 int sceNetPoolDestroy(int pool);
@@ -22,20 +28,119 @@ int sceNetResolverCreate(const char* name, int pool, int flags);
 int sceNetResolverDestroy(int resolver);
 int sceNetResolverStartNtoa(int resolver, const char* host, uint32_t* address, int timeout_us,
                             int retries, int flags);
+extern void sceKernelDebugOutText(int channel, const char* text);
+int sceSystemServiceParamGetString(int param_id, char* buf, size_t size);
+
+#define PS5_PARAM_ID_SYSTEM_NAME 6 /* Settings > System > Console name */
+#define PS5_SYSTEM_NAME_SIZE 65
+#define PS5_MAX_LOCAL_ADDRS 8
+
+/* Sony's libc gethostname() succeeds with an empty name in a title; the
+   console's name is a system-service parameter instead. */
+static int system_name(char* buf, size_t size)
+{
+  static int logged;
+  memset(buf, 0, size);
+  int r = sceSystemServiceParamGetString(PS5_PARAM_ID_SYSTEM_NAME, buf, size);
+  buf[size - 1] = '\0';
+  if (!logged)
+  {
+    char message[160];
+    snprintf(message, sizeof(message),
+             "[kodi-ps5] system name: result=0x%08x, name='%s'\n", (unsigned int)r,
+             r == 0 ? buf : "");
+    sceKernelDebugOutText(0, message);
+    logged = 1;
+  }
+  if (r != 0 || !buf[0])
+  {
+    buf[0] = '\0';
+    return -1;
+  }
+  return 0;
+}
+
+int gethostname(char* name, size_t len)
+{
+  char own[PS5_SYSTEM_NAME_SIZE];
+  if (!name)
+  {
+    errno = EFAULT;
+    return -1;
+  }
+  system_name(own, sizeof(own)); /* failure keeps the previous result: "" */
+  size_t n = strlen(own);
+  if (n >= len)
+  {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  memcpy(name, own, n + 1);
+  return 0;
+}
+
+/* The console's own name -> IPv4 addresses of its up, non-loopback
+   interfaces. Returns how many were found; 0 for any other name. */
+static int own_host_ipv4(const char* node, struct in_addr* out, int max)
+{
+  char own[PS5_SYSTEM_NAME_SIZE];
+  if (!*node || system_name(own, sizeof(own)) != 0 || strcasecmp(node, own) != 0)
+    return 0;
+  struct ifaddrs* list = NULL;
+  if (getifaddrs(&list) != 0)
+  {
+    char message[160];
+    snprintf(message, sizeof(message), "[kodi-ps5] own host '%s': getifaddrs failed, errno=%d\n",
+             node, errno);
+    sceKernelDebugOutText(0, message);
+    return 0;
+  }
+  int n = 0;
+  for (const struct ifaddrs* ifa = list; ifa && n < max; ifa = ifa->ifa_next)
+  {
+    if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET || !(ifa->ifa_flags & IFF_UP) ||
+        (ifa->ifa_flags & IFF_LOOPBACK))
+      continue;
+    out[n++] = ((const struct sockaddr_in*)ifa->ifa_addr)->sin_addr;
+  }
+  freeifaddrs(list);
+  char message[160];
+  snprintf(message, sizeof(message), "[kodi-ps5] own host '%s': %d local IPv4 address(es)\n",
+           node, n);
+  sceKernelDebugOutText(0, message);
+  return n;
+}
 
 static int resolve_ipv4(const char* host, struct in_addr* out)
 {
+  char message[1024];
   int pool = sceNetPoolCreate("kodi-dns", 0x4000, 0);
   if (pool < 0)
+  {
+    snprintf(message, sizeof(message),
+             "[kodi-ps5] DNS host='%s': sceNetPoolCreate failed, result=0x%08x\n",
+             host, (unsigned int)pool);
+    sceKernelDebugOutText(0, message);
     return EAI_MEMORY;
+  }
   int resolver = sceNetResolverCreate("kodi-dns", pool, 0);
   if (resolver < 0)
   {
+    snprintf(message, sizeof(message),
+             "[kodi-ps5] DNS host='%s': sceNetResolverCreate failed, result=0x%08x\n",
+             host, (unsigned int)resolver);
+    sceKernelDebugOutText(0, message);
     sceNetPoolDestroy(pool);
     return EAI_FAIL;
   }
   uint32_t addr = 0;
   int r = sceNetResolverStartNtoa(resolver, host, &addr, 5 * 1000 * 1000, 2, 0);
+  char address[INET_ADDRSTRLEN];
+  const char* address_text = inet_ntop(AF_INET, &addr, address, sizeof(address));
+  snprintf(message, sizeof(message),
+           "[kodi-ps5] DNS host='%s': result=0x%08x, address=%s\n",
+           host, (unsigned int)r, address_text ? address_text : "<invalid>");
+  sceKernelDebugOutText(0, message);
   sceNetResolverDestroy(resolver);
   sceNetPoolDestroy(pool);
   if (r < 0 || addr == 0)
@@ -125,6 +230,14 @@ void freeaddrinfo(struct addrinfo* ai)
 int getaddrinfo(const char* node, const char* service, const struct addrinfo* hints,
                 struct addrinfo** res)
 {
+  char message[1024];
+  snprintf(message, sizeof(message),
+           "[kodi-ps5] getaddrinfo node='%s', service='%s', family=%d, "
+           "socktype=%d, protocol=%d, flags=0x%x\n",
+           node ? node : "<null>", service ? service : "<null>",
+           hints ? hints->ai_family : AF_UNSPEC, hints ? hints->ai_socktype : 0,
+           hints ? hints->ai_protocol : 0, (unsigned int)(hints ? hints->ai_flags : 0));
+  sceKernelDebugOutText(0, message);
   if (!res)
     return EAI_FAIL;
   *res = NULL;
@@ -142,27 +255,28 @@ int getaddrinfo(const char* node, const char* service, const struct addrinfo* hi
   if (err)
     return err;
 
-  unsigned char addr[16];
+  unsigned char addr[PS5_MAX_LOCAL_ADDRS][16];
+  int addr_count = 1;
   int addr_family;
   if (!node)
   {
     /* passive: wildcard; active: loopback */
     addr_family = family == AF_INET6 ? AF_INET6 : AF_INET;
-    memset(addr, 0, sizeof(addr));
+    memset(addr[0], 0, sizeof(addr[0]));
     if (!(flags & AI_PASSIVE))
     {
       if (addr_family == AF_INET)
       {
         struct in_addr lo = {htonl(INADDR_LOOPBACK)};
-        memcpy(addr, &lo, sizeof(lo));
+        memcpy(addr[0], &lo, sizeof(lo));
       }
       else
-        addr[15] = 1;
+        addr[0][15] = 1;
     }
   }
-  else if (family != AF_INET6 && inet_pton(AF_INET, node, addr) == 1)
+  else if (family != AF_INET6 && inet_pton(AF_INET, node, addr[0]) == 1)
     addr_family = AF_INET;
-  else if (family != AF_INET && inet_pton(AF_INET6, node, addr) == 1)
+  else if (family != AF_INET && inet_pton(AF_INET6, node, addr[0]) == 1)
     addr_family = AF_INET6;
   else
   {
@@ -170,11 +284,22 @@ int getaddrinfo(const char* node, const char* service, const struct addrinfo* hi
       return EAI_NONAME;
     if (family == AF_INET6)
       return EAI_NONAME; /* resolver answers A records only */
-    struct in_addr in;
-    err = resolve_ipv4(node, &in);
-    if (err)
-      return err;
-    memcpy(addr, &in, sizeof(in));
+    struct in_addr local[PS5_MAX_LOCAL_ADDRS];
+    int local_count = own_host_ipv4(node, local, PS5_MAX_LOCAL_ADDRS);
+    if (local_count > 0)
+    {
+      for (int i = 0; i < local_count; ++i)
+        memcpy(addr[i], &local[i], sizeof(local[i]));
+      addr_count = local_count;
+    }
+    else
+    {
+      struct in_addr in;
+      err = resolve_ipv4(node, &in);
+      if (err)
+        return err;
+      memcpy(addr[0], &in, sizeof(in));
+    }
     addr_family = AF_INET;
   }
 
@@ -182,26 +307,37 @@ int getaddrinfo(const char* node, const char* service, const struct addrinfo* hi
   static const int types[2][2] = {{SOCK_STREAM, IPPROTO_TCP}, {SOCK_DGRAM, IPPROTO_UDP}};
   struct addrinfo* head = NULL;
   struct addrinfo** tail = &head;
-  for (int i = 0; i < 2; ++i)
+  for (int a = 0; a < addr_count; ++a)
   {
-    if (socktype && socktype != types[i][0])
-      continue;
-    int proto = protocol ? protocol : types[i][1];
-    struct addrinfo* ai = make_entry(addr_family, addr, port, types[i][0], proto, canon);
-    if (!ai)
+    int added = 0;
+    for (int i = 0; i < 2; ++i)
     {
-      freeaddrinfo(head);
-      return EAI_MEMORY;
+      if (socktype && socktype != types[i][0])
+        continue;
+      int proto = protocol ? protocol : types[i][1];
+      struct addrinfo* ai = make_entry(addr_family, addr[a], port, types[i][0], proto, canon);
+      if (!ai)
+      {
+        freeaddrinfo(head);
+        return EAI_MEMORY;
+      }
+      canon = NULL; /* canonical name on the first entry only */
+      *tail = ai;
+      tail = &ai->ai_next;
+      added = 1;
     }
-    canon = NULL; /* canonical name on the first entry only */
-    *tail = ai;
-    tail = &ai->ai_next;
-  }
-  if (!head) /* unusual socktype (e.g. SOCK_RAW): one entry as asked */
-  {
-    head = make_entry(addr_family, addr, port, socktype, protocol, canon);
-    if (!head)
-      return EAI_MEMORY;
+    if (!added) /* unusual socktype (e.g. SOCK_RAW): one entry as asked */
+    {
+      struct addrinfo* ai = make_entry(addr_family, addr[a], port, socktype, protocol, canon);
+      if (!ai)
+      {
+        freeaddrinfo(head);
+        return EAI_MEMORY;
+      }
+      canon = NULL;
+      *tail = ai;
+      tail = &ai->ai_next;
+    }
   }
   *res = head;
   return 0;

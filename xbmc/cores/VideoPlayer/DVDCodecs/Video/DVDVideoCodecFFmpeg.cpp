@@ -371,7 +371,10 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
 
   m_pCodecContext = avcodec_alloc_context3(pCodec);
   if (!m_pCodecContext)
+  {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::Open() Unable to allocate codec context");
     return false;
+  }
 
   m_pCodecContext->opaque = static_cast<ICallbackHWAccel*>(this);
   m_pCodecContext->debug = 0;
@@ -413,11 +416,14 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
   {
     m_pCodecContext->extradata =
         (uint8_t*)av_mallocz(hints.extradata.GetSize() + AV_INPUT_BUFFER_PADDING_SIZE);
-    if (m_pCodecContext->extradata)
+    if (!m_pCodecContext->extradata)
     {
-      m_pCodecContext->extradata_size = hints.extradata.GetSize();
-      memcpy(m_pCodecContext->extradata, hints.extradata.GetData(), hints.extradata.GetSize());
+      CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::Open() Unable to allocate codec extradata");
+      avcodec_free_context(&m_pCodecContext);
+      return false;
     }
+    m_pCodecContext->extradata_size = hints.extradata.GetSize();
+    memcpy(m_pCodecContext->extradata, hints.extradata.GetData(), hints.extradata.GetSize());
   }
 
   // advanced setting override for skip loop filter (see avcodec.h for valid options)
@@ -434,9 +440,11 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
     av_opt_set(m_pCodecContext, it->m_name.c_str(), it->m_value.c_str(), 0);
   }
 
-  if (avcodec_open2(m_pCodecContext, pCodec, nullptr) < 0)
+  const int openResult = avcodec_open2(m_pCodecContext, pCodec, nullptr);
+  if (openResult < 0)
   {
-    CLog::Log(LOGDEBUG,"CDVDVideoCodecFFmpeg::Open() Unable to open codec");
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::Open() Unable to open codec: {} ({})",
+              FFMPEG_HELP_TOOLS::FFMpegErrorToString(openResult), openResult);
     avcodec_free_context(&m_pCodecContext);
     return false;
   }
@@ -444,6 +452,7 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
   m_pFrame = av_frame_alloc();
   if (!m_pFrame)
   {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::Open() Unable to allocate output frame");
     avcodec_free_context(&m_pCodecContext);
     return false;
   }
@@ -451,6 +460,7 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
   m_pDecodedFrame = av_frame_alloc();
   if (!m_pDecodedFrame)
   {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::Open() Unable to allocate decoded frame");
     av_frame_free(&m_pFrame);
     avcodec_free_context(&m_pCodecContext);
     return false;
@@ -459,6 +469,7 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
   m_pFilterFrame = av_frame_alloc();
   if (!m_pFilterFrame)
   {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::Open() Unable to allocate filter frame");
     av_frame_free(&m_pFrame);
     av_frame_free(&m_pDecodedFrame);
     avcodec_free_context(&m_pCodecContext);
@@ -477,6 +488,7 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints, CDVDCodecOptions &options
 
 void CDVDVideoCodecFFmpeg::Dispose()
 {
+  m_startedInput = false;
   av_frame_free(&m_pFrame);
   av_frame_free(&m_pDecodedFrame);
   av_frame_free(&m_pFilterFrame);
@@ -657,6 +669,12 @@ bool CDVDVideoCodecFFmpeg::AddData(const DemuxPacket &packet)
 
 CDVDVideoCodec::VCReturn CDVDVideoCodecFFmpeg::GetPicture(VideoPicture* pVideoPicture)
 {
+  if (!m_pCodecContext)
+  {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::GetPicture() Decoder is not open");
+    return VC_FATAL;
+  }
+
   if (!m_startedInput)
   {
     return VC_BUFFER;
@@ -954,6 +972,12 @@ bool CDVDVideoCodecFFmpeg::SetPictureParams(VideoPicture* pVideoPicture)
 
 void CDVDVideoCodecFFmpeg::Reset()
 {
+  if (!m_pCodecContext)
+  {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::Reset() Decoder is not open");
+    return;
+  }
+
   m_started = false;
   m_startedInput = false;
   m_interlaced = false;
@@ -978,6 +1002,7 @@ void CDVDVideoCodecFFmpeg::Reopen()
   Dispose();
   if (!Open(m_hints, m_options))
   {
+    CLog::Log(LOGERROR, "CDVDVideoCodecFFmpeg::Reopen() Unable to reopen decoder");
     Dispose();
   }
 }
@@ -1259,6 +1284,12 @@ int CDVDVideoCodecFFmpeg::FilterOpen(const std::string& filters, bool scale)
     return -1;
   }
 
+#if defined(TARGET_PS5)
+  // Concurrent thumbnail graphs must not each allocate an automatic worker pool.
+  m_pFilterGraph->nb_threads = 6;
+  CLog::Log(LOGDEBUG, "[kodi-ps5] FFmpeg software filter graph: threads=6");
+#endif
+
   const AVFilter* srcFilter = avfilter_get_by_name("buffer");
   const AVFilter* outFilter = avfilter_get_by_name("buffersink"); // should be last filter in the graph for now
 
@@ -1497,4 +1528,3 @@ IHardwareDecoder* CDVDVideoCodecFFmpeg::GetHWAccel()
 {
   return m_pHardware;
 }
-

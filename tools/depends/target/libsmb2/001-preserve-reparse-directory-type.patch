@@ -1,0 +1,76 @@
+Directories can also carry FILE_ATTRIBUTE_REPARSE_POINT (including cloud-backed
+directories). Preserve their directory type for listing, stat and fstat, without
+changing the public stat layout or turning non-directory reparse points into
+directories.
+
+diff --git a/lib/smb2-file-type.h b/lib/smb2-file-type.h
+new file mode 100644
+--- /dev/null
++++ b/lib/smb2-file-type.h
+@@ -0,0 +1,18 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++
++#ifndef LIBSMB2_FILE_TYPE_H
++#define LIBSMB2_FILE_TYPE_H
++
++#include <stdint.h>
++
++static inline uint32_t smb2_type_from_attributes(uint32_t attributes)
++{
++        /* A reparse point is not necessarily a non-directory symbolic link. */
++        if (attributes & SMB2_FILE_ATTRIBUTE_DIRECTORY)
++                return SMB2_TYPE_DIRECTORY;
++        if (attributes & SMB2_FILE_ATTRIBUTE_REPARSE_POINT)
++                return SMB2_TYPE_LINK;
++        return SMB2_TYPE_FILE;
++}
++
++#endif
+diff --git a/lib/libsmb2.c b/lib/libsmb2.c
+--- a/lib/libsmb2.c
++++ b/lib/libsmb2.c
+@@ -100,6 +100,7 @@
+ #include "slist.h"
+ #include "smb2.h"
+ #include "libsmb2.h"
++#include "smb2-file-type.h"
+ #include "libsmb2-raw.h"
+ #include "libsmb2-private.h"
+ #include "portable-endian.h"
+@@ -321,10 +322,5 @@
+-                ent->dirent.st.smb2_type = SMB2_TYPE_FILE;
+-                if (fs.file_attributes & SMB2_FILE_ATTRIBUTE_DIRECTORY) {
+-                        ent->dirent.st.smb2_type = SMB2_TYPE_DIRECTORY;
+-                }
+-                if (fs.file_attributes & SMB2_FILE_ATTRIBUTE_REPARSE_POINT) {
+-                        ent->dirent.st.smb2_type = SMB2_TYPE_LINK;
+-                }
++                ent->dirent.st.smb2_type =
++                        smb2_type_from_attributes(fs.file_attributes);
+                 ent->dirent.st.smb2_nlink = 0;
+                 ent->dirent.st.smb2_ino = fs.file_id;
+                 ent->dirent.st.smb2_size = fs.end_of_file;
+@@ -1850,10 +1846,4 @@
+-        st->smb2_type = SMB2_TYPE_FILE;
+-        if (fs->basic.file_attributes & SMB2_FILE_ATTRIBUTE_DIRECTORY) {
+-                st->smb2_type = SMB2_TYPE_DIRECTORY;
+-        }
+-        if (fs->basic.file_attributes & SMB2_FILE_ATTRIBUTE_REPARSE_POINT) {
+-                st->smb2_type = SMB2_TYPE_LINK;
+-        }
++        st->smb2_type = smb2_type_from_attributes(fs->basic.file_attributes);
+         st->smb2_nlink      = fs->standard.number_of_links;
+         st->smb2_ino        = fs->index_number;
+         st->smb2_size       = fs->standard.end_of_file;
+@@ -1959,10 +1949,4 @@
+-                st->smb2_type = SMB2_TYPE_FILE;
+-                if (fs->basic.file_attributes & SMB2_FILE_ATTRIBUTE_DIRECTORY) {
+-                        st->smb2_type = SMB2_TYPE_DIRECTORY;
+-                }
+-                if (fs->basic.file_attributes & SMB2_FILE_ATTRIBUTE_REPARSE_POINT) {
+-                        st->smb2_type = SMB2_TYPE_LINK;
+-                }
++                st->smb2_type = smb2_type_from_attributes(fs->basic.file_attributes);
+                 st->smb2_nlink      = fs->standard.number_of_links;
+                 st->smb2_ino        = fs->index_number;
+                 st->smb2_size       = fs->standard.end_of_file;

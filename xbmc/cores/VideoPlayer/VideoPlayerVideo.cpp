@@ -646,6 +646,15 @@ bool CVideoPlayerVideo::ProcessDecoderOutput(double &frametime, double &pts)
 {
   CDVDVideoCodec::VCReturn decoderState = m_pVideoCodec->GetPicture(&m_picture);
 
+  if (decoderState == CDVDVideoCodec::VC_FATAL)
+  {
+    CLog::Log(LOGERROR, "CVideoPlayerVideo - fatal decoder error, aborting playback");
+    m_messageParent.Put(std::make_shared<CDVDMsg>(CDVDMsg::PLAYER_ABORT));
+    m_messageQueue.Abort();
+    StopThread();
+    return false;
+  }
+
   if (decoderState == CDVDVideoCodec::VC_BUFFER)
   {
     return false;

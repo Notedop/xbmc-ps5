@@ -1,6 +1,129 @@
 # PS5 binary add-ons handover
 
-Updated: 2026-10-14, following console acceptance and build-integration cleanup.
+Historical investigation notes, not the current build/publication procedure.
+Use [the binary add-on workflow](docs/PS5-BINARY-ADDONS.md) for current commands,
+catalogue policy and release scenarios. The old `build-adaptive-addon.sh`
+wrapper has been retired in favor of `addon-repository.py build --only
+inputstream.adaptive`; references below describe earlier work only.
+
+Updated: 2026-10-16, after the 2026-10-15 evening console tests.
+
+## Latest handoff: 2026-10-15 evening / 2026-10-16 overnight
+
+This section supersedes older pending-test instructions below. The maintained
+per-add-on record is `docs/PS5-BINARY-ADDONS.md`; update it after each build/test
+batch, distinguishing compilation, packaging checks and console acceptance.
+
+### Saved work and baseline
+
+- Session work was committed as `eca1feed18` on the then-current `ps5` branch:
+  automatic installed-add-on packaging, screensaver compatibility patches,
+  per-add-on exclusions/status documentation and pending IME conversion work.
+  No push was performed by the assistant.
+- The user subsequently moved their work to a Piers-based baseline. The final
+  deployed startup log identifies Kodi `22.0-RC1 (21.90.901)`,
+  Git `20261015-9ee1417e08`, Python 3.14.6. Inspect the current branch/worktree
+  before further changes; do not assume all commits or generated build trees
+  were transplanted/rebuilt identically.
+- Master had removed legacy language-folder fallback in `13d27c4c06`
+  (upstream PR #29662); the locally fetched Piers did not contain that change.
+  Umbrella uses `resources/language/English/strings.po`. Missing menu/settings
+  labels on master disappeared on the deployed Piers build.
+- Settings written by master used version 5; Piers accepts version 4.
+  After the user reset affected add-on user settings and restarted, captured
+  startup no longer showed the version-5/type errors. Umbrella recreated its
+  settings and the user confirmed correct labels/settings. Do not delete
+  profiles or settings without authorization.
+
+### Build versus packaging automation
+
+- Normal `ps5-title` packaging now discovers installed binary add-ons from
+  Kodi-style prefixes, stages binaries/resources/helpers and includes imports
+  in title export generation. It does not automatically build/update add-ons.
+  See the current packaging documentation for prefix/override behavior.
+- Category selectors are no longer required for the default installed set.
+  Do not require the loader probe for a normal deployment:
+  `PS5_TEST_BINARY_ADDON=1` is optional and requires a fresh probe build.
+- Add-on compilation still uses separate configured Kodi `cmake/addons` trees.
+  The local `build/ps5-{audiodecoders,screensavers}/audit/` scripts are temporary,
+  ignored setup helpers, not a completed tracked end-to-end build interface.
+  No proposed `tools/ps5/build.sh` was implemented in this session.
+- Kodi's existing binary-addons Makefile defaults `ADDONS` to `all`, across
+  categories supported by metadata. That does not imply PS5 runtime support.
+  Packaging exclusions do not currently exclude compilation targets.
+- On a baseline migration, refresh add-on API/toolchain/build trees and rebuild;
+  incremental old external-project stamps are not proof of a clean Piers build.
+  Use `tools/ps5/configure.sh` for Kodi configuration, not plain CMake: the
+  wrapper supplies cross-compiled Python/dependency discovery settings.
+
+### Audio decoder console follow-up
+
+- Four tracker samples (MOD, IT, XM, S3M) were reported good for length, natural
+  ending and seek. SuperContra NSFE names/lengths/track switching passed.
+  SPC, GYM, VGM, GBS, KSS and HES played; exact SPC decoder selection was not
+  confirmed from the logs.
+- SMB `.m3u` lists names but selecting playback fails; the `.nsf` plays directly.
+  Cause unestablished. Do not confuse Kodi's unsupported extended playlist
+  syntax with proven decoder sidecar-playlist behavior.
+- `Capcom/01 - title.miniqsf` failed decoder initialization. Its parent-library
+  dependency set has not been checked; not a confirmed decoder defect.
+- KSS/HES showed GME's default 150-second duration. The user accepted the
+  limitation and explicitly requested no implementation change.
+
+### Screensaver results and exclusions
+
+- Eleven source definitions were found; cpblobs excludes FreeBSD/PS5. All ten
+  supported build targets compiled, installing 31 add-ons (22 RSXS effects).
+  Three persistent patches address Asterwave/Matrix Trails SOIL2 X11 discovery
+  and RSXS aligned allocation. Initial staged-title GL export misses were
+  addressed by generic packaging/export integration; Colorfire/Hufotunnel
+  emutls requirements remain excluded. No TLS policy was relaxed.
+- Thirteen reported console failures: Busyspheres, Cyclone, Flocks, Hufo Smoke,
+  Lattice, Matrix View, Skyrocket, Solar Winds, SpirographX and Sundancer 2
+  were slow/barely visible; Euphoria and Ping Pong were black-screen-only;
+  Hyperspace froze Kodi. Cyclone also preceded a main-thread SIGBUS shortly
+  after teardown/settings, then ran slowly without a crash after restart.
+  Root causes have not been established.
+- With explicit user approval, all 13 are individually excluded in
+  `tools/ps5/addon-exclusions.json`. Twelve belong to RSXS; the shared RSXS
+  target and its other effects remain eligible. Do not exclude the whole
+  repository without discussing it. Unreported effects are not implied passes.
+- Busyspheres, Cyclone and Euphoria were source-confirmed shader-based OpenGL;
+  do not repeat the unsupported fixed-function explanation for their failures.
+- The user subsequently deployed a Piers build; remote removal of previously
+  packaged excluded effects was not explicitly verified.
+
+### Remaining plugin/runtime findings
+
+- YouTube 7.4.4a still fails `get_connect_address()` at
+  `sock.connect((broadcast_address, 0))` with `OSError: [Errno 5]`.
+  This is separate from adaptive playback; do not infer the exact shim defect.
+- After sign-in, YouTube reported partial login, an invalid/disabled client,
+  empty channel lookup data and `KeyError: 'items'`. HTTP 428 while waiting for
+  device authorization can mean authorization pending, not terminal failure.
+  Other-platform login reports exist, but no verified matching Errno-5 report
+  or widespread-current-outage claim was established.
+- Python `select.kqueue` warns that `posix.register_at_fork` is absent.
+  Functional impact is unestablished. Repeated None/string deprecation warnings,
+  GUI focus errors, an idle-player query exception, SQLite missing-table/
+  duplicate-column diagnostics and an Umbrella invoker object-cleanup warning
+  also occurred. No database corruption or common root cause is established.
+
+### Captures and next work
+
+- All assistant-owned direct kernel monitors are stopped; none should be assumed
+  active. Do not terminate a separate user-owned `ncat` process.
+- Workstation captures: `D:\PS5\kodi-binary-addon-test-20261015.log`,
+  `D:\PS5\kodi-screensavers-20261015-2221.log`,
+  `D:\PS5\kodi-plugin-retest-20261015-2341.log` (final monitor stopped at user
+  time 2026-10-16 00:17). `D:\PS5\output.log` was a separate user capture.
+  Console timestamps run roughly 33 minutes ahead; correlate by session.
+- Next: inspect the actual Piers worktree and retain this evidence; complete a
+  reproducible tracked add-on build entry point if requested, verify deployment
+  exclusions, then investigate YouTube networking/Python compatibility or the
+  shared screensaver performance/rendering failures as separately scoped work.
+  Optional-system manifest registration for first-discovery enablement was
+  discussed; inspect current code before claiming it is implemented.
 
 ## Current result and blocker
 

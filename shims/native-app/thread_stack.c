@@ -1,91 +1,95 @@
 /*
- *  Minimum thread stack size for the title.
+ *  Stack policy for threads created with default attributes.
  *
  *  Kodi (std::thread), FFmpeg and libc++ create threads with default
  *  attributes, and a title's default pthread stack is far smaller than on a
  *  desktop OS - the first thumbnail encode overflowed it. Every
- *  pthread_create() is routed here (lld --wrap=pthread_create, see
- *  scripts/30-deploy.sh) and gets at least PS5_MIN_THREAD_STACK.
+ *  pthread_create() linked into the title is routed here by --wrap.
+ *  Explicit caller attributes, including supplied stack memory, are untouched.
  *  SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include <pthread.h>
+#include <errno.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
-/* 1 MiB was not enough: thumbnail extraction (software HEVC decode plus JPEG
- * encoding on a job worker) overflowed it. 4 MiB is the smallest fallback
- * observed to work, while imposing 8 MiB on every thread exhausts title memory. */
-#define PS5_MIN_THREAD_STACK (4u * 1024u * 1024u)
-/* if the system refuses a thread at that size, smaller ones are tried */
-static const size_t fallback_stacks[] = {4u * 1024u * 1024u, 1024u * 1024u};
+/* 4 MiB has worked for software decoding; 1 MiB previously overflowed.
+ * This is an application default, not a firmware requirement. */
+#define PS5_DEFAULT_THREAD_STACK (4u * 1024u * 1024u)
 
 int __real_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
                           void* (*start)(void*), void* arg);
 int sceKernelDebugOutText(int channel, const char* text);
+int sceKernelAvailableFlexibleMemorySize(size_t* size);
 
-static void log_default_once(size_t system_default)
+/* TEMPORARY DIAGNOSTICS: identify allocation failures without lowering stacks. */
+static void log_failure(const char* stage, int result, size_t size, int stack_rc,
+                        int explicit_attr, void* (*start)(void*))
 {
-  static int logged;
-  if (logged)
-    return;
-  logged = 1;
-  char msg[160];
+  size_t available = 0;
+  int memory_rc = sceKernelAvailableFlexibleMemorySize(&available);
+  char msg[448];
   snprintf(msg, sizeof(msg),
-           "[kodi-ps5] threads: system default stack %zu KiB, raised to at least %u KiB\n",
-           system_default / 1024, PS5_MIN_THREAD_STACK / 1024);
+           "[kodi-ps5] DIAGNOSTIC thread-create: stage=%s pthread_rc=%d "
+           "attempted_stack_bytes=%zu stack_attr_rc=%d explicit_attr=%d "
+           "creator_thread=%p entry=%p flexible_memory_rc=%d flexible_memory_valid=%d "
+           "flexible_memory_bytes=%zu\n",
+           stage, result, size, stack_rc, explicit_attr, (void*)(uintptr_t)pthread_self(),
+           (void*)start, memory_rc, memory_rc == 0, available);
   sceKernelDebugOutText(0, msg);
 }
 
 int __wrap_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
                           void* (*start)(void*), void* arg)
 {
+  const int saved_errno = errno;
   pthread_attr_t local;
   const pthread_attr_t* use = attr;
   int own = 0;
   size_t size = 0;
+  int result = 0;
+  const char* stage = "attr-init";
 
   if (!attr)
   {
-    if (pthread_attr_init(&local) == 0)
+    result = pthread_attr_init(&local);
+    if (result != 0)
+      goto attr_failure;
+    own = 1;
+    use = &local;
+    stage = "attr-getstacksize";
+    result = pthread_attr_getstacksize(&local, &size);
+    if (result != 0)
+      goto attr_failure;
+    if (size < PS5_DEFAULT_THREAD_STACK)
     {
-      if (pthread_attr_getstacksize(&local, &size) == 0)
-        log_default_once(size);
-      if (size < PS5_MIN_THREAD_STACK)
-        pthread_attr_setstacksize(&local, PS5_MIN_THREAD_STACK);
-      use = &local;
-      own = 1;
+      size = PS5_DEFAULT_THREAD_STACK;
+      stage = "attr-setstacksize";
+      result = pthread_attr_setstacksize(&local, size);
+      if (result != 0)
+        goto attr_failure;
     }
-  }
-  else if (pthread_attr_getstacksize(attr, &size) == 0 && size < PS5_MIN_THREAD_STACK)
-  {
-    /* callers hand us their own attr object; raising its stack size is harmless */
-    pthread_attr_setstacksize((pthread_attr_t*)attr, PS5_MIN_THREAD_STACK);
   }
 
-  int result = __real_pthread_create(thread, use, start, arg);
-  if (result != 0 && own)
+  result = __real_pthread_create(thread, use, start, arg);
+  if (result != 0)
   {
-    /* a resource limit on the requested size: retry smaller, and say so once */
-    for (size_t i = 0; result != 0 && i < sizeof(fallback_stacks) / sizeof(*fallback_stacks); ++i)
-    {
-      pthread_attr_setstacksize(&local, fallback_stacks[i]);
-      result = __real_pthread_create(thread, &local, start, arg);
-      if (result == 0)
-      {
-        static int reported;
-        if (!reported)
-        {
-          reported = 1;
-          char msg[160];
-          snprintf(msg, sizeof(msg),
-                   "[kodi-ps5] threads: a %u KiB stack was refused, using %zu KiB\n",
-                   PS5_MIN_THREAD_STACK / 1024, fallback_stacks[i] / 1024);
-          sceKernelDebugOutText(0, msg);
-        }
-      }
-    }
+    int stack_rc = attr ? pthread_attr_getstacksize(attr, &size) : 0;
+    log_failure("pthread_create", result, size, stack_rc, attr != NULL, start);
   }
+  goto cleanup;
+
+attr_failure:
+  log_failure(stage, result, size, result, 0, start);
+
+cleanup:
   if (own)
-    pthread_attr_destroy(&local);
+  {
+    int destroy_rc = pthread_attr_destroy(&local);
+    if (destroy_rc != 0)
+      log_failure("attr-destroy", destroy_rc, size, 0, 0, start);
+  }
+  errno = saved_errno;
   return result;
 }

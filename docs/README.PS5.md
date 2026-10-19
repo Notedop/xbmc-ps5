@@ -4,8 +4,8 @@ This branch keeps PS5 integration in tracked Kodi source. Configure does **not**
 copy overlays or apply patch files. This document covers everything needed to
 go from a bare Linux (or WSL) machine to a running PS5 package.
 
-Binary add-on build and console-test results are maintained in the
-[PS5 binary add-on status](PS5-BINARY-ADDONS.md) record.
+For binary add-on compilation, title integration, testing/stable promotion and
+publication, follow the [PS5 binary add-on workflow](PS5-BINARY-ADDONS.md).
 
 ## 0. Prerequisites
 
@@ -202,26 +202,36 @@ Both targets call `tools/ps5/package.sh`, which uses:
   `build/ps5-external/ps5-opengl/build/native-app/PPSA99005`, i.e.
   `$WORK/ps5-opengl/...` - see 0.2)
 
-Both automatically package installed binary add-ons from Kodi's standard
-`lib/kodi/addons` + `share/kodi/addons` layout, including full manifest resources
-and validated helper libraries. Default install roots are
-`build/ps5-depends-test/x86_64-unknown-freebsd-debug`,
-`build/ps5-audiodecoders/install` and `build/ps5-screensavers/install`.
-No per-category selector is needed; no binary-addons `all` build runs during
-deployment. Use colon-separated `PS5_ADDON_PREFIXES` to replace the default
-roots (an explicitly empty value disables discovery).
+Packaging compiles `shims/native-app/libc_socket.c` directly into the title,
+ahead of the SDK's archived copy in `libkodishim.a`. Socket-shim-only changes
+therefore require re-packaging, not rebuilding Python. Changes to Python's
+`ps5_pysocket.h` redirection still require rebuilding the Python dependency.
+Run `bash tools/ps5/test-socket-shim.sh` for the socket regression tests and
+PS5 SDK compile check.
 
-Missing default roots are reported; missing explicit roots, duplicate IDs,
-invalid manifests/ELFs and unsafe helper/resource layouts fail. Selection and
-explicit exclusion reasons are recorded in
+Socket diagnostics use `[kodi-ps5] pysock`: creation logs include the socket ID,
+family, type and protocol; failed connects log the captured raw sceNet errno,
+then the socket type and numeric destination. IPv4 UDP connect to destination
+port zero is rejected by the FreeBSD-style stack with `EADDRNOTAVAIL` (49,
+`0x31`), not `EIO`. The shim preserves the rejection; a caught probe failure
+alone does not establish that the add-on's HTTP server failed to start.
+
+Both targets discover installed binary add-ons using the repository builder's
+`build/ps5-addon-repository/work/build-record.json` when present. They copy only
+catalogue-bundled outputs, including resources/helpers, but use all candidates
+for title export generation. Neither target compiles add-ons or publishes feeds.
+The stable repository is shipped and enabled; testing is shipped but disabled
+on first discovery. Compatibility exclusions remain authoritative.
+
+Use colon-separated `PS5_ADDON_PREFIXES` to override install roots; an explicitly
+empty value disables discovery. Historical depends/audio/screensaver prefixes
+are used only when no override or repository build record exists. Missing
+explicit roots, duplicate IDs and invalid/unsafe installed files fail.
+Selection and exclusions are recorded in
 `build/ps5-stage/installed-addons-report.json` (preflight copy in the Kodi build
-directory). The maintained registry excludes DUMB/ModPlug by tracker-selection
-policy, Timidity/UPSE/vgmstream for TLS requirements, and RSXS Colorfire/Hufotunnel
-for unsupported emutls imports. The other 29 screensavers are packaging
-candidates, **not console-validated**; their imports now reach export generation.
-See [binary add-on packaging/status](PS5-BINARY-ADDONS.md) for exact defaults,
-legacy overrides, focused tests and limitations. `PS5_ADAPTIVE_TEST=1` is only
-needed for the direct DASH test/debug marker, not ordinary adaptive packaging.
+directory). Follow the [binary add-on workflow](PS5-BINARY-ADDONS.md) for build
+order, release scenarios and publication commands. `PS5_ADAPTIVE_TEST=1` is only
+needed for direct DASH test/debug content, not ordinary packaging.
 
 Set `PS5_HOST` to upload the packaged title over FTP using `lftp mirror`.
 Install `lftp` on the build host. Deployment uses three concurrent transfers
@@ -255,6 +265,9 @@ escape, then finds its mounted path under `/mnt/sandbox/*/app0` by matching
 device and inode. Missing or ambiguous matches stop startup; no title ID,
 sandbox instance suffix or physical installation directory is assumed.
 Packaged resources, Python and system add-ons use `<resolved app0>/share/kodi`.
+The video decoder and native keyboard modules are preloaded before requesting
+sandbox escape; later initialization reuses the cached results, since loading
+modules after escape can fail with `0x80020063`.
 Startup supplies `HOME`,
 `KODI_HOME` and `KODI_BIN_HOME` from these separate locations; the shared POSIX
 settings initialization registers the special paths and creates user directories.
@@ -263,8 +276,7 @@ Python's environment, temporary directory and CA bundle are configured separatel
 Marker files are read from `/data/homebrew/kodi-psmc` (the writable HOME root):
 `kodi-debug`,
 `kodi-video-debug` and `kodi-addon-debug` remain in place.
-`kodi-jitprobe` runs once and is removed. `kodi-reset` removes only the writable
-`.kodi` tree before startup; `kodi-uninstall` removes that tree and exits.
+`kodi-uninstall` removes that tree and exits.
 Reset/uninstall markers are removed only after successful deletion. Neither
 operation deletes the packaged title or its resources.
 Markers stay outside `.kodi`, so resetting data does not delete them prematurely.
@@ -290,3 +302,103 @@ the kernel log alongside Kodi messages. Detailed video diagnostics add work
 to the playback path; leave these markers absent for normal playback. Remove
 debug markers from the HOME root when finished. Packaging and deployment do not
 create or remove these user-controlled markers.
+
+### Network streaming
+
+PS5 curl connections request a 1 MiB socket receive buffer before connecting;
+the console may clamp this (512 KiB was observed). The default 64 KiB buffer
+limited a high-bitrate HTTPS stream to roughly 45 Mbit/s; enlarging it allowed
+roughly 180 Mbit/s and sustained playback. This is separate from Kodi's media
+cache size. Buffer-setting failures are logged and leave the connection usable
+with its existing buffer. The callback applies to other curl transfers too,
+including artwork and add-on downloads, not Python's separate socket layer.
+
+After changing this policy, restart Kodi to avoid reusing existing connections.
+Check high-bitrate playback, forward/backward seeks, stop/reopen, concurrent
+artwork loading and add-on downloads. Repeatedly opening and closing streams
+should not exhaust socket resources.
+
+### Thread stacks and decoder allocation failures
+
+`shims/native-app/thread_stack.c` raises the native default to at least **4 MiB**
+only when `pthread_create()` receives a null attributes pointer. This covers
+title-linked callers such as `std::thread` without prescribing a size for every
+workload. Explicit caller attributes are passed through unchanged, including
+smaller stacks, guard sizes, scheduling options and caller-supplied stack memory.
+The caller remains responsible for choosing and allocating a sufficient stack.
+The built CPython FreeBSD implementation already explicitly requests 4 MiB by
+default; an add-on's `threading.stack_size()` override remains respected.
+
+4 MiB is the working application default observed on the console, not a firmware
+requirement or a proven maximum stack usage. A global 8 MiB policy increases
+per-thread resource demand; the previous automatic fallback could then run
+workers on 1 MiB stacks, a size that previously overflowed during software
+thumbnail decoding. There is no longer a smaller-stack retry. Attribute errors
+and thread-creation failures are returned to the caller without changing
+`errno`; a cleanup error after successful creation is logged, not reported as
+creation failure for a thread that already exists.
+
+Failure-only kernel-log entries prefixed `[kodi-ps5] DIAGNOSTIC thread-create:`
+include the operation, native pthread return code, attempted stack size, explicit
+attribute flag, creating thread, entry point and available flexible memory.
+`stack_attr_rc` records stack-attribute inspection or setup errors;
+`flexible_memory_valid=0` means the memory query failed and its byte count must
+not be interpreted as available memory. These temporary diagnostics do not
+require a marker or change cache settings. Memory availability alone does not
+establish why thread creation failed.
+
+On PS5, software video filter graphs use a six-thread limit rather than an automatically
+sized worker pool. This includes software thumbnail and HDR-metadata extraction
+and software-playback filters. The scale filter inherits the graph's thread
+limit. Hardware decoding, decoder worker counts, concurrent Kodi jobs and stack
+sizes are unchanged. Debug logs report
+`[kodi-ps5] FFmpeg software filter graph: threads=6` when a graph is created.
+
+Temporary SMB debug diagnostics report the first 32 entries of each share/path
+listing with `[kodi-ps5] SMB entry:`. Each line includes the redacted parent URL
+(limited to 256 characters), entry name (160 characters), raw libsmb2 type,
+mapped directory flag, final Kodi item folder flag and size. Raw types are
+`0` (file), `1` (directory) and `2` (link/reparse point). A
+`[kodi-ps5] SMB listing:` summary includes total entries, directory and zero-size
+non-directory counts, and the number of omitted entry logs. Classification is
+based on the server's directory attribute: the local libsmb2 patch preserves
+`DIRECTORY` even when `REPARSE_POINT` is also set, consistently for listing, stat
+and fstat. Non-directory reparse points remain links/files, not folders. The
+patch changes no public libsmb2 layout or ABI. These diagnostics add no directory
+timings or traversal fallback.
+
+The Pictures dialog "Loading media information from files..." is a separate,
+sequential picture-tag lookup phase, not the video filter graph. Kodi's built-in
+metadata parser reads each uncached image into memory before parsing its tags,
+so remote image reads can delay the dialog even without video decoding.
+PS5 debug logs prefixed `[kodi-ps5] Picture metadata:` report phase begin/end and
+each actual tag lookup's `read_begin`/`read_end`, redacted path (256 characters),
+listed size, result and elapsed milliseconds. The listed size is not a measured
+transfer byte count; the timing includes both I/O and metadata parsing. A
+`read_begin` without its matching `read_end` identifies an in-progress lookup.
+Cached/skipped items do not produce read logs. These diagnostics do not change
+metadata loading, caching or cancellation.
+
+FFmpeg decoder-open failures log the returned error code and description.
+If reopening fails, picture retrieval reports a fatal decoder error instead
+of accessing the freed context; VideoPlayer aborts that playback through its
+existing `PLAYER_ABORT` path. A successful reopen waits for fresh input.
+TLS destructor registration also reports failures instead of claiming success
+after failed key creation, allocation or thread-specific storage.
+
+Run `bash tools/ps5/test-thread-stack.sh`, `bash tools/ps5/test-tls-dtors.sh`
+and `bash tools/ps5/test-pthread-tls.sh` for host regressions and SDK compile
+checks. Decoder lifecycle regressions are in `TestDVDVideoCodecFFmpeg`.
+The stack and TLS shims are copied into the native application during packaging;
+changing only those shims needs re-packaging. Native SMB diagnostics and
+decoder/player changes require a Kodi rebuild followed by packaging. Neither
+requires rebuilding Python.
+The reparse-directory fix additionally requires rebuilding/installing the
+`tools/depends/target/libsmb2` dependency before rebuilding Kodi and packaging.
+Run `bash tools/ps5/test-smb2-file-type.sh` against the patched dependency source
+for directory/reparse mapping regressions and an SDK compile check.
+Packaging resolves bare `-l` inputs using Kodi's actual linker search paths
+before SDK/OpenGL fallbacks, so the native title uses the rebuilt dependency
+rather than an older SDK archive. `vendor/kodi-deps.txt` in the staged native
+application records the selected archives. Run
+`python3 tools/ps5/test-kodi-link-inputs.py` for archive-selection regressions.

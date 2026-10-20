@@ -319,6 +319,53 @@ to the playback path; leave these markers absent for normal playback. Remove
 debug markers from the HOME root when finished. Packaging and deployment do not
 create or remove these user-controlled markers.
 
+### Asynchronous logging
+
+On PS5, kernel output and Kodi's log file use separate background workers.
+Logging callers, including the GUI thread, never wait for those workers' writes
+or flushes. Each queue is limited to 1024 pending messages and 1 MiB of message
+data. If a queue fills, new messages are dropped until its backlog drains;
+an explicit overflow message reports the loss. File-queue overflow is reported
+both in the log file and through kernel output.
+File write/flush failures are reported directly through kernel output without
+recursing through the failed logger.
+
+File output preserves the original timestamps, thread IDs, logger names, levels,
+message order and duplicate filtering. File flush requests are coalesced into
+one-second intervals, rather than flushing on every debug message. Normal log
+shutdown drains and flushes the file queue; an abrupt exit can lose pending or
+buffered messages. This does not change logging on other platforms.
+
+Run the focused host checks with `bash tools/ps5/test-async-logging.sh`.
+`SPDLOG_INCLUDE_DIR` and `FMT_INCLUDE_DIR` can select existing dependency headers
+when they are not in the default PS5 build/SDK locations.
+
+### Artwork cache timing
+
+On PS5 only, general debug logging (`kodi-debug` or Kodi's debug logging setting)
+enables aggregated `[kodi-ps5] Cache timing:` messages. No video-debug marker is
+needed. Each active stage reports its count, average and maximum milliseconds,
+and slow-operation count every five seconds while GUI frames are processed.
+Slow means at least 100 ms, except for GUI frame intervals, where it means 50 ms.
+Turning debug logging off stops collection and output.
+
+Stages separate image encoding, thumbnail open/write calls (`write-open`) and
+close (`write-close`), texture-database read/write mutex waits, database reads/writes,
+per-image transactions and commits, cache-job work, completion/database update
+and queue handoff, dispatch to worker start, GUI frame intervals, and presentation
+(including pacing/swap or idle sleep). Dispatch starts when a cache job is handed
+to the job manager, not when it first enters the artwork backlog; it can include
+an intentional playback pause. Frame intervals include time outside rendering
+and can include intentional idle periods. Timings overlap where stages nest;
+do not add their averages together. A sample is counted when its operation ends,
+including failed operations, so an unfinished stall appears only after it returns.
+Summaries resume after a GUI stall; they are not a separate watchdog.
+
+Workers only update bounded in-memory counters. The GUI thread copies and resets
+the counters before enqueueing logs, without holding the timing collector's mutex.
+These diagnostics do not change cache concurrency, image sizes, database policy
+or scheduling, and shared-code hooks are compiled only with `TARGET_PS5`.
+
 ### Network streaming
 
 PS5 curl connections request a 1 MiB socket receive buffer before connecting;

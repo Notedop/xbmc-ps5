@@ -18,6 +18,10 @@
 #include "utils/Variant.h"
 #include "utils/log.h"
 
+#ifdef TARGET_PS5
+#include "platform/ps5/CacheDiagnostics.h"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <string_view>
@@ -350,6 +354,10 @@ bool CTextureDatabase::AddCachedTexture(const std::string &url, const CTextureDe
     if (!m_pDS)
       return false;
 
+#ifdef TARGET_PS5
+    using namespace KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS;
+    CScopedTiming transactionTiming{Stage::TRANSACTION};
+#endif
     BeginTransaction();
 
     std::string sql = PrepareSQL("DELETE FROM texture WHERE url='%s'", url.c_str());
@@ -364,6 +372,9 @@ bool CTextureDatabase::AddCachedTexture(const std::string &url, const CTextureDe
     sql = PrepareSQL("INSERT INTO sizes (idtexture, size, usecount, lastusetime, width, height) VALUES(%u, 1, 1, CURRENT_TIMESTAMP, %u, %u)", textureID, details.width, details.height);
     m_pDS->exec(sql);
 
+#ifdef TARGET_PS5
+    CScopedTiming commitTiming{Stage::COMMIT};
+#endif
     CommitTransaction();
   }
   catch (...)

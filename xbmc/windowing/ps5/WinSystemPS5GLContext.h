@@ -91,6 +91,7 @@ protected:
   void PresentRenderImpl(bool rendered) override {}
 
 private:
+  std::chrono::steady_clock::time_point m_cacheFrameStart{};
   bool m_videoOutLogged = false;
   std::chrono::steady_clock::time_point m_nextVrrPresent{}; // VRR presentation cadence
   std::chrono::steady_clock::time_point m_lastLinkCheck{};  // VRR link re-check (2 s)

@@ -11,6 +11,13 @@
 #include "ServiceBroker.h"
 #include "jobs/JobManager.h"
 
+#ifdef TARGET_PS5
+#include "TextureCacheJob.h"
+#include "platform/ps5/CacheDiagnostics.h"
+
+#include <cstring>
+#endif
+
 #include <algorithm>
 #include <mutex>
 
@@ -112,6 +119,12 @@ void CJobQueue::QueueNextJob()
   while (!m_jobQueue.empty() && m_processing.size() < m_jobsAtOnce)
   {
     CJobPointer& job = m_jobQueue.back();
+#ifdef TARGET_PS5
+    using namespace KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS;
+    if (std::strcmp(job.GetJob()->GetType(), CTextureCacheJob::JOB_TYPE_CACHE_IMAGE) == 0 &&
+        IsEnabled())
+      static_cast<CTextureCacheJob*>(job.GetJob())->m_diagnosticQueuedAt = Clock::now();
+#endif
     job.SetId(CServiceBroker::GetJobManager()->AddJob(job.GetJob(), this, m_priority));
     if (job.GetId() > 0)
       m_processing.emplace_back(job);

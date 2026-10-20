@@ -21,6 +21,10 @@
 #include "utils/URIUtils.h"
 #include "utils/log.h"
 
+#ifdef TARGET_PS5
+#include "platform/ps5/CacheDiagnostics.h"
+#endif
+
 #include <algorithm>
 
 extern "C" {
@@ -69,6 +73,10 @@ bool CPicture::CreateThumbnailFromSurface(const unsigned char* buffer,
 
   unsigned char *thumb = NULL;
   unsigned int thumbsize=0;
+#ifdef TARGET_PS5
+  using namespace KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS;
+  CScopedTiming encodeTiming{Stage::ENCODE};
+#endif
   IImage* pImage = ImageFactory::CreateLoader(thumbFile);
   if (pImage)
     pImage->SetColorMetadata(color);
@@ -82,12 +90,24 @@ bool CPicture::CreateThumbnailFromSurface(const unsigned char* buffer,
     return false;
   }
 
+#ifdef TARGET_PS5
+  encodeTiming.Stop();
+  CScopedTiming writeTiming{Stage::WRITE};
+#endif
   XFILE::CFile file;
   const bool ret = file.OpenForWrite(thumbFile, true) &&
                    file.Write(thumb, thumbsize) == static_cast<ssize_t>(thumbsize);
+#ifdef TARGET_PS5
+  writeTiming.Stop();
+#endif
 
   pImage->ReleaseThumbnailBuffer();
   delete pImage;
+
+#ifdef TARGET_PS5
+  CScopedTiming closeTiming{Stage::CLOSE};
+  file.Close();
+#endif
 
   return ret;
 }

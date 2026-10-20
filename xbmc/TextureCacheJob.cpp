@@ -25,6 +25,10 @@
 #include "utils/URIUtils.h"
 #include "utils/log.h"
 
+#ifdef TARGET_PS5
+#include "platform/ps5/CacheDiagnostics.h"
+#endif
+
 #include <cstring>
 #include <utility>
 
@@ -58,6 +62,12 @@ bool CTextureCacheJob::Equals(const CJob* job) const
 
 bool CTextureCacheJob::DoWork()
 {
+#ifdef TARGET_PS5
+  using namespace KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS;
+  CScopedTiming jobTiming{Stage::JOB};
+  if (m_diagnosticQueuedAt != Clock::time_point{} && IsEnabled())
+    Record(Stage::DISPATCH, Clock::now() - m_diagnosticQueuedAt);
+#endif
   if (ShouldCancel(0, 0))
     return false;
 

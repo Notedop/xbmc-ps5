@@ -23,6 +23,10 @@
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 
+#ifdef TARGET_PS5
+#include "platform/ps5/AsyncLogSink.h"
+#endif
+
 #include <cstring>
 #include <set>
 
@@ -172,7 +176,12 @@ void CLog::Initialize(const std::string& path)
       m_platform->GetLogFilename(filePath), false);
   basicFileSink->set_pattern(LogPattern);
   duplicateFilterSink->add_sink(basicFileSink);
+#ifdef TARGET_PS5
+  m_fileSink = std::make_shared<CPS5AsyncLogSink>(duplicateFilterSink);
+  m_fileSink->set_pattern(LogPattern);
+#else
   m_fileSink = duplicateFilterSink;
+#endif
 
   // add it to the existing sinks
   m_sinks->add_sink(m_fileSink);

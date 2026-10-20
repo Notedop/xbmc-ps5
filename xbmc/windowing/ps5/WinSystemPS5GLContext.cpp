@@ -10,6 +10,7 @@
 
 #include "platform/ps5/video/VideoBufferPS5.h"
 
+#include "platform/ps5/CacheDiagnostics.h"
 #include "platform/ps5/VideoOutInfo.h"
 #include "settings/DisplaySettings.h"
 
@@ -247,6 +248,15 @@ float CWinSystemPS5GLContext::GetFrameLatencyAdjustment()
 
 bool CWinSystemPS5GLContext::BeginRender()
 {
+  using namespace KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS;
+  const bool cacheTimingEnabled = IsEnabled();
+  const auto cacheFrameStart = cacheTimingEnabled ? Clock::now() : Clock::time_point{};
+  if (cacheTimingEnabled && m_cacheFrameStart != Clock::time_point{})
+    Record(Stage::FRAME_INTERVAL, cacheFrameStart - m_cacheFrameStart);
+  if (cacheTimingEnabled || m_cacheFrameStart != Clock::time_point{})
+    Report(cacheFrameStart, cacheTimingEnabled);
+  m_cacheFrameStart = cacheFrameStart;
+
   if (m_stats)
   {
     // kodi-video-debug: the GUI thread was away from rendering for a while - the
@@ -395,6 +405,9 @@ void CWinSystemPS5GLContext::PresentRender(bool rendered, bool videoLayer)
 {
   if (!m_bRenderCreated)
     return;
+
+  KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS::CScopedTiming presentTiming{
+      KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS::Stage::PRESENT};
 
   double renderMs = 0.0; // kodi-video-debug: the frame's cost, before the pacer's wait
   if (m_stats && m_frameStart.time_since_epoch().count() != 0)

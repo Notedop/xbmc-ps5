@@ -28,6 +28,10 @@
 #include "utils/URIUtils.h"
 #include "utils/log.h"
 
+#ifdef TARGET_PS5
+#include "platform/ps5/CacheDiagnostics.h"
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -61,6 +65,10 @@ CTextureCache::CCachingQueue::CCachingQueue(CTextureCache& cache)
 
 void CTextureCache::CCachingQueue::OnJobComplete(unsigned int jobID, bool success, CJob* job)
 {
+#ifdef TARGET_PS5
+  KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS::CScopedTiming completionTiming{
+      KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS::Stage::COMPLETION};
+#endif
   if (strcmp(job->GetType(), CTextureCacheJob::JOB_TYPE_CACHE_IMAGE) == 0)
     m_cache.OnCachingComplete(success, static_cast<CTextureCacheJob*>(job));
   return CJobQueue::OnJobComplete(jobID, success, job);
@@ -290,13 +298,29 @@ bool CTextureCache::ClearCachedImage(int id)
 
 bool CTextureCache::GetCachedTexture(const std::string &url, CTextureDetails &details)
 {
+#ifdef TARGET_PS5
+  using namespace KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS;
+  CScopedTiming waitTiming{Stage::DATABASE_READ_WAIT};
+#endif
   std::unique_lock lock(m_databaseSection);
+#ifdef TARGET_PS5
+  waitTiming.Stop();
+  CScopedTiming readTiming{Stage::DATABASE_READ};
+#endif
   return m_database.GetCachedTexture(url, details);
 }
 
 bool CTextureCache::AddCachedTexture(const std::string &url, const CTextureDetails &details)
 {
+#ifdef TARGET_PS5
+  using namespace KODI::PLATFORM::PS5::CACHE_DIAGNOSTICS;
+  CScopedTiming waitTiming{Stage::DATABASE_WRITE_WAIT};
+#endif
   std::unique_lock lock(m_databaseSection);
+#ifdef TARGET_PS5
+  waitTiming.Stop();
+  CScopedTiming writeTiming{Stage::DATABASE_WRITE};
+#endif
   return m_database.AddCachedTexture(url, details);
 }
 

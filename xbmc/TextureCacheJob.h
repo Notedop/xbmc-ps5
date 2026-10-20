@@ -16,6 +16,10 @@
 #include <string>
 #include <vector>
 
+#ifdef TARGET_PS5
+#include <chrono>
+#endif
+
 class CFileItem;
 class CTexture;
 namespace IMAGE_FILES
@@ -109,6 +113,10 @@ public:
    \sa CTextureCache::StartCacheImage, CTextureCache::OnCachingComplete
    */
   bool m_holdsProcessingClaim{false};
+
+#ifdef TARGET_PS5
+  std::chrono::steady_clock::time_point m_diagnosticQueuedAt{};
+#endif
 
 private:
   /*! \brief Whether the copy this image was previously cached to is still present

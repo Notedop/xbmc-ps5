@@ -1,4 +1,6 @@
 set(SOURCES AppDirectory.cpp
+            AsyncLogSink.cpp
+            CacheDiagnostics.cpp
             CPUInfoPS5.cpp
             GPUInfoPS5.cpp
             MemUtils.cpp
@@ -10,6 +12,8 @@ set(SOURCES AppDirectory.cpp
             )
 
 set(HEADERS AppDirectory.h
+            AsyncLogSink.h
+            CacheDiagnostics.h
             CPUInfoPS5.h
             GPUInfoPS5.h
             PlatformPS5.h

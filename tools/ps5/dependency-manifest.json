@@ -21,8 +21,9 @@
     {
       "name": "ps5-opengl",
       "role": "graphics runtime/library",
-      "source": "https://github.com/blackbearreloaded/ps5-opengl.git",
-      "pin": "122aa899f9255e37d776b2a5317c86e5e9679907",
+      "source": "https://github.com/Notedop/ps5-opengl.git",
+      "pin": "a519561626933257213d64a4a8bd5e02b55dceb2",
+      "version": "1.0.2",
       "pin_source": "tools/ps5/patches/ps5-opengl/PS5-OPENGL-COMMIT",
       "local_worktree": "build/ps5-external/ps5-opengl (WORK, see tools/ps5/bootstrap.sh)",
       "consumption": [

@@ -102,10 +102,26 @@ debugging the bootstrap.
   `tools/ps5/package.sh`.
   Built from the revision pinned in
   `tools/ps5/patches/ps5-opengl/PS5-OPENGL-COMMIT` with
-  `tools/ps5/patches/ps5-opengl/kodi-additions.py` applied, which adds the
+  `tools/ps5/patches/ps5-opengl/*.patch` applied, which add the
   driver entry points Kodi needs (video out handle, HDR scanout format,
   zero-copy EGL images). A stock upstream build does **not** export these, so
   a release archive cannot be substituted as-is.
+
+  The current pin is SDK 1.0.2 preparation commit
+  `a519561626933257213d64a4a8bd5e02b55dceb2` from
+  `https://github.com/Notedop/ps5-opengl`, which preserves the original
+  upstream history. It is not known whether this was upstream's final revision.
+  Bootstrap refuses to reuse a different source revision rather than replacing
+  an existing patched checkout. For an upgrade, use a new `WORK` directory.
+  `PS5_OPENGL_PREFIX` may point to a user-writable directory to avoid changing
+  an existing system installation. Configure Kodi with both
+  `-DPS5_OPENGL_PREFIX=<prefix>` and
+  `-DPS5OpenGL_DIR=<prefix>/lib/cmake/PS5OpenGL`, and pass the same
+  `PS5_OPENGL_PREFIX` when packaging. If only the graphics SDK is rebuilt,
+  keep `APP_TEMPLATE` pointing to the existing native-app template; a fresh
+  `WORK` used for the SDK alone does not contain a built template.
+  The existing fixed scanout profile remains the default; runtime display-mode
+  selection is not enabled by this upgrade.
 
   The SDK also receives two link stubs it does not ship
   (`tools/ps5/bootstrap/sce-stubs.sh`): `libSceVideodec2` for the hardware

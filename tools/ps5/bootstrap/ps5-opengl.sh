@@ -3,7 +3,7 @@
 #
 # The pinned upstream revision (patches/ps5-opengl/PS5-OPENGL-COMMIT) is
 # checked out into $WORK/ps5-opengl and patched with
-# patches/ps5-opengl/kodi-additions.py, which adds the entry points Kodi's
+# patches/ps5-opengl/*.patch, which add the entry points Kodi's
 # window system and renderer need:
 #   ps5_opengl_video_out_handle()      refresh rate / vblank clock / VRR
 #   ps5_opengl_set_scanout_format()    HDR output (scanout pixel format)
@@ -25,6 +25,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # tools/ps5
 ROOT="$(cd "$HERE/../.." && pwd)"
 WORK="${WORK:-$ROOT/build/ps5-external}"
 SRC="$WORK/ps5-opengl"
+SOURCE_URL="https://github.com/Notedop/ps5-opengl.git"
 export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
 export PS5_OPENGL_PREFIX="${PS5_OPENGL_PREFIX:-/opt/ps5-opengl-gl46}"
 
@@ -36,21 +37,42 @@ PROFILE="${PS5_SCANOUT_HEIGHT}p${PS5_SCANOUT_FPS}"
 
 mkdir -p "$WORK"
 
+COMMIT="$(tr -d '[:space:]' < "$HERE/patches/ps5-opengl/PS5-OPENGL-COMMIT")"
+if [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "!! invalid PS5-OPENGL-COMMIT: expected a full commit hash" >&2
+  exit 1
+fi
 if [ ! -d "$SRC/src/platform" ]; then
-  COMMIT="$(tr -d '[:space:]' < "$HERE/patches/ps5-opengl/PS5-OPENGL-COMMIT")"
   echo "==> cloning ps5-opengl at $COMMIT"
-  [ -d "$SRC/.git" ] || git clone --no-checkout https://github.com/blackbearreloaded/ps5-opengl.git "$SRC"
-  git -C "$SRC" fetch --all --tags --quiet || true
-  git -C "$SRC" checkout -q "$COMMIT"
+  if [ ! -e "$SRC/.git" ]; then
+    git clone --no-checkout "$SOURCE_URL" "$SRC"
+  fi
+  git -C "$SRC" fetch --no-tags --quiet "$SOURCE_URL" "$COMMIT"
+  git -C "$SRC" checkout --detach -q "$COMMIT"
+fi
+ACTUAL="$(git -C "$SRC" rev-parse HEAD)"
+if [ "$ACTUAL" != "$COMMIT" ]; then
+  echo "!! ps5-opengl at $SRC is $ACTUAL, but Kodi requires $COMMIT" >&2
+  echo "!! Existing sources were preserved. Use a new WORK directory for the upgrade." >&2
+  exit 1
 fi
 
 echo "==> applying Kodi additions to $SRC"
-python3 "$HERE/patches/ps5-opengl/kodi-additions.py" "$SRC"
+shopt -s nullglob
+PATCHES=("$HERE"/patches/ps5-opengl/*.patch)
+shopt -u nullglob
+if [ "${#PATCHES[@]}" -eq 0 ]; then
+  echo "!! no Kodi OpenGL integration patches found" >&2
+  exit 1
+fi
+if git -C "$SRC" apply --reverse --check "${PATCHES[@]}" >/dev/null 2>&1; then
+  echo "    Kodi integration patches already applied"
+else
+  git -C "$SRC" apply --check "${PATCHES[@]}"
+  git -C "$SRC" apply "${PATCHES[@]}"
+fi
 
-# The additions live in the runtime (src/platform, src/egl), which the SDK
-# installer rebuilds itself; Mesa and the shader compiler are unchanged. The
-# runtime's make rules do not track compiler flags: when the display profile
-# changes, rebuild the runtime objects from scratch.
+# The runtime's make rules do not track compiler flags.
 STAMP="$SRC/build/.kodi-display-profile"
 if [ "$(cat "$STAMP" 2>/dev/null)" != "$PROFILE" ]; then
   echo "==> display profile $PROFILE (was: $(cat "$STAMP" 2>/dev/null || echo "upstream default 1080p60")): clean runtime rebuild"
@@ -59,15 +81,11 @@ fi
 
 LOG="$WORK/ps5-opengl-build.log"
 
-# A first build needs the shader compiler and Mesa as well. Drive the
-# toolchain steps of "make sdk-gl46" individually rather than the target
-# itself, so that its `make test-compiler` step is skipped: those host-side
-# self-tests check the shader compiler's own source against expected
-# snippets and do not affect the SDK that gets produced, and at the pinned
-# revision one of them (tests/ps5/test_descriptor_snapshot.py) fails against
-# an unmodified tree - verified by running it on a clean checkout. Run them
-# by hand with `make -C "$SRC" test-compiler` when changing the compiler.
-if [ ! -d "$SRC/build/sdk/ps5-opengl-gl46/lib" ]; then
+# A new revision can change Mesa and the shader compiler as well as the runtime.
+SDK_STAMP="$SRC/build/.kodi-sdk-build"
+SDK_IDENTITY="$(printf '%s\n' "$COMMIT"; sha256sum "${PATCHES[@]}")"
+if [ ! -d "$SRC/build/sdk/ps5-opengl-gl46/lib" ] ||
+   [ "$(cat "$SDK_STAMP" 2>/dev/null)" != "$SDK_IDENTITY" ]; then
   # Upstream's tools/fetch-sources.py is not resumable: it creates
   # third_party/<name>/ and only then fetches into it, but on a re-run it
   # skips the whole init/fetch/checkout block whenever the directory already
@@ -83,7 +101,7 @@ if [ ! -d "$SRC/build/sdk/ps5-opengl-gl46/lib" ]; then
       fi
     done
   fi
-  echo "==> first build: fetching sources, shader compiler and Mesa (1-2 hours; log: $LOG)"
+  echo "==> building pinned sources, shader compiler and Mesa (log: $LOG)"
   ( cd "$SRC" \
       && make source-fetch \
       && bash toolchain/build-opengnm-psbc.sh \
@@ -98,28 +116,31 @@ echo "==> building the runtime and packaging the SDK ($PROFILE)"
   > "$LOG" 2>&1 || {
   echo "!! SDK build failed, last lines of $LOG:"; tail -25 "$LOG"; exit 1; }
 ( cd "$SRC" && python3 tests/ps5/verify_gl46_link_surface.py ) >> "$LOG" 2>&1 \
-  || echo "   note: verify_gl46_link_surface.py reported a problem (see the log)"
+  || { echo "!! OpenGL link-surface verification failed (see $LOG)"; exit 1; }
 
-mkdir -p "$SRC/build" && echo "$PROFILE" > "$STAMP"
 echo "==> installing into $PS5_OPENGL_PREFIX"
-sudo mkdir -p "$PS5_OPENGL_PREFIX"
-sudo cp -a "$SRC/build/sdk/ps5-opengl-gl46/." "$PS5_OPENGL_PREFIX/"
+if { [ -d "$PS5_OPENGL_PREFIX" ] && [ -w "$PS5_OPENGL_PREFIX" ]; } ||
+   { [ ! -e "$PS5_OPENGL_PREFIX" ] && [ -w "$(dirname "$PS5_OPENGL_PREFIX")" ]; }; then
+  mkdir -p "$PS5_OPENGL_PREFIX"
+  cp -a "$SRC/build/sdk/ps5-opengl-gl46/." "$PS5_OPENGL_PREFIX/"
+else
+  sudo -n mkdir -p "$PS5_OPENGL_PREFIX"
+  sudo -n cp -a "$SRC/build/sdk/ps5-opengl-gl46/." "$PS5_OPENGL_PREFIX/"
+fi
 
 # lib/libPS5OpenGL.a is a linker script (GROUP of the real archives); the
 # runtime, and so our additions, live in lib/libps5_opengl_core33.a.
-found=""
-for lib in "$PS5_OPENGL_PREFIX"/lib/*.a; do
-  # no "grep -q": it stops reading early, llvm-nm then dies of SIGPIPE and
-  # pipefail reports the match as a failure
-  if [ "$("$PS5_PAYLOAD_SDK/bin/llvm-nm" "$lib" 2>/dev/null | grep -c " T ps5_opengl_video_out_handle")" -gt 0 ]; then
-    found="$lib"; break
+RUNTIME_LIB="$PS5_OPENGL_PREFIX/lib/libps5_opengl_core33.a"
+SYMBOLS="$("$PS5_PAYLOAD_SDK/bin/llvm-nm" --defined-only "$RUNTIME_LIB")"
+for symbol in ps5_opengl_video_out_handle ps5_opengl_set_scanout_format ps5_opengl_memory_image_create; do
+  if ! grep -Eq " T ${symbol}$" <<< "$SYMBOLS"; then
+    echo "!! installed runtime archive does not export $symbol" >&2
+    exit 1
   fi
 done
 if ! grep -q "PS5_OPENGL_NATIVE_HEIGHT $PS5_SCANOUT_HEIGHT" "$PS5_OPENGL_PREFIX/include/ps5_opengl_display.h"; then
   echo "!! installed SDK does not report the $PROFILE profile"; exit 1
 fi
-if [ -n "$found" ]; then
-  echo "SDK ready ($PROFILE): ps5_opengl_video_out_handle exported (in $(basename "$found"))"
-else
-  echo "!! no installed archive in $PS5_OPENGL_PREFIX/lib exports ps5_opengl_video_out_handle"; exit 1
-fi
+printf '%s\n' "$PROFILE" > "$STAMP"
+printf '%s\n' "$SDK_IDENTITY" > "$SDK_STAMP"
+echo "SDK ready ($PROFILE): all three Kodi integration entry points exported"

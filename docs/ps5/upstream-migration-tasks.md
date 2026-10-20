@@ -18,11 +18,11 @@ the bootstrap as it stands is the supported path until these land.
 |---|---|---|---|
 | 1 | `ps5-payload-dev/sdk` | Ship a `libSceVideodec2` link stub | `shims/sce_stubs/libSceVideodec2.c` |
 | 2 | `ps5-payload-dev/sdk` | Add `sceVideoOutVrrUnpegFromFixedRate` to the `libSceVideoOut` stub | the `libSceVideoOut` half of `tools/ps5/bootstrap/sce-stubs.sh` |
-| 3 | `blackbearreloaded/ps5-opengl` | Export the video out handle | part of `tools/ps5/patches/ps5-opengl/kodi-additions.py` |
+| 3 | `Notedop/ps5-opengl` | Export the video out handle | part of `tools/ps5/patches/ps5-opengl/*.patch` |
 | 4 | `blackbearreloaded/ps5-opengl` | Scanout pixel format switch (HDR output) | part of the same |
 | 5 | `blackbearreloaded/ps5-opengl` | EGL image over foreign memory (zero-copy video) | part of the same |
 | 6 | this repo | Make the remaining externs weak + feature-detected | hard link dependency on a patched SDK |
-| 7 | `blackbearreloaded/ps5-opengl` | Fix the failing `test_descriptor_snapshot.py` self-test | the `test-compiler` skip in `tools/ps5/bootstrap/ps5-opengl.sh` |
+| 7 | `Notedop/ps5-opengl` | Historical `test_descriptor_snapshot.py` failure | fixed at the SDK 1.0.2 pin; see below |
 
 ---
 
@@ -64,15 +64,15 @@ items; do them first.
 
 ---
 
-## 3-5. `blackbearreloaded/ps5-opengl`: three driver entry points
+## 3-5. `Notedop/ps5-opengl`: three driver entry points
 
-Applied by `tools/ps5/patches/ps5-opengl/kodi-additions.py`, written against
+Carried as unified diffs in `tools/ps5/patches/ps5-opengl/*.patch`, written against
 the revision pinned in `tools/ps5/patches/ps5-opengl/PS5-OPENGL-COMMIT`.
 
-The script is already written with upstreaming in mind: it inserts at named
-anchors, reports `skipped, anchor differs` instead of corrupting a file, and
-*removes* older diagnostic additions so the tree converges on "upstream plus
-these functions".
+The bootstrap applies the complete patch set with `git apply`, checking all
+hunks before modifying files. An already-applied set is recognized by a reverse
+check; incompatible or partially applied sources fail instead of silently
+skipping additions. The former Python source-rewriting script has been removed.
 
 ### 3. `ps5_opengl_video_out_handle()`
 
@@ -114,10 +114,10 @@ neutrally named, but the internals carry Kodi's name:
 | `struct ps5_kodi_image` / `PS5_KODI_IMAGE_MAGIC` | `struct ps5_memory_image` / `PS5_MEMORY_IMAGE_MAGIC` |
 | `/* KODI-PS5: ... */` comments | plain descriptive comments |
 
-**Rebase first.** The pinned commit is well behind `main` (the project has since
-tagged releases), so the anchors these insertions target may have moved. Rebase
-`kodi-additions.py` onto the current tag, confirm every anchor still reports
-applied rather than `skipped, anchor differs`, and rebuild before opening PRs.
+**Check the target revision first.** The pin is SDK 1.0.2 revision `a519561`,
+preserved in `Notedop/ps5-opengl`; it is not known to be the original upstream's
+final revision. Rebase the patches onto the intended upstream target and rebuild
+before opening PRs.
 
 **After landing:** delete `tools/ps5/patches/ps5-opengl/`, and reduce
 `tools/ps5/bootstrap/ps5-opengl.sh` to downloading and unpacking a pinned
@@ -161,7 +161,7 @@ resolves `ps5_opengl_memory_image_create`.
    coupling that makes everything else urgent.
 2. **Items 1-2** - the two SDK stub PRs. Trivial, clearly generic, and they
    delete a whole bootstrap step plus a vendored source directory.
-3. **Items 3-5** - rebase `kodi-additions.py` onto current `ps5-opengl`,
+3. **Items 3-5** - rebase the unified patches onto the intended `ps5-opengl`,
    de-Kodi-ify the zero-copy internals, then open the PRs (3 and 4 can go
    first; 5 is the larger review).
 4. Shrink `tools/ps5/bootstrap/ps5-opengl.sh` to a download step and delete
@@ -169,10 +169,10 @@ resolves `ps5_opengl_memory_image_create`.
 
 ---
 
-## 7. `blackbearreloaded/ps5-opengl`: a failing host self-test at the pin
+## 7. Historical host self-test failure
 
 `make sdk-gl46` runs `make test-compiler` between building Mesa and installing
-the SDK. At the pinned revision `122aa89`, `tests/ps5/test_descriptor_snapshot.py`
+the SDK. At the former pin `122aa89`, `tests/ps5/test_descriptor_snapshot.py`
 fails on an **unmodified** checkout:
 
 ```
@@ -182,13 +182,15 @@ AssertionError
 
 The test slices `src/gallium/ps5/ps5_screen.c` by source text and asserts the
 exact statement appears inside `ps5_prepare_constant()`. It is not caused by
-`kodi-additions.py` - this was confirmed by stashing our three modified files
+the Kodi additions - this was confirmed by stashing our three modified files
 and re-running the test on the clean tree.
 
-Because these self-tests only check the shader compiler's own sources and have
-no effect on the SDK that gets produced, `tools/ps5/bootstrap/ps5-opengl.sh`
-drives the individual `sdk-gl46` toolchain steps and skips `test-compiler`.
-Run `make -C <ps5-opengl> test-compiler` by hand when changing the compiler.
+That descriptor test passes at the SDK 1.0.2 pin. The bootstrap still drives the
+individual toolchain steps rather than `make sdk-gl46`: some compiler fixtures
+verify exact upstream source hashes and reject a Kodi-patched `ps5_screen.c`.
+Run the compiler suite against clean pinned sources without changing those
+provenance checks, and exercise the Kodi integration separately against patched
+sources.
 
-**Action:** report upstream, or confirm the test is stale and expected to be
-rebased. Once fixed, the bootstrap script can call `make sdk-gl46` again.
+**Action:** keep compiler qualification and Kodi integration coverage when
+updating the pin or patches.

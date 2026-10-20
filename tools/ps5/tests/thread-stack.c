@@ -3,7 +3,39 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+static int malloc_fail, live_entries, drains, started;
+static void* (*launched)(void*);
+static void* launched_arg;
+
+static void* test_malloc(size_t size)
+{
+  if (malloc_fail)
+    return NULL;
+  ++live_entries;
+  return malloc(size);
+}
+
+static void test_free(void* ptr)
+{
+  --live_entries;
+  free(ptr);
+}
+
+void ps5_tls_dtors_thread_exit(void)
+{
+  assert(started == 1 && live_entries == 0);
+  ++drains;
+}
+
+static void* entry_point(void* arg)
+{
+  assert(drains == 0);
+  ++started;
+  return arg;
+}
 
 /* No actual threads are launched. Explicit attributes must pass through intact. */
 typedef struct
@@ -71,18 +103,22 @@ static int stub_setstacksize(test_attr* attr, size_t size)
 #define pthread_attr_destroy stub_destroy
 #define pthread_attr_getstacksize stub_getstacksize
 #define pthread_attr_setstacksize stub_setstacksize
+#define malloc test_malloc
+#define free test_free
 #include "../../../shims/native-app/thread_stack.c"
+#undef malloc
+#undef free
 
 int __real_pthread_create(pthread_t* thread, const test_attr* attr,
                           void* (*start)(void*), void* arg)
 {
   (void)thread;
-  (void)start;
-  (void)arg;
   ++create_calls;
   errno = EIO;
   attempted_attr = attr;
   attempted = *attr;
+  launched = start;
+  launched_arg = arg;
   return create_rc;
 }
 
@@ -105,6 +141,15 @@ int sceKernelDebugOutText(int channel, const char* text)
 
 static void reset(void)
 {
+  /* Successful creations hand the start record to the (never run) thread. */
+  if (live_entries)
+  {
+    assert(live_entries == 1 && create_calls == 1 && create_rc == 0);
+    test_free(launched_arg);
+  }
+  malloc_fail = drains = started = 0;
+  launched = NULL;
+  launched_arg = NULL;
   fail_api = NULL;
   failure_rc = ENOMEM;
   create_rc = memory_rc = destroy_rc = 0;
@@ -239,6 +284,30 @@ int main(void)
   assert(strstr(messages, "explicit_attr=1"));
   assert(strstr(messages, "creator_thread="));
   assert(strstr(messages, "entry="));
+
+  /* The thread runs the caller's routine, then thread_local destructors. */
+  reset();
+  pthread_t thread;
+  int token;
+  assert(__wrap_pthread_create(&thread, NULL, entry_point, &token) == 0);
+  assert(launched && launched != entry_point && live_entries == 1);
+  assert(launched(launched_arg) == &token);
+  assert(started == 1 && drains == 1 && live_entries == 0);
+
+  /* Failed creation releases the start record; failed allocation never creates. */
+  reset();
+  create_rc = EAGAIN;
+  assert(run(&attr) == EAGAIN && live_entries == 0);
+  reset();
+  malloc_fail = 1;
+  assert(run(NULL) == ENOMEM && create_calls == 0 && destroy_calls == 1);
+  expect_log("start-trampoline", ENOMEM, PS5_DEFAULT_THREAD_STACK);
+  reset();
+  malloc_fail = 1;
+  assert(run(&attr) == ENOMEM && create_calls == 0 && destroy_calls == 0);
+  assert(strstr(messages, "explicit_attr=1"));
+  reset();
+  assert(drains == 0 && started == 0);
   puts("PASS: thread-stack host regressions");
   return 0;
 }

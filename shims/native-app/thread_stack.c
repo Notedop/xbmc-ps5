@@ -6,6 +6,8 @@
  *  desktop OS - the first thumbnail encode overflowed it. Every
  *  pthread_create() linked into the title is routed here by --wrap.
  *  Explicit caller attributes, including supplied stack memory, are untouched.
+ *  Every start routine is wrapped so thread_local destructors run before the
+ *  thread's TLS storage is released (see weak_shims.c).
  *  SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include <pthread.h>
@@ -13,6 +15,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* 4 MiB has worked for software decoding; 1 MiB previously overflowed.
  * This is an application default, not a firmware requirement. */
@@ -22,6 +25,24 @@ int __real_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
                           void* (*start)(void*), void* arg);
 int sceKernelDebugOutText(int channel, const char* text);
 int sceKernelAvailableFlexibleMemorySize(size_t* size);
+void ps5_tls_dtors_thread_exit(void); /* weak_shims.c */
+
+/* Runs thread_local destructors before pthread's key destructors free the
+ * emulated TLS storage they operate on (see weak_shims.c). */
+struct ps5_thread_start
+{
+  void* (*start)(void*);
+  void* arg;
+};
+
+static void* ps5_thread_trampoline(void* raw)
+{
+  struct ps5_thread_start entry = *(struct ps5_thread_start*)raw;
+  free(raw);
+  void* result = entry.start(entry.arg);
+  ps5_tls_dtors_thread_exit();
+  return result;
+}
 
 /* TEMPORARY DIAGNOSTICS: identify allocation failures without lowering stacks. */
 static void log_failure(const char* stage, int result, size_t size, int stack_rc,
@@ -50,6 +71,7 @@ int __wrap_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
   size_t size = 0;
   int result = 0;
   const char* stage = "attr-init";
+  struct ps5_thread_start* entry;
 
   if (!attr)
   {
@@ -72,16 +94,24 @@ int __wrap_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
     }
   }
 
-  result = __real_pthread_create(thread, use, start, arg);
+  result = ENOMEM;
+  stage = "start-trampoline";
+  entry = malloc(sizeof(*entry));
+  if (!entry)
+    goto attr_failure;
+  entry->start = start;
+  entry->arg = arg;
+  result = __real_pthread_create(thread, use, ps5_thread_trampoline, entry);
   if (result != 0)
   {
+    free(entry);
     int stack_rc = attr ? pthread_attr_getstacksize(attr, &size) : 0;
     log_failure("pthread_create", result, size, stack_rc, attr != NULL, start);
   }
   goto cleanup;
 
 attr_failure:
-  log_failure(stage, result, size, result, 0, start);
+  log_failure(stage, result, size, result, attr != NULL, start);
 
 cleanup:
   if (own)

@@ -136,6 +136,33 @@ static void* worker(void* unused)
   return NULL;
 }
 
+/* Stands in for emutls: an earlier key whose destructor frees TLS storage. */
+static pthread_key_t storage_key;
+static int storage_freed;
+
+static void free_storage(void* value)
+{
+  (void)value;
+  storage_freed = 1;
+}
+
+static void destroy_live(void* obj)
+{
+  assert(!storage_freed);
+  destroy(obj);
+}
+
+static void* trampolined_worker(void* unused)
+{
+  (void)unused;
+  assert(pthread_setspecific(storage_key, &storage_key) == 0);
+  assert(register_dtor(destroy_live, &values[0], NULL) == 0);
+  assert(register_dtor(destroy_live, &values[1], NULL) == 0);
+  ps5_tls_dtors_thread_exit(); /* what thread_stack.c's trampoline does */
+  assert(destroyed == 3 && pthread_getspecific(g_tls_dtor_key) == NULL);
+  return NULL;
+}
+
 int main(void)
 {
   reset();
@@ -197,7 +224,29 @@ int main(void)
   assert(pthread_join(thread, NULL) == 0);
   assert(destroyed == 3 && order[0] == 2 && order[1] == 1 && order[2] == 3);
   assert(allocations == 3 && releases == 3 && key_calls == 1 && logs == 0);
+
+  /* Thread-exit drain runs before older keys' destructors free storage,
+   * re-runs for destructors that register more, and is a no-op when empty. */
   reset();
-  puts("PASS: registration failure injection and real pthread destructor rearming");
+  rearm = 1;
+  assert(pthread_key_create(&storage_key, free_storage) == 0);
+  assert(pthread_create(&thread, NULL, trampolined_worker, NULL) == 0);
+  assert(pthread_join(thread, NULL) == 0);
+  assert(storage_freed && order[0] == 2 && order[1] == 1 && order[2] == 3);
+  assert(allocations == 3 && releases == 3 && key_calls == 1 && logs == 0);
+  assert(pthread_key_delete(storage_key) == 0);
+  ps5_tls_dtors_thread_exit();
+  assert(destroyed == 3 && allocations == releases);
+
+  reset();
+  ps5_tls_dtors_thread_exit(); /* first use creates the key, runs nothing */
+  assert(key_calls == 1 && destroyed == 0 && allocations == 0);
+  reset();
+  key_error = EAGAIN;
+  ps5_tls_dtors_thread_exit();
+  assert(key_calls == 1 && get_calls == 0 && set_calls == 0 && logs == 0);
+  reset();
+  puts("PASS: registration failure injection, real pthread destructor rearming and "
+       "thread-exit drain ordering");
   return 0;
 }

@@ -15,9 +15,16 @@ void ZSTD_trace_decompress_end(ZSTD_TraceCtx ctx, const void* trace) { (void)ctx
 /*
  * __cxa_thread_atexit_impl: the glibc hook libc++abi uses (weakly) to register
  * destructors of C++ thread_local objects. The console libc has none, so
- * provide it: a per-thread LIFO list run from a pthread key destructor when
- * the thread exits. Destructors that create new thread_locals re-arm the key,
- * and pthread calls the destructor again (PTHREAD_DESTRUCTOR_ITERATIONS).
+ * provide it: a per-thread LIFO list.
+ *
+ * thread_local storage is emulated (compiler-rt emutls): it is malloc'd and
+ * freed by emutls' own pthread key destructor, whose key is created first, so
+ * pthread runs it before ours and the objects would be destroyed after their
+ * storage is freed. Threads started through __wrap_pthread_create (every
+ * thread the title creates) therefore drain the list as soon as the start
+ * routine returns, while the storage is still live. The key destructor remains
+ * a fallback for pthread_exit(); destructors that create new thread_locals
+ * re-arm the key and pthread calls it again (PTHREAD_DESTRUCTOR_ITERATIONS).
  * The main thread's list is not run at process exit - the process is gone.
  */
 #include <pthread.h>
@@ -81,6 +88,22 @@ int __cxa_thread_atexit_impl(void (*fn)(void*), void* obj, void* dso_symbol)
     return ps5_tls_dtor_failure(8u, "[kodi-ps5] TLS destructor: pthread_setspecific failed\n");
   }
   return 0;
+}
+
+/* Called by the pthread_create trampoline (thread_stack.c) once the start
+ * routine has returned. Loops because a destructor may register another. */
+void ps5_tls_dtors_thread_exit(void)
+{
+  if (pthread_once(&g_tls_dtor_once, ps5_tls_dtor_key_init) != 0 || g_tls_dtor_key_result != 0)
+    return;
+  void* head;
+  while ((head = pthread_getspecific(g_tls_dtor_key)) != NULL)
+  {
+    /* Same contract as a pthread key destructor: the slot is clear while it runs. */
+    if (pthread_setspecific(g_tls_dtor_key, NULL) != 0)
+      return; /* leave the list to the key destructor */
+    ps5_run_tls_dtors(head);
+  }
 }
 
 /*

@@ -418,7 +418,7 @@ int SqliteDatabase::postconnect()
     throw DbErrors("Cannot execute postconnect actions: no active connection...");
 
   static const char* sqlcmd{
-      "PRAGMA cache_size=4096; PRAGMA synchronous='NORMAL'; PRAGMA count_changes='OFF';"};
+      "PRAGMA cache_size=8192; PRAGMA synchronous='NORMAL'; PRAGMA count_changes='OFF'; PRAGMA journal_mode=WAL;"};
   if (setErr(sqlite3_exec(getHandle(), sqlcmd, nullptr, nullptr, nullptr), sqlcmd) != SQLITE_OK)
   {
     throw DbErrors("%s", getErrorMsg());
@@ -836,6 +836,7 @@ bool SqliteDataset::dropIndex(const char* table, const char* index)
   std::string sql;
 
   sql = static_cast<SqliteDatabase*>(db)->prepare("DROP INDEX IF EXISTS %s", index);
+
 
   return (exec(sql) == SQLITE_OK);
 }

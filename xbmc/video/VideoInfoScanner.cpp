@@ -1404,6 +1404,12 @@ CVideoInfoScanner::~CVideoInfoScanner()
     if (ProgressCancelled(pDlgProgress, 198, pItem->GetLabel()))
       return InfoRet::CANCELLED;
 
+    // A movie already in the library keeps its details.
+    // This means adding a version to an existing nfo is not processed but
+    // this doesn't cause a hash change anyway. A refresh will re-read.
+    if (m_database.HasMovieInfo(pItem->GetDynPath()))
+      return InfoRet::HAVE_ALREADY;
+
     if (m_handle)
       m_handle->SetText(pItem->GetMovieName(bDirNames));
 
@@ -1583,10 +1589,6 @@ CVideoInfoScanner::~CVideoInfoScanner()
 
       return mergedIntoExistingMovie ? InfoRet::HAVE_ALREADY : InfoRet::ADDED;
     }
-
-    // If no nfo then return here if movie already in library
-    if (m_database.HasMovieInfo(pItem->GetDynPath()))
-      return InfoRet::HAVE_ALREADY;
 
     if (result == InfoType::URL || result == InfoType::COMBINED)
     {
@@ -2808,12 +2810,13 @@ CVideoInfoScanner::~CVideoInfoScanner()
   {
     m_pathsToClean.insert(m_database.GetPathId(directory));
 
-    // Pick up the base paths of directory's disc rips and archives
+    // Pick up the base paths of directory's disc rips and archives, and its video extras folders
     std::vector<std::pair<int, std::string>> subPaths;
     m_database.GetSubPaths(directory, subPaths, false);
     for (const auto& [idPath, path] : subPaths)
     {
-      if (!URIUtils::PathHasParent(path, directory) || URIUtils::IsDiscPath(path))
+      if (!URIUtils::PathHasParent(path, directory) || URIUtils::IsDiscPath(path) ||
+          !GetExtrasFolder(directory, path).empty())
         m_pathsToClean.insert(idPath);
     }
   }

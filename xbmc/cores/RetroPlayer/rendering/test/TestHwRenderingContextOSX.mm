@@ -6,6 +6,7 @@
  *  See LICENSES/README.md for more information.
  */
 
+#include "ServiceBroker.h"
 #include "cores/RetroPlayer/buffers/IRenderBufferPool.h"
 #include "cores/RetroPlayer/buffers/RenderBufferManager.h"
 #include "cores/RetroPlayer/buffers/RenderBufferPoolFBO.h"
@@ -20,6 +21,7 @@
 #include "cores/RetroPlayer/streams/RetroPlayerRendering.h"
 #include "games/addons/streams/GameClientStreamHwFramebuffer.h"
 #include "guilib/GUITextureGL.h"
+#include "messaging/ApplicationMessenger.h"
 #include "rendering/MatrixGL.h"
 #include "rendering/gl/RenderSystemGL.h"
 #include "settings/DisplaySettings.h"
@@ -410,8 +412,12 @@ protected:
   void SetUp() override
   {
     TestHwRenderingContextOSX::SetUp();
-    if (!m_guiContext)
+    if (HasFatalFailure() || IsSkipped())
       return;
+
+    auto messenger = std::make_shared<KODI::MESSAGING::CApplicationMessenger>();
+    messenger->SetProcessThread(std::this_thread::get_id());
+    CServiceBroker::RegisterAppMessenger(messenger);
 
     m_environment = std::make_unique<CPlaybackTestEnvironment>();
     auto context = std::make_unique<CControlledContext>(CreateHwRenderingContextOSX(m_guiContext));
@@ -429,6 +435,7 @@ protected:
       m_pool->DestroyContext();
     m_pool.reset();
     m_environment.reset();
+    CServiceBroker::RegisterAppMessenger(m_previousMessenger);
     TestHwRenderingContextOSX::TearDown();
   }
 
@@ -443,6 +450,8 @@ protected:
         static_cast<CRenderBufferFBO*>(m_pool->CaptureClientFrame(client, width, height)));
   }
 
+  std::shared_ptr<KODI::MESSAGING::CApplicationMessenger> m_previousMessenger{
+      CServiceBroker::GetAppMessenger()};
   std::unique_ptr<CPlaybackTestEnvironment> m_environment;
   std::shared_ptr<CRenderBufferPoolFBO> m_pool;
   CControlledContext* m_native{nullptr};
@@ -835,6 +844,11 @@ TEST_F(TestRenderBufferPoolFBOOSX, CaptureNormalizesBothOriginsWithinLargerClien
       glReadPixels(0, height - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
       EXPECT_EQ(pixel, (std::array<unsigned char, 4>{0, 255, 0, 255}));
       EXPECT_EQ(glGetError(), GL_NO_ERROR);
+
+      glDisable(GL_SCISSOR_TEST);
+      auto unscissored = Capture(client.get(), 4, height);
+      ASSERT_NE(unscissored, nullptr);
+      EXPECT_FALSE(glIsEnabled(GL_SCISSOR_TEST));
     }
     glDisable(GL_SCISSOR_TEST);
     m_pool->EndClientFrame();
@@ -1107,7 +1121,7 @@ class CTestFBORenderer : public CRPRendererFBO
 public:
   using CRPRendererFBO::CRPRendererFBO;
 
-  std::vector<GLuint> VertexArrays() const { return {m_mainVAO, m_blackbarsVAO}; }
+  std::vector<GLuint> VertexArrays() const { return {m_mainVAO}; }
 
   CDirectionalTestPreset* UseDirectionalPreset(bool sRGBPass = false)
   {
@@ -1137,11 +1151,11 @@ public:
   }
 
 protected:
-  void RenderInternal(bool clear, uint8_t alpha) override
+  void RenderInternal(uint8_t alpha) override
   {
     m_sourceRect = m_crop;
     m_shaderPreset->SetVideoSize(m_renderBuffer->GetWidth(), m_renderBuffer->GetHeight());
-    CRPRendererFBO::RenderInternal(clear, alpha);
+    CRPRendererFBO::RenderInternal(alpha);
   }
 
 private:
@@ -1174,10 +1188,11 @@ protected:
 
   void TearDown() override
   {
+    // Keep the GUI drawable attached until its rendered fences have completed.
+    TestRenderBufferPoolFBOOSX::TearDown();
     [m_glView clearGLContext];
     m_glView = nil;
     m_window = nil;
-    TestRenderBufferPoolFBOOSX::TearDown();
   }
 
 private:
@@ -1405,6 +1420,7 @@ TEST_F(TestRPRendererFBOOSX, ShaderPresentationUsesBackbufferAcrossCaptureReuseA
     SCOPED_TRACE(testing::Message() << "frame=" << frame << " size=" << size);
     renderer.SetBuffer(nullptr);
     captured.reset();
+    m_pool->FlushRendered();
     ASSERT_TRUE(m_pool->BeginClientFrame());
     auto client = GetClient(4, 4);
     ASSERT_NE(client, nullptr);
@@ -1472,8 +1488,7 @@ TEST_F(TestRPRendererFBOOSX, RendererOwnsInitializedVertexArraysUntilDestruction
     {
       CTestFBORenderer renderer({}, context, m_pool);
       arrays = renderer.VertexArrays();
-      ASSERT_EQ(arrays.size(), 2u);
-      EXPECT_NE(arrays[0], arrays[1]);
+      ASSERT_EQ(arrays.size(), 1u);
       GLint binding = 0;
       for (size_t i = 0; i < arrays.size(); ++i)
       {
@@ -1509,7 +1524,7 @@ TEST_F(TestRPRendererFBOOSX, RendererOwnsInitializedVertexArraysUntilDestruction
       glBindVertexArray(guiVertexArray);
       std::sort(buffers.begin(), buffers.end());
       buffers.erase(std::unique(buffers.begin(), buffers.end()), buffers.end());
-      EXPECT_EQ(buffers.size(), 3u);
+      EXPECT_EQ(buffers.size(), 2u);
     }
     for (const auto array : arrays)
       EXPECT_FALSE(glIsVertexArray(array));

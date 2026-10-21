@@ -5,6 +5,7 @@ xbmc/cores/AudioEngine/Utils/test test/audioengine_utils
 xbmc/cores/RetroPlayer/playback/test test/retroplayer_playback
 xbmc/cores/RetroPlayer/rendering/test test/retroplayer_rendering
 xbmc/cores/RetroPlayer/savestates/test test/retroplayer_savestates
+xbmc/cores/RetroPlayer/shaders/test test/retroplayer_shaders
 xbmc/cores/RetroPlayer/streams/memory/test test/retroplayer_memory
 xbmc/cores/RetroPlayer/test test/retroplayer
 xbmc/cores/VideoPlayer/Buffers/test test/videoplayer_buffers
@@ -31,6 +32,7 @@ xbmc/imagefiles/test              test/imagefiles
 xbmc/input/test                   test/input
 xbmc/input/keyboard/test          test/input/keyboard
 xbmc/input/keymaps/test           test/input/keymaps
+xbmc/interfaces/test              test/interfaces
 xbmc/interfaces/json-rpc/test     test/jsonrpc
 xbmc/interfaces/python/test       test/python
 xbmc/music/tags/test              test/music_tags

@@ -24,7 +24,7 @@ static void test_free(void* ptr)
   free(ptr);
 }
 
-void ps5_tls_dtors_thread_exit(void)
+void ps5_tls_thread_exit(void)
 {
   assert(started == 1 && live_entries == 0);
   ++drains;

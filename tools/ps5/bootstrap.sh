@@ -155,12 +155,14 @@ WORK= to keep them elsewhere.
 Add to ~/.bashrc:
   export PS5_PAYLOAD_SDK=$PS5_PAYLOAD_SDK
   export PS5_OPENGL_PREFIX=$PS5_OPENGL_PREFIX
-  export PS5_HOST=<your console IP>
 
 Sanity check before building Kodi - confirm GL works on YOUR firmware: upload
   $WORK/ps5-opengl/build/native-app/PPSA99005/dist/PPSA99005/
 to /data/homebrew/PPSA99005 (FTP, port 2121) and launch it from the home
 screen.
 
-Next: docs/README.PS5.md section 1 (tools/depends), then tools/ps5/configure.sh.
+Next: docs/README.PS5.md section 1 (tools/depends), then:
+  python3 tools/ps5/prepare-native-runtime.py --homebrew-sources "$WORK/pacbrew-repo" --jobs 4
+  bash tools/ps5/configure.sh
+These commands prepare/build locally. Deployment is separate and user-operated.
 MSG

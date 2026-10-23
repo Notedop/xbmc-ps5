@@ -7,6 +7,7 @@ import json
 import io
 from contextlib import redirect_stderr, redirect_stdout
 import os
+import shlex
 import shutil
 import struct
 import subprocess
@@ -17,6 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 import addon_build
+import native_addon
 
 
 def elf_fixture(*, needed: bool = False) -> bytes:
@@ -39,6 +41,23 @@ class IncrementalBuildTests(unittest.TestCase):
         self.sdk = self.base / "sdk"
         self.depends = self.base / "depends"
         self._create_fixture()
+        self.runtime = self.root / "build/ps5-native/sdk"
+        self.runtime.mkdir(parents=True)
+        (self.runtime / "manifest.json").write_text("{}")
+        (self.runtime / "receipt.json").write_text(json.dumps({
+            "files": {"manifest.json": "a" * 64},
+        }))
+        mapping = self.root / "build/ps5-native/depends/archive-map.json"
+        mapping.parent.mkdir()
+        mapping.write_text("{}")
+        contract = mock.patch.object(addon_build, "validate_sdk", return_value={})
+        contract.start()
+        self.addCleanup(contract.stop)
+        installs = mock.patch.object(
+            addon_build, "native_installed",
+            side_effect=lambda directory, prefix, sdk=None: native_addon.installed(directory, prefix))
+        installs.start()
+        self.addCleanup(installs.stop)
         self.catalogue = {
             "schema": 1,
             "runtime": "piers-ps5-1",
@@ -81,6 +100,7 @@ class IncrementalBuildTests(unittest.TestCase):
         for relative in (
             "cmake/addons",
             "cmake/addons/addons/addon.bundle",
+            "toolchain",
             "tools/depends/target",
             "tools/depends",
             "tools/ps5/patches/addons/addon.bundle",
@@ -96,7 +116,8 @@ class IncrementalBuildTests(unittest.TestCase):
             "tools/depends/xbmc-addons.include",
             "tools/depends/Makefile.include",
             "cmake/KodiConfig.cmake.in",
-            "tools/ps5/addon_elf.py",
+            "toolchain/ps5-native-addon.cmake",
+            "tools/ps5/native_addon.py",
             "xbmc/addons/kodi-dev-kit/include/kodi/header.h",
             "tools/ps5/patches/addons/addon.bundle/0001.patch",
         ):
@@ -166,13 +187,24 @@ class IncrementalBuildTests(unittest.TestCase):
                 lib_dir.mkdir(parents=True)
                 (addon_dir / "addon.xml").write_text(
                     f"<addon id='{addon_id}'><extension "
-                    f"library_freebsd='{addon_id}.so.1.0'/></addon>", encoding="utf-8"
+                    f"library_freebsd='{addon_id}.sprx'/>"
+                    "<extension point='xbmc.addon.metadata'><platform>ps5</platform>"
+                    "</extension></addon>", encoding="utf-8"
                 )
-                (lib_dir / f"{addon_id}.so.1.0").write_bytes(
-                    elf_fixture(needed=self.invalid_primary))
-                (lib_dir / f"{addon_id}.so").symlink_to(f"{addon_id}.so.1.0")
-                (lib_dir / "libhelper.so").write_bytes(
-                    elf_fixture(needed=self.invalid_helper))
+                raw = elf_fixture() if self.invalid_primary else native_addon.FSELF + b"fixture"
+                binary = lib_dir / f"{addon_id}.sprx"
+                binary.write_bytes(raw)
+                requirement = {"module": "libkodi-runtime", "soname": "libkodi-runtime.sprx"}
+                binary.with_suffix(".sprx.json").write_text(json.dumps({
+                    "schema": 1, "format": "ps5-native-addon", "module": addon_id,
+                    "output_sha256": native_addon.digest(raw),
+                    "compiler_abi": native_addon.COMPILER_ABI, "sign_extract_equal": True,
+                    "provider_requirements": [requirement],
+                    "needed": ["libkodi-runtime.sprx"],
+                    "native_dependencies": {"needed": ["libkodi-runtime.sprx"]},
+                }))
+                if self.invalid_helper:
+                    (lib_dir / "libhelper.so").write_bytes(elf_fixture())
                 (addon_dir / "settings.xml").write_text("resource fixture")
         return mock.Mock(stdout="", stderr="", returncode=0)
 
@@ -196,7 +228,8 @@ class IncrementalBuildTests(unittest.TestCase):
         self.assertIn(str(self.depends), rendered)
         self.assertNotIn("/opt/ps5-payload-sdk", rendered)
         self.assertNotIn("@", rendered)
-        self.assertIn("-DNDEBUG=1 -O2", rendered)
+        self.assertIn("ps5-native-addon.cmake", rendered)
+        self.assertIn(str(self.runtime), rendered)
         configure = self.run_mock.call_args_list[0]
         environment = configure.kwargs["env"]
         self.assertIn(str(self.depends / "lib" / "pkgconfig"), environment["PKG_CONFIG_LIBDIR"])
@@ -247,9 +280,19 @@ class IncrementalBuildTests(unittest.TestCase):
             ["sh", "-c", '. "$CONFIG_SITE"; printf "%s\\n" "$CC" "$CXX" "$AR" '
              '"$host_alias" "$cross_compiling"'],
             env=environment, check=True, capture_output=True, text=True)
-        self.assertEqual(result.stdout.splitlines(), [
-            str(self.sdk / "bin/prospero-clang"),
-            str(self.sdk / "bin/prospero-clang++"),
+        lines = result.stdout.splitlines()
+        for line, compiler in zip(lines[:2], ("clang", "clang++")):
+            command = shlex.split(line)
+            self.assertEqual(command[:3], [
+                os.sys.executable, str(self.runtime / "tools/native-clang.py"),
+                str(self.sdk / "bin" / ("prospero-" + compiler))])
+            self.assertIn("-femulated-tls", command)
+            self.assertIn(str(self.runtime / "include/ps5_native_abi.h"), command)
+            self.assertIn("-I" + str(self.runtime / "include"), command)
+            if compiler == "clang++":
+                self.assertLess(command.index("-I" + str(self.sdk / "target/include/c++/v1")),
+                                command.index("-I" + str(self.runtime / "include")))
+        self.assertEqual(lines[2:], [
             str(self.sdk / "bin/prospero-ar"),
             "x86_64-unknown-freebsd", "yes",
         ])
@@ -356,7 +399,7 @@ class IncrementalBuildTests(unittest.TestCase):
                        capture_output=True, text=True)
         self.assertEqual((build / "child/prefixes.txt").read_text(), ";".join(prefixes))
 
-    def test_ps5_opengl_imports_do_not_link_sdk_shared_library(self) -> None:
+    def test_ps5_requires_native_graphics_sdk_without_affecting_freebsd(self) -> None:
         real_root = Path(__file__).resolve().parents[2]
         source = self.base / "opengl"
         source.mkdir()
@@ -407,20 +450,19 @@ class IncrementalBuildTests(unittest.TestCase):
                     ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
                      f"-DTEST_PLATFORM={platform}"],
                     capture_output=True, text=True)
+                if platform == "ps5":
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("require a prepared PS5_NATIVE_RUNTIME_SDK",
+                                  result.stdout + result.stderr)
+                    continue
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 result = subprocess.run(["cmake", "--build", str(build)],
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                problems = addon_build.elf_problems(build / "liblegacy.so")
-                if platform == "ps5":
-                    self.assertEqual(problems, [])
-                    self.assertEqual(addon_build.elf_problems(build / "libmodern.so"), [])
-                    symbols = subprocess.run(
-                        ["nm", "-D", "--undefined-only", str(build / "liblegacy.so")],
-                        check=True, capture_output=True, text=True).stdout
-                    self.assertIn("glClear", symbols)
-                else:
-                    self.assertIn("has DT_NEEDED dependencies", problems)
+                dynamic = subprocess.run(
+                    ["readelf", "-d", str(build / "liblegacy.so")],
+                    check=True, capture_output=True, text=True).stdout
+                self.assertIn("libGL.so", dynamic)
 
     def test_refresh_re_resolves_pin_and_rebuilds(self) -> None:
         self.build()
@@ -449,23 +491,35 @@ class IncrementalBuildTests(unittest.TestCase):
         self._assert_change_rebuilds("xbmc/addons/kodi-dev-kit/include/kodi/header.h")
 
     def test_toolchain_changes_rebuild(self) -> None:
-        self._assert_change_rebuilds("tools/depends/target/Toolchain_binaddons.cmake.in")
+        self._assert_change_rebuilds("toolchain/ps5-native-addon.cmake")
+
+    def test_native_sdk_input_changes_rebuild(self) -> None:
+        self._assert_change_rebuilds("build/ps5-native/sdk/manifest.json")
+
+    def test_native_sdk_python_cache_does_not_invalidate_build(self) -> None:
+        self.build()
+        calls = self.run_mock.call_count
+        cache = self.runtime / "tools/__pycache__"
+        cache.mkdir(parents=True)
+        (cache / "native_shared_link.cpython-312.pyc").write_bytes(b"generated bytecode")
+        self.build()
+        self.assertEqual(self.run_mock.call_count, calls)
 
     def test_kodi_config_changes_rebuild(self) -> None:
         self._assert_change_rebuilds("cmake/KodiConfig.cmake.in")
 
-    def test_elf_validation_changes_rebuild(self) -> None:
-        self._assert_change_rebuilds("tools/ps5/addon_elf.py")
+    def test_native_validation_changes_rebuild(self) -> None:
+        self._assert_change_rebuilds("tools/ps5/native_addon.py")
 
     def test_loader_incompatible_builds_do_not_record_success(self) -> None:
         for attribute, filename in (
-            ("invalid_primary", "addon.bundle.so.1.0"),
+            ("invalid_primary", "addon.bundle.sprx"),
             ("invalid_helper", "libhelper.so"),
         ):
             with self.subTest(artifact=filename):
                 setattr(self, attribute, True)
                 with self.assertRaisesRegex(
-                    addon_build.AddonBuildError, filename + ".*DT_NEEDED"
+                    addon_build.AddonBuildError, "signed SPRX|unmodelled native dependency"
                 ):
                     self.build()
                 record = self.workspace / "build-record.json"
@@ -477,7 +531,7 @@ class IncrementalBuildTests(unittest.TestCase):
 
     def test_cached_loader_incompatible_binary_invalidates_record(self) -> None:
         output = self.build()[0]
-        binary = output / "lib/kodi/addons/addon.bundle/addon.bundle.so.1.0"
+        binary = output / "lib/kodi/addons/addon.bundle/addon.bundle.sprx"
         binary.write_bytes(elf_fixture(needed=True))
         record_path = self.workspace / "build-record.json"
         record = json.loads(record_path.read_text())
@@ -496,7 +550,7 @@ class IncrementalBuildTests(unittest.TestCase):
 
     def test_missing_installed_binary_invalidates_success_record(self) -> None:
         output = self.build()[0]
-        (output / "lib/kodi/addons/addon.bundle/addon.bundle.so.1.0").unlink()
+        (output / "lib/kodi/addons/addon.bundle/addon.bundle.sprx").unlink()
         rebuilt = self.build()
         self.assertEqual(rebuilt, [output])
         self.assertEqual(self.run_mock.call_count, 4)
@@ -507,7 +561,7 @@ class IncrementalBuildTests(unittest.TestCase):
         resource.write_text("changed resource")
         self.build()
         self.assertEqual(self.run_mock.call_count, 4)
-        helper = output / "lib/kodi/addons/addon.bundle/libhelper.so"
+        helper = output / "lib/kodi/addons/addon.bundle/addon.bundle.sprx.json"
         helper.unlink()
         self.build()
         self.assertEqual(self.run_mock.call_count, 6)
@@ -566,6 +620,19 @@ class IncrementalBuildTests(unittest.TestCase):
         self.assertEqual(self.build(["screensaver.one"]), outputs)
         self.assertEqual(self.run_mock.call_count, 2)
 
+        patches = self.root / "tools/ps5/patches/addons/screensavers.rsxs"
+        patches.mkdir(parents=True)
+        patch = patches / "0001-native-fixture.patch"
+        for content, calls in (("initial target patch", 4), ("changed target patch", 6)):
+            patch.write_text(content)
+            with self.assertRaisesRegex(addon_build.AddonBuildError, "missing, stale"):
+                addon_build.validate_build(
+                    self.root, self.catalogue, self.workspace, self.sdk, self.depends)
+            outputs = self.build(["screensavers.rsxs"])
+            self.assertEqual(self.run_mock.call_count, calls)
+            self.assertEqual(self.build(["screensaver.two"]), outputs)
+            self.assertEqual(self.run_mock.call_count, calls)
+
     def test_source_archive_rejects_path_traversal(self) -> None:
         archive = self.base / "unsafe.tar.gz"
         with tarfile.open(archive, "w:gz") as stream:
@@ -597,7 +664,7 @@ class IncrementalBuildTests(unittest.TestCase):
     def test_record_schema_and_standalone_validation(self) -> None:
         self.build()
         record = json.loads((self.workspace / "build-record.json").read_text(encoding="utf-8"))
-        self.assertEqual(record["schema"], 2)
+        self.assertEqual(record["schema"], 3)
         self.assertEqual(record["prefixes"], [record["targets"]["addon.bundle"]["prefix"]])
         entry = record["targets"]["addon.bundle"]
         self.assertEqual(entry["url"], self.catalogue["targets"]["addon.bundle"]["url"])
@@ -662,6 +729,125 @@ class IncrementalBuildTests(unittest.TestCase):
             self.root, self.catalogue, self.workspace, self.sdk, self.depends
         )
         self.assertEqual(set(validated["targets"]), {"addon.bundle", "addon.second"})
+
+
+class RsxsIdentityTests(unittest.TestCase):
+    def test_microcosm_build_and_resources_keep_published_identity(self):
+        root = Path(__file__).resolve().parents[2]
+        work = root / "build/ps5-addon-repository/work"
+        lock = work / "source-lock.json"
+        if not all(shutil.which(tool) for tool in ("cmake", "cc", "c++", "patch")):
+            self.skipTest("CMake, host C/C++ compilers and patch required")
+        if not lock.is_file():
+            self.skipTest("locked RSXS source cache required")
+        entry = json.loads(lock.read_text())["targets"].get("screensavers.rsxs")
+        if entry is None:
+            self.skipTest("locked RSXS source cache required")
+        cached = work / "sources/screensavers.rsxs" / entry["sha"]
+        if not cached.is_dir():
+            self.skipTest("locked RSXS source cache required")
+
+        with tempfile.TemporaryDirectory(prefix="test-rsxs-identity-",
+                                         dir=root / "build") as temporary:
+            directory = Path(temporary)
+            source = directory / "source"
+            shutil.copytree(cached, source)
+
+            def run(*command):
+                result = subprocess.run(list(map(str, command)), text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            run("cmake", "-DSOURCE_DIR=" + str(source),
+                "-DSERIES_DIR=" + str(root / "tools/ps5/patches/addons/screensavers.rsxs"),
+                "-P", root / "tools/ps5/apply-patch-series.cmake")
+            (source / "CMakeLists.txt").write_text("""
+cmake_minimum_required(VERSION 3.18)
+project(rsxs_identity NONE)
+macro(build_addon target prefix libs)
+  file(WRITE "${CMAKE_BINARY_DIR}/addon-target.txt" "${target}")
+endmacro()
+include(src/microcosm/CMakeLists.txt)
+""")
+            binary = directory / "build"
+            run("cmake", "-S", source, "-B", binary)
+            addon = (binary / "addon-target.txt").read_text()
+            self.assertEqual(addon, "screensaver.microcosm.biof")
+            original = source / "screensaver.rsxs.microcosm"
+            staged = source / addon
+            metadata = (staged / "addon.xml.in").read_text()
+            self.assertIn('id="' + addon + '"', metadata)
+            expected = {p.relative_to(original): p.read_bytes()
+                        for p in original.rglob("*") if p.is_file()}
+            actual = {p.relative_to(staged): p.read_bytes()
+                      for p in staged.rglob("*") if p.is_file()}
+            self.assertEqual(actual, expected)
+
+
+class SidplayConfigureTests(unittest.TestCase):
+    def test_native_configure_does_not_duplicate_cmake_quoted_abi_flags(self):
+        root = Path(__file__).resolve().parents[2]
+        work = root / "build/ps5-addon-repository/work"
+        lock = work / "source-lock.json"
+        if not all(shutil.which(tool) for tool in ("cmake", "cc", "c++", "patch")):
+            self.skipTest("CMake, host C/C++ compilers and patch required")
+        if not lock.is_file():
+            self.skipTest("locked Sidplay source cache required")
+        entry = json.loads(lock.read_text())["targets"].get("audiodecoder.sidplay")
+        if entry is None:
+            self.skipTest("locked Sidplay source cache required")
+        cached = work / "sources/audiodecoder.sidplay" / entry["sha"]
+        if not cached.is_dir():
+            self.skipTest("locked Sidplay source cache required")
+
+        with tempfile.TemporaryDirectory(prefix="test-sidplay-configure-",
+                                         dir=root / "build") as temporary:
+            directory = Path(temporary)
+            source = directory / "source"
+            shutil.copytree(cached, source)
+            tools = directory / "host-tools"
+            tools.mkdir()
+            autoreconf = tools / "autoreconf"
+            autoreconf.write_text("#!/bin/sh\nexit 0\n")
+            autoreconf.chmod(0o755)
+            environment = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
+                               CONFIG_SITE=str(directory / "native-config.site"))
+
+            def run(*command):
+                result = subprocess.run(list(map(str, command)), env=environment,
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            run("cmake", "-DSOURCE_DIR=" + str(source),
+                "-DSERIES_DIR=" + str(root / "tools/ps5/patches/addons/audiodecoder.sidplay"),
+                "-P", root / "tools/ps5/apply-patch-series.cmake")
+            dependency = source / "depends/common/sidplay2"
+            configure = dependency / "configure"
+            configure.write_text(
+                "#!" + os.sys.executable + "\n"
+                "import json, os\nfrom pathlib import Path\n"
+                "Path(__file__).with_name('configure-flags.json').write_text(json.dumps("
+                "{key: os.environ.get(key) for key in "
+                "('CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'CONFIG_SITE')}))\n")
+            configure.chmod(0o755)
+            cmake = dependency / "CMakeLists.txt"
+            cmake.write_text(cmake.read_text() +
+                             "\nExternalProject_Add_StepTargets(sidplay2 configure)\n")
+            header = directory / "abi.h"
+            header.write_text("\n")
+            binary = directory / "build"
+            run("cmake", "-S", dependency, "-B", binary,
+                "-DCMAKE_C_COMPILER=" + shutil.which("cc"),
+                "-DCMAKE_CXX_COMPILER=" + shutil.which("c++"),
+                '-DCMAKE_C_FLAGS=-include "' + str(header) + '"',
+                '-DCMAKE_CXX_FLAGS=-include "' + str(header) + '"',
+                "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--as-needed")
+            run("cmake", "--build", binary, "--target", "sidplay2-configure")
+            flags = json.loads((dependency / "configure-flags.json").read_text())
+            self.assertEqual(flags["CFLAGS"], "-DTARGET_POSIX -DTARGET_FREEBSD")
+            self.assertEqual(flags["CXXFLAGS"],
+                             "-DTARGET_POSIX -DTARGET_FREEBSD -DHAVE_UNIX")
+            self.assertEqual(flags["LDFLAGS"], "-Wl,--as-needed")
+            self.assertEqual(flags["CONFIG_SITE"], environment["CONFIG_SITE"])
 
 
 if __name__ == "__main__":

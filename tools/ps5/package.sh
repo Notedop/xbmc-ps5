@@ -1,38 +1,32 @@
 #!/usr/bin/env bash
 # Package the built Kodi as a ShadowMountPlus folder title.
 #
-# kodi.bin (Kodi's own link) proves the symbol graph resolves, but a home-screen
-# title must be linked the native-app way: the boilerplate's startup code and
-# linker script, its ELF -> FSELF converter and its clean-room libc.prx. This
-# is exactly how ps5-opengl's imgui-demo was built, so we reuse that demo's
-# prepared app directory as the template (same runtime, same Agc/VideoOut
-# stubs, same heap + malloc wraps) and swap the demo's code for Kodi:
-#   1. cmake --install (DESTDIR)      -> staged /app0 tree (share/kodi data)
-#   2. Kodi's archives (whole-archive) -> vendor/kodi-whole.rsp, injected into the link
-#   3. GROUP() of every external lib   -> vendor/libkodi_group.a (from Kodi's link line)
-#   4. boilerplate `make app`          -> dist/<TITLE_ID>/{eboot.bin, sce_module, sce_sys}
-#   5. share/kodi copied into the title folder; optional FTP upload.
+# kodi.bin proves the normal Kodi link graph resolves. Packaging reuses the
+# native-app template's assets/tooling and the configured native SDK to produce
+# a system-only launcher, shared core/graphics, and private Kodi SPRX:
+#   1. cmake --install (DESTDIR) -> staged /app0 data and native add-ons
+#   2. Kodi's normal link inputs -> private application link
+#   3. prepare-shared-title.py -> SDK providers and native title builders
+#   4. make app -> dist/<TITLE_ID>/{eboot.bin, sce_module, sce_sys}
+#   5. copy data and verify the completed native title; no console contact.
 #
 #   BUILD       Kodi build dir           default build/ps5-release
-#   STAGE       staging dir              default build/ps5-stage
+#   STAGE       fresh staging dir        default unique directory below BUILD
 #   WORK        external sources dir     default build/ps5-external (bootstrap.sh)
 #   APP_TEMPLATE demo app dir            default $WORK/ps5-opengl/build/native-app/PPSA99005
 #   TITLE_ID    default PPSA99420        HEAP_MIB app malloc heap (default 2048)
 #   KODI_CATEGORY  game (default) or media: home-screen area (media is
 #               experimental: the GL driver does not start in its sandbox)
-#   PS5_HOST    console IP for FTP upload (optional)
-#   PS5_DEPLOY_JOBS concurrent FTP uploads (default 3, range 1..8)
-#   PS5_TEST_BINARY_ADDON  1 includes the isolated loader probe (default 0)
-#   PS5_ADDON_PREFIXES colon-separated installed Kodi prefixes (default: repository
-#                      build-record prefixes, else historical depends/audio/screensavers)
-#                      Only catalogue-bundled add-ons are copied; all whitelisted
-#                      candidate ELFs contribute to the title's runtime exports.
-#   PS5_ADAPTIVE_TEST  1 requires adaptive and adds its DASH test (default 0)
-#   PS5_ADAPTIVE_PREFIX  override the default adaptive depends prefix (optional)
-#   PS5_AUDIO_DECODERS explicit legacy audio selection (unset: discover automatically)
-#   PS5_AUDIO_DECODER_PREFIX installed decoder prefix (default isolated audit install)
-#   PS5_ADDON_ELFS  colon-separated trusted installed .so files whose runtime
-#                   archive members must be retained (export policy only)
+#   PS5_TEST_BINARY_ADDON  1 includes the native SPRX screensaver (default 0)
+#   PS5_BUNNY_DIAGNOSTIC  1 includes the Python DASH diagnostic (default 0);
+#               requires native Adaptive among the selected catalogue prefixes
+#   PS5_SPRX_START_TRACE_DIAGNOSTIC  1 traces sample native initialization (default 0)
+#   PS5_NATIVE_RUNTIME_SDK  shared SDK (must match the configured Kodi build)
+#   PS5_NATIVE_TITLE_SYSTEM_SDK  optional additional title-only SDK contracts
+#   PS5_ADDON_PREFIXES  colon-separated native catalogue install prefixes;
+#               default prefixes from the catalogue build record
+#   PS5_HOMEBREW_PREFIX  homebrew dependency prefix (defaults to the configured build)
+#   Legacy SO prefix/ELF/Adaptive selections are unsupported on this branch.
 set -euo pipefail
 
 export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
@@ -40,28 +34,59 @@ export PS5_OPENGL_PREFIX="${PS5_OPENGL_PREFIX:-/opt/ps5-opengl-gl46}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HERE="$ROOT"
 BUILD="${BUILD:-$ROOT/build/ps5-release}"
-STAGE="${STAGE:-$ROOT/build/ps5-stage}"
+STAGE="${STAGE:-$BUILD/title-$(date -u +%Y%m%dT%H%M%S)-$$}"
 WORK="${WORK:-$ROOT/build/ps5-external}"
 APP_TEMPLATE="${APP_TEMPLATE:-$WORK/ps5-opengl/build/native-app/PPSA99005}"
 TITLE_ID="${TITLE_ID:-PPSA99420}"
 HEAP_MIB="${HEAP_MIB:-2048}"
 PACKAGE_ZIP="${PACKAGE_ZIP:-0}"
-HB="$PS5_PAYLOAD_SDK/target/user/homebrew"
+CONFIGURED_HBROOT="$(sed -n 's/^PS5_HOMEBREW_PREFIX:[^=]*=//p' "$BUILD/CMakeCache.txt")"
+HB="${PS5_HOMEBREW_PREFIX:-${CONFIGURED_HBROOT:-$PS5_PAYLOAD_SDK/target/user/homebrew}}"
+if [ -n "$CONFIGURED_HBROOT" ]; then
+  [ "$(realpath -e "$HB")" = "$(realpath -e "$CONFIGURED_HBROOT")" ] || {
+    echo "!! packaging homebrew prefix differs from the configured Kodi prefix" >&2; exit 1; }
+fi
 LLD="$PS5_PAYLOAD_SDK/bin/prospero-lld"
 AR="$PS5_PAYLOAD_SDK/bin/prospero-ar"
 PS5_TEST_BINARY_ADDON="${PS5_TEST_BINARY_ADDON:-0}"
-TEST_ADDON="$BUILD/test-addons/test.binary.ps5"
+PS5_SPRX_START_TRACE_DIAGNOSTIC="${PS5_SPRX_START_TRACE_DIAGNOSTIC:-0}"
+CONFIGURED_SHARED_SDK="$(sed -n 's/^PS5_NATIVE_RUNTIME_SDK:[^=]*=//p' "$BUILD/CMakeCache.txt")"
+SHARED_SDK="${PS5_NATIVE_RUNTIME_SDK:-$CONFIGURED_SHARED_SDK}"
+[ -n "$SHARED_SDK" ] && [ -n "$CONFIGURED_SHARED_SDK" ] || {
+  echo "!! Native runtime SDK required; configure with tools/ps5/configure.sh first" >&2; exit 1; }
+SHARED_SDK="$(realpath -e "$SHARED_SDK")"
+[ "$SHARED_SDK" = "$(realpath -e "$CONFIGURED_SHARED_SDK")" ] || {
+  echo "!! packaging SDK differs from the configured Kodi SDK" >&2; exit 1; }
+NATIVE_DEPENDS_MAP="$(sed -n 's/^PS5_NATIVE_DEPENDS_MAP:[^=]*=//p' "$BUILD/CMakeCache.txt")"
+[ -n "$NATIVE_DEPENDS_MAP" ] || {
+  echo "!! PS5_NATIVE_DEPENDS_MAP required; reconfigure the native title" >&2; exit 1; }
+python3 "$ROOT/tools/ps5/native_contract.py" --sdk "$SHARED_SDK" \
+  --archive-map "$NATIVE_DEPENDS_MAP" >/dev/null
+case "$PS5_SPRX_START_TRACE_DIAGNOSTIC" in
+  0) ;;
+  1) [ "$PS5_TEST_BINARY_ADDON" = "1" ] || {
+       echo "!! SPRX start tracing requires PS5_TEST_BINARY_ADDON=1" >&2; exit 1; } ;;
+  *) echo "!! PS5_SPRX_START_TRACE_DIAGNOSTIC must be 0 or 1" >&2; exit 1 ;;
+esac
+TEST_ADDON="$BUILD/test-addons/sprx"
 case "$PS5_TEST_BINARY_ADDON" in
   0) ;;
-  1) bash "$ROOT/tools/ps5/stage-test-addon.sh" "$TEST_ADDON" --check ;;
+  1) PS5_SPRX_START_TRACE_DIAGNOSTIC="$PS5_SPRX_START_TRACE_DIAGNOSTIC" \
+       bash "$ROOT/tools/ps5/build-sprx-test-addon.sh" "$TEST_ADDON" ;;
   *) echo "!! PS5_TEST_BINARY_ADDON must be 0 or 1" >&2; exit 1 ;;
 esac
 
 PS5_ADAPTIVE_TEST="${PS5_ADAPTIVE_TEST:-0}"
-case "$PS5_ADAPTIVE_TEST" in
+PS5_BUNNY_DIAGNOSTIC="${PS5_BUNNY_DIAGNOSTIC:-0}"
+case "$PS5_BUNNY_DIAGNOSTIC" in
   0|1) ;;
-  *) echo "!! PS5_ADAPTIVE_TEST must be 0 or 1" >&2; exit 1 ;;
+  *) echo "!! PS5_BUNNY_DIAGNOSTIC must be 0 or 1" >&2; exit 1 ;;
 esac
+if [ "$PS5_ADAPTIVE_TEST" != "0" ] || [ -n "${PS5_ADDON_ELFS:-}" ] ||
+   [ -n "${PS5_AUDIO_DECODERS:-}" ]; then
+  echo "!! Legacy add-on selections are unsupported; use the native catalogue pipeline." >&2
+  exit 1
+fi
 
 [ -f "$BUILD/kodi.bin" ] || { echo "!! $BUILD/kodi.bin not found: build Kodi first"; exit 1; }
 # A failed/incomplete Kodi build leaves kodi.bin stale relative to its own
@@ -86,95 +111,47 @@ fi
 [ -f "$APP_TEMPLATE/Makefile" ] && [ -d "$APP_TEMPLATE/.deps/native" ] || {
   echo "!! app template not found at $APP_TEMPLATE (build ps5-opengl's imgui-demo first: make -C $WORK/ps5-opengl imgui-demo)"; exit 1; }
 
-ADDON_ARGS=(--catalogue "$ROOT/tools/ps5/addon-catalogue.json" --bundled-only)
-ADDON_PREFIXES=()
-ADDON_BUILD_RECORD="$ROOT/build/ps5-addon-repository/work/build-record.json"
-if [ "${PS5_ADDON_PREFIXES+x}" = x ]; then
-  if [ -n "$PS5_ADDON_PREFIXES" ]; then
-    [[ "$PS5_ADDON_PREFIXES" != :* && "$PS5_ADDON_PREFIXES" != *: && "$PS5_ADDON_PREFIXES" != *::* ]] || {
-      echo "!! PS5_ADDON_PREFIXES contains an empty prefix" >&2; exit 1; }
-    IFS=: read -r -a ADDON_PREFIXES <<< "$PS5_ADDON_PREFIXES"
-    for prefix in "${ADDON_PREFIXES[@]}"; do
-      [ -d "$prefix" ] || { echo "!! configured add-on prefix missing: $prefix" >&2; exit 1; }
-    done
-  fi
-elif [ -f "$ADDON_BUILD_RECORD" ]; then
-  RECORDED_PREFIXES="$(python3 - "$ADDON_BUILD_RECORD" <<'PY'
+echo "==> 1. staging Kodi's data into $STAGE"
+[ ! -e "$STAGE" ] && [ ! -L "$STAGE" ] || {
+  echo "!! Stage already exists: $STAGE; choose a fresh STAGE to preserve build evidence" >&2; exit 1; }
+mkdir -p "$STAGE"
+DESTDIR="$STAGE" cmake --install "$BUILD" >"$STAGE/install.log" 2>&1 || { tail -20 "$STAGE/install.log"; exit 1; }
+[ -d "$STAGE/app0/share/kodi" ] || { echo "!! install produced no app0/share/kodi"; exit 1; }
+# Native add-on prefix selection.
+PREFIX_LIST="$(python3 - "$ROOT" "${PS5_ADDON_PREFIXES:-}" "${PS5_ADDON_PREFIXES+x}" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-try:
-    record = json.loads(Path(sys.argv[1]).read_text())
-    prefixes = record.get("prefixes") if isinstance(record, dict) else None
-    if not isinstance(prefixes, list) or not prefixes:
-        raise ValueError("prefixes must be a nonempty list of absolute installed paths")
-    for prefix in prefixes:
-        if (not isinstance(prefix, str) or not prefix or "\n" in prefix or "\r" in prefix
-                or not Path(prefix).is_absolute() or not Path(prefix).is_dir()):
-            raise ValueError(f"invalid or missing installed prefix: {prefix!r}")
-        print(prefix)
-except (OSError, ValueError) as error:
-    sys.exit(f"PS5 add-on build record: {error}; rebuild the add-on inventory or set PS5_ADDON_PREFIXES")
+root = Path(sys.argv[1])
+record = root / "build/ps5-addon-repository/work/build-record.json"
+prefixes = ([p for p in sys.argv[2].split(":") if p] if sys.argv[3] else
+            json.loads(record.read_text()).get("prefixes", []) if record.is_file() else [])
+if not isinstance(prefixes, list):
+    sys.exit("invalid catalogue installed prefix record")
+for prefix in dict.fromkeys(prefixes):
+    if not isinstance(prefix, str) or "\n" in prefix or not Path(prefix).is_absolute() or not Path(prefix).is_dir():
+        sys.exit(f"invalid or missing installed prefix: {prefix}")
+    print(prefix)
 PY
 )"
-  mapfile -t ADDON_PREFIXES <<< "$RECORDED_PREFIXES"
-else
-  echo "!! No repository build record; using historical installed add-on prefixes." >&2
-  echo "!! Before publishing new repository candidates, build/install the full candidate inventory" >&2
-  echo "!! and rebuild this title so prepare/verify-addon-exports cover every candidate ELF." >&2
-  ADDON_PREFIXES=(
-    "${PS5_ADAPTIVE_PREFIX:-$ROOT/build/ps5-depends-test/x86_64-unknown-freebsd-debug}"
-    "${PS5_AUDIO_DECODER_PREFIX:-$ROOT/build/ps5-audiodecoders/install}"
-    "$ROOT/build/ps5-screensavers/install"
-  )
+ADDON_PREFIXES=()
+if [ -n "$PREFIX_LIST" ]; then
+  mapfile -t ADDON_PREFIXES <<< "$PREFIX_LIST"
+fi
+# End native add-on prefix selection.
+ADDON_ARGS=(--report "$STAGE/native-addons.json" --runtime-sdk "$SHARED_SDK"
+  --catalogue "$ROOT/tools/ps5/addon-catalogue.json" --bundled-only
+  --destination "$STAGE/app0/share/kodi" --system-addons-source "$ROOT/addons")
+if [ "$PS5_BUNNY_DIAGNOSTIC" = "1" ]; then
+  ADDON_ARGS+=(--bunny-diagnostic)
 fi
 for prefix in "${ADDON_PREFIXES[@]}"; do
   ADDON_ARGS+=(--prefix "$prefix")
 done
-if [ "${PS5_AUDIO_DECODERS+x}" = x ]; then
-  ADDON_ARGS+=(--audio-selection "$PS5_AUDIO_DECODERS")
-  read -r -a AUDIO_DECODER_IDS <<< "$PS5_AUDIO_DECODERS"
-  for addon in "${AUDIO_DECODER_IDS[@]}"; do
-    [[ "$addon" =~ ^audiodecoder\.[a-z0-9]+$ ]] || {
-      echo "!! invalid audio decoder ID: $addon" >&2; exit 1; }
-    ADDON_ARGS+=(--include "$addon")
-  done
-fi
-if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
-  ADDON_ARGS+=(--include inputstream.adaptive)
-fi
-python3 "$ROOT/tools/ps5/stage-installed-addons.py" "${ADDON_ARGS[@]}" \
-  --report "$BUILD/installed-addons-report.json" > "$BUILD/installed-addons-elfs.txt"
-
-echo "==> 1. staging Kodi's data into $STAGE"
-rm -rf "$STAGE"; mkdir -p "$STAGE"
-DESTDIR="$STAGE" cmake --install "$BUILD" >"$STAGE/install.log" 2>&1 || { tail -20 "$STAGE/install.log"; exit 1; }
-[ -d "$STAGE/app0/share/kodi" ] || { echo "!! install produced no app0/share/kodi"; exit 1; }
+python3 "$ROOT/tools/ps5/stage-installed-addons.py" "${ADDON_ARGS[@]}" >"$STAGE/native-addons.list"
 if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
-  bash "$ROOT/tools/ps5/stage-test-addon.sh" "$TEST_ADDON" "$STAGE/app0/share/kodi"
-  python3 - "$STAGE/app0/share/kodi/addons/test.binary.ps5/addon.xml" <<'PY'
-import sys
-import xml.etree.ElementTree as ET
-
-manifest = sys.argv[1]
-tree = ET.parse(manifest)
-platform = tree.find("./extension[@point='xbmc.addon.metadata']/platform")
-if platform is None:
-    sys.exit("PS5 binary loader probe lacks platform metadata")
-platform.text = "ps5"
-tree.write(manifest, encoding="utf-8", xml_declaration=True)
-PY
-fi
-if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
-  cp -a "$ROOT/addons/plugin.video.ps5.adaptive.test" "$STAGE/app0/share/kodi/addons/"
-fi
-ADDON_ELF_LIST="$(python3 "$ROOT/tools/ps5/stage-installed-addons.py" "${ADDON_ARGS[@]}" \
-  --report "$STAGE/installed-addons-report.json" --destination "$STAGE/app0/share/kodi" \
-  --system-addons-source "$ROOT/addons")"
-ADDON_ELFS=()
-if [ -n "$ADDON_ELF_LIST" ]; then
-  mapfile -t ADDON_ELFS <<< "$ADDON_ELF_LIST"
+  cp -a "$TEST_ADDON/screensaver.ps5.sprx-test" "$STAGE/app0/share/kodi/addons/"
 fi
 
 echo "==> 2. app directory from the demo template"
@@ -184,55 +161,20 @@ for entry in Makefile assets runtime sce_sys tooling tools include; do
   [ -e "$APP_TEMPLATE/$entry" ] && cp -a "$APP_TEMPLATE/$entry" "$APP/"
 done
 cp -a "$APP_TEMPLATE/.deps" "$APP/.deps"        # SDK copy incl. libSceAgc/AgcDriver/VideoOut stubs
-# Keep the original plaintext import tables mapped for the in-process resolver.
-# The converter still builds its separate Sony metadata for the system loader.
-patch --batch --forward -d "$APP" -p1 < "$ROOT/tools/ps5/patches/native-app-preserve-addon-metadata.patch"
-patch --batch --forward -d "$APP" -p1 < "$ROOT/tools/ps5/patches/native-app-host-runtime-exports.patch"
 patch --batch --forward -d "$APP" -p1 < "$ROOT/tools/ps5/patches/native-app-reserve-process-parameters.patch"
-cat >> "$APP/tooling/native/ps5-pie.ld" <<'LD'
-
-/* The native title has no mapped ELF header; expose its actual image bounds. */
-PROVIDE_HIDDEN(__ps5_addon_image_base = ADDR(.text));
-PROVIDE_HIDDEN(__ps5_addon_image_end = ADDR(.bss) + SIZEOF(.bss));
-PROVIDE_HIDDEN(__ps5_addon_dynsym_end = ADDR(.dynsym) + SIZEOF(.dynsym));
-ASSERT(ADDR(.text) == 0, "PS5 add-on resolver requires zero-based title text")
-LD
 rm -rf "$APP/src" "$APP/vendor" "$APP/build" "$APP/dist"
 mkdir -p "$APP/src" "$APP/vendor"
-if [ -n "${PS5_ADDON_ELFS:-}" ]; then
-  IFS=: read -r -a SELECTED_ADDON_ELFS <<< "$PS5_ADDON_ELFS"
-  ADDON_ELFS+=("${SELECTED_ADDON_ELFS[@]}")
-fi
-if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
-  ADDON_ELFS+=("$TEST_ADDON/test_binary_ps5.so")
-fi
-python3 "$ROOT/tools/ps5/prepare-addon-exports.py" --sdk "$PS5_PAYLOAD_SDK" \
-  --output "$APP/vendor" "${ADDON_ELFS[@]}"
-"$PS5_PAYLOAD_SDK/bin/prospero-clang" --target=x86_64-unknown-freebsd \
-  -c "$APP/vendor/addon-imports.S" -o "$APP/vendor/addon-imports.o"
-cp "$APP_TEMPLATE/src/runtime_shims.c" "$APP/src/"
-# The GL template's shims stub mkstemps/openlog; shims/native-app/libc_posix.c
-# has real ones -> drop the stubs, keep the rest (GL TLS hook, pclose).
-python3 - "$APP/src/runtime_shims.c" <<'PY'
-import re, sys
-p = sys.argv[1]; s = open(p).read()
-for fn in ("mkstemps", "openlog"):
-    s2 = re.sub(r"\n[a-z][^\n]*\b" + fn + r"\([^)]*\)\s*\{.*?\n\}\n", "\n", s, count=1, flags=re.S)
-    if s2 == s: sys.exit(f"could not remove {fn} from runtime_shims.c")
-    s = s2
-open(p, "w").write(s)
-PY
-cp "$APP_TEMPLATE/src/app_heap.c" "$APP/src/"
 cp "$HERE/shims/native-app/weak_shims.c" "$APP/src/"   # weak refs the converter must not see
 cp "$HERE/shims/native-app/libc_extras.c" "$APP/src/"  # libc bits the system libc lacks
-cp "$HERE/shims/native-app/libc_posix.c" "$APP/src/"   # POSIX/BSD functions (time, tempfiles, tsearch...)
-cp "$HERE/shims/native-app/libc_locale.c" "$APP/src/"  # C-locale xlocale layer for libc++
-cp "$HERE/shims/native-app/libc_net.c" "$APP/src/"     # getaddrinfo & co on Sony's resolve
 cp "$HERE/shims/native-app/libc_socket.c" "$APP/src/"  # Python socket redirects, ahead of SDK libkodishim.a
-cp "$HERE/shims/native-app/thread_stack.c" "$APP/src/" # >= 4 MiB default stacks; explicit attrs unchanged
-cp "$HERE/shims/native-app/pthread_tls.c" "$APP/src/"
 cp "$HERE/shims/native-app/pipe_fallback.c" "$APP/src/" # pipe() via socketpair, fcntl F_SETFD as success (--wrap=pipe, --wrap=fcntl)
 cp "$HERE/shims/native-app/stdio_tee.c" "$APP/src/"    # fd 1/2 -> klog (--wrap=write): Python fatal init errors, aborts
+SPRX_TRACE_LINK_FLAG=""
+if [ "$PS5_SPRX_START_TRACE_DIAGNOSTIC" = "1" ]; then
+  cp "$HERE/shims/native-app/sprx_start_trace.c" "$APP/src/"
+  cp "$ROOT/tools/ps5/tests/native_start_trace.h" "$APP/src/"
+  SPRX_TRACE_LINK_FLAG="--wrap=sceKernelLoadStartModule"
+fi
 # libScePosixForWebKit is a browser-only system module: a title never gets it,
 # and everything imported from it stays at address 0 (first launch: isatty()).
 # Remove its link stub so nothing can bind to it; the shims above cover what
@@ -260,30 +202,26 @@ VO_MISSING="$(comm -23 <("$VO_NM" -D --defined-only "$STUBDIR/libSceVideoOut.so"
                        <("$VO_NM" -D --defined-only "$VO_EXT" | awk '{print $3}' | sort))"
 [ -z "$VO_MISSING" ] || { echo "!! extended libSceVideoOut stub lacks: $VO_MISSING"; exit 1; }
 cp "$VO_EXT" "$STUBDIR/libSceVideoOut.so"
-# app-owned malloc heap: the demo's 128 MiB is far too small for Kodi
-sed -i "s/#define PS5_OPENGL_HEAP_SIZE (128u \* 1024u \* 1024u)/#define PS5_OPENGL_HEAP_SIZE (${HEAP_MIB}ull * 1024ull * 1024ull)/" "$APP/src/app_heap.c"
-grep -q "PS5_OPENGL_HEAP_SIZE (${HEAP_MIB}ull" "$APP/src/app_heap.c" || { echo "!! could not raise the heap size in app_heap.c"; exit 1; }
-# ...and back it with direct memory: mmap() draws from the title's small
-# flexible-memory budget (448 MiB), so a Kodi-sized heap cannot be mmap'ed.
-cp "$HERE/shims/native-app/heap_dmem.c" "$APP/src/"
-python3 - "$APP/src/app_heap.c" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-mmap_call = """mmap(NULL, PS5_OPENGL_HEAP_SIZE, PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE | MAP_ANON, -1, 0);"""
-if mmap_call not in s or "munmap(base, PS5_OPENGL_HEAP_SIZE);" not in s:
-    sys.exit("app_heap.c: unexpected heap setup code")
-s = s.replace(mmap_call, "ps5_heap_map(PS5_OPENGL_HEAP_SIZE);")
-s = s.replace("munmap(base, PS5_OPENGL_HEAP_SIZE);", "ps5_heap_unmap(base, PS5_OPENGL_HEAP_SIZE);")
-s = s.replace("#define PS5_OPENGL_HEAP_SIZE", "void *ps5_heap_map(size_t size);\nint ps5_heap_unmap(void *address, size_t size);\n#define PS5_OPENGL_HEAP_SIZE", 1)
-s = s.replace('size=%u\\n",', 'size=%llu\\n",')
-open(p, "w").write(s)
-PY
 grep -q -- "--wrap=malloc" "$APP/tools/build.sh" || { echo "!! template build.sh has no malloc wraps"; exit 1; }
 
 echo "==> 3. Kodi link inputs"
 python3 "$ROOT/tools/ps5/kodi-link-inputs.py" \
   "$BUILD" "$APP/vendor" "$HB" "$PS5_PAYLOAD_SDK" "$PS5_OPENGL_PREFIX"
+if [ -n "$NATIVE_DEPENDS_MAP" ]; then
+  python3 - "$NATIVE_DEPENDS_MAP" "$APP/vendor/kodi-deps.txt" <<'PY'
+import json
+from pathlib import Path
+import sys
+mapping = json.loads(Path(sys.argv[1]).read_text())
+inputs = set(Path(sys.argv[2]).read_text().splitlines())
+remaining = inputs.intersection(mapping)
+if remaining:
+    sys.exit("old stdio archives remain in configured Kodi link: " + ", ".join(sorted(remaining)))
+missing = set(mapping.values()) - inputs
+if missing:
+    sys.exit("native dependency replacements missing from Kodi link: " + ", ".join(sorted(missing)))
+PY
+fi
 MAIN_O="$BUILD/CMakeFiles/kodi.dir/xbmc/platform/ps5/main.cpp.o"
 [ -f "$MAIN_O" ] || { echo "!! $MAIN_O missing"; exit 1; }
 # Kodi's own libraries must be linked whole (self-registering factories live in
@@ -291,15 +229,10 @@ MAIN_O="$BUILD/CMakeFiles/kodi.dir/xbmc/platform/ps5/main.cpp.o"
 # (lld refuses the multi-relocation-section object that produces), so the
 # archives go straight into the boilerplate's lld invocation via a response
 # file, injected the same way ps5-opengl's builder injects its malloc wraps.
-# Host definitions are published by LLVM's dynsym, not a generated pointer
-# binding table. The small import-anchor object retains real system imports
-# requested only by add-ons; the converter now translates their relocations.
-{ echo "$MAIN_O"; echo "$APP/vendor/addon-imports.o"; cat "$APP/vendor/kodi-whole.txt"; } > "$APP/vendor/kodi-whole.rsp"
+{ echo "$MAIN_O"; cat "$APP/vendor/kodi-whole.txt"; } > "$APP/vendor/kodi-whole.rsp"
 LINK_SCRIPT="$APP/tools/build.sh"
 [ "$(grep -c -- '--wrap=malloc_usable_size \\$' "$LINK_SCRIPT")" = 1 ] || { echo "!! unexpected link line in $LINK_SCRIPT"; exit 1; }
-sed -i "/--wrap=malloc_usable_size \\\\$/a\\    --error-limit=0 --wrap=pthread_create --wrap=pthread_setspecific --wrap=pipe --wrap=fcntl --wrap=chdir --wrap=write --wrap=fopen --whole-archive @$APP/vendor/kodi-whole.rsp --no-whole-archive \\\\" "$LINK_SCRIPT"
-sed -i "s|--version-script \"\\\$native/app-symbols.map\"|--undefined-version --version-script \"$APP/vendor/addon-symbols.map\" --export-dynamic-symbol-list=\"$APP/vendor/addon-dynamic.list\" @$APP/vendor/addon-roots.rsp|" "$LINK_SCRIPT"
-grep -q 'addon-dynamic.list' "$LINK_SCRIPT" || { echo "!! failed to inject add-on export policy"; exit 1; }
+sed -i "/--wrap=malloc_usable_size \\\\$/a\\    --error-limit=0 --wrap=pthread_create --wrap=pthread_setspecific --wrap=pipe --wrap=fcntl --wrap=chdir --wrap=write --wrap=fopen --wrap=exit $SPRX_TRACE_LINK_FLAG --whole-archive @$APP/vendor/kodi-whole.rsp --no-whole-archive \\\\" "$LINK_SCRIPT"
 grep -q "kodi-whole.rsp" "$LINK_SCRIPT" || { echo "!! failed to inject the whole-archive list"; exit 1; }
 
 # External libraries as a linker GROUP (circular deps resolve inside a group),
@@ -310,23 +243,26 @@ BUILTINS="$(clang-18 --print-resource-dir)/lib/linux/libclang_rt.builtins-x86_64
 [ -f "$BUILTINS" ] || { echo "!! $BUILTINS not found"; exit 1; }
 {
   printf 'SEARCH_DIR("%s")\n' "$APP/.deps/native/ps5-payload-sdk/target/lib"
-  printf 'EXTERN(ps5_agc_gate2_run)\n'
-  # Pull the unwinder's dynamic-frame registration from libunwind.a: the binary
-  # add-on loader calls the whole-section API (ElfLoader.cpp) to
-  # register a loaded add-on's .eh_frame, but nothing else in a static eboot
-  # references them, so without EXTERN the archive members are left out and the
-  # FSELF converter reports them undefined.
-  printf 'EXTERN(__unw_add_dynamic_eh_frame_section)\n'
-  printf 'EXTERN(__unw_remove_dynamic_eh_frame_section)\n'
   printf 'GROUP (\n'
   while read -r lib; do [ -n "$lib" ] && printf '  "%s"\n' "$lib"; done < "$APP/vendor/kodi-deps.txt"
-  for lib in "$PS5_PAYLOAD_SDK/target/lib/libunwind.a" "$PS5_PAYLOAD_SDK/target/lib/libc++abi.a" \
-             "$PS5_PAYLOAD_SDK/target/lib/libc++.a" "$BUILTINS"; do
-    printf '  "%s"\n' "$lib"
-  done
+  printf '  "%s"\n' "$BUILTINS"
   printf ')\n'
 } > "$APP/vendor/libkodi_group.a"
 printf 'APP_STATIC_ARCHIVES = vendor/libkodi_group.a\n' > "$APP/.env"
+if [ -n "$SHARED_SDK" ]; then
+  title_provider_args=()
+  title_system_sdk="${PS5_NATIVE_TITLE_SYSTEM_SDK:-}"
+  if [ -n "${PS5_NATIVE_TITLE_SYSTEM_SDK:-}" ] && [ ! -d "$title_system_sdk" ]; then
+    echo "!! title-only provider SDK directory does not exist: $title_system_sdk" >&2; exit 1
+  fi
+  for manifest in "$title_system_sdk"/*/manifest.json; do
+    [ -f "$manifest" ] || continue
+    title_provider_args+=(--provider "$manifest")
+  done
+  python3 "$ROOT/tools/ps5/prepare-shared-title.py" --sdk "$SHARED_SDK" --app "$APP" \
+    --native-tool "$APP_TEMPLATE/build/host/ps5-native-tool" \
+    "${title_provider_args[@]}"
+fi
 
 echo "==> 4. title metadata"
 python3 - "$APP/sce_sys/param.json" "$TITLE_ID" <<'PY'
@@ -403,11 +339,11 @@ fi
 [ -f "$HERE/title/sce_sys/snd0.at9" ] && cp "$HERE/title/sce_sys/snd0.at9" "$APP/sce_sys/"
 
 echo "==> 5. native link + FSELF (boilerplate)"
-# (|| true: with pipefail a failed make would end the script before the diagnostic below)
-make -C "$APP" --no-print-directory app 2>&1 | tee "$STAGE/app-build.log" | grep -v "^\[" | tail -30 || true
+build_result=0
+make -C "$APP" --no-print-directory app 2>&1 | tee "$STAGE/app-build.log" | tail -30 || build_result=$?
 DIST="$APP/dist/$TITLE_ID"
-if [ ! -s "$DIST/eboot.bin" ]; then
-  echo "!! no eboot.bin produced; see $STAGE/app-build.log"
+if [ "$build_result" -ne 0 ] || [ ! -s "$DIST/eboot.bin" ]; then
+  echo "!! native build failed or no eboot.bin produced; see $STAGE/app-build.log"
   ELF="$(find "$APP" -name llvm-pie.elf -newer "$APP/vendor/kodi-whole.rsp" 2>/dev/null | head -1)"
   if [ -z "$ELF" ] && grep -q "undefined symbol:" "$STAGE/app-build.log"; then
     echo "   undefined at link time (no module a title has provides them), with a first user:"
@@ -429,22 +365,23 @@ if [ ! -s "$DIST/eboot.bin" ]; then
   exit 1
 fi
 
-python3 "$ROOT/tools/ps5/verify-addon-exports.py" "$APP/build/llvm-pie.elf" "${ADDON_ELFS[@]}"
-python3 - "$ROOT/tools/ps5" "$APP/build/llvm-pie.elf" <<'PY'
+KODI_IMAGE="$APP/build/kodi-app/linked.so"
+APPLICATION_RUNTIME="$DIST/sce_module/libkodi-app.sprx"
+python3 - "$ROOT/tools/ps5" "$APP/build/llvm-pie.elf" "$KODI_IMAGE" "$APPLICATION_RUNTIME" <<'PY'
 import hashlib
 import json
 import mmap
+import os
 from pathlib import Path
 import sys
 
 sys.path.insert(0, sys.argv[1])
-from addon_catalogue import load_catalogue
-
 elf = Path(sys.argv[2])
+application = Path(sys.argv[3])
 stable_origin = (
     b"https://raw.githubusercontent.com/Notedop/kodi-ps5-binary-addons/"
     b"main/repo/piers-ps5-1/stable/")
-with elf.open("rb") as stream:
+with application.open("rb") as stream:
     with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as image:
         if image.find(b"repository.ps5\0") < 0 or image.find(stable_origin + b"\0") < 0:
             sys.exit("PS5 title lacks the official stable repository registration; regenerate "
@@ -453,51 +390,41 @@ digest = hashlib.sha256()
 with elf.open("rb") as stream:
     for chunk in iter(lambda: stream.read(1024 * 1024), b""):
         digest.update(chunk)
-receipt = dict(schema=1, runtime=load_catalogue()["runtime"],
+receipt = dict(schema=1, runtime=dict(id="kodi-ps5-native-sprx-v1",
+               compatibility_version="2.0.0", loader="sceKernelLoadStartModule"),
                title_sha256=digest.hexdigest())
+if application != elf:
+    receipt["application_sha256"] = hashlib.sha256(Path(sys.argv[4]).read_bytes()).hexdigest()
+if os.environ.get("PS5_SPRX_START_TRACE_DIAGNOSTIC", "0") == "1":
+    receipt["diagnostics"] = dict(native_start_trace=True)
 elf.with_name("ps5-addon-runtime.json").write_text(json.dumps(receipt, indent=2) + "\n")
 PY
+cp "$APP/build/ps5-addon-runtime.json" "$DIST/ps5-addon-runtime.json"
+cp "$APP/vendor/ps5-shared-runtime.json" "$DIST/ps5-shared-runtime.json"
 
-echo "    imports per system module (first provider in NEEDED order, as the converter binds):"
-python3 - "$APP/build/llvm-pie.elf" "$APP/.deps/native/ps5-payload-sdk/target/lib" "$PS5_PAYLOAD_SDK/bin/llvm-nm" "$APP_TEMPLATE/build/llvm-pie.elf" <<'PY'
-import subprocess, sys, os, re
-elf, stubs, nm, demo = sys.argv[1:5]
-def needed(path):
-    if not os.path.exists(path): return []
-    out = subprocess.run(["readelf", "-dW", path], capture_output=True, text=True).stdout
-    return re.findall(r"\(NEEDED\).*\[(.*)\]", out)
-def syms(args):
-    out = subprocess.run([nm] + args, capture_output=True, text=True).stdout
-    return {l.split()[-1].split("@")[0] for l in out.splitlines() if l.strip()}
-imports = syms(["-D", "-u", elf])
-left = set(imports)
-demo_needed = set(needed(demo))
-for mod in needed(elf):
-    stub = os.path.join(stubs, re.sub(r"\.s?prx$", ".so", mod))
-    got = left & syms(["-D", "--defined-only", stub]) if os.path.exists(stub) else set()
-    left -= got
-    note = "" if mod in demo_needed or mod == "libc.prx" else "   <- not needed by the working GL demo"
-    print(f"      {mod:28s} {len(got):4d}{note}")
-    if note and got:
-        print("        " + " ".join(sorted(got)))
-if left:
-    print("      unresolved: " + " ".join(sorted(left)))
+echo "    native application imports per verified provider:"
+python3 - "$APP/build/kodi-app/import-ownership.json" <<'PY'
+from collections import Counter
+import json
+from pathlib import Path
+import sys
+
+ownership = json.loads(Path(sys.argv[1]).read_text())
+counts = Counter(entry["module_id"] for entry in ownership["imports"])
+for module in ownership["modules"]:
+    print(f"      {module['name']:28s} {counts[module['id']]:4d}")
 PY
 
 echo "==> 6. Kodi data into the title folder"
 mkdir -p "$DIST/share"
 cp -a "$STAGE/app0/share/kodi" "$DIST/share/"
-if [ "$PS5_ADAPTIVE_TEST" = "1" ]; then
-  echo "==> For adaptive diagnostics, create /data/homebrew/kodi-psmc/kodi-addon-debug on the console."
-fi
 if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
-  (cd "$DIST/share/kodi/addons/test.binary.ps5" &&
-    sha256sum --check --status "$TEST_ADDON/artifacts.sha256")
-  {
-    printf 'build-id: %s\n' "$(<"$TEST_ADDON/build-id.txt")"
-    cat "$TEST_ADDON/artifacts.sha256"
-  } > "$DIST/test-binary-addon-build.txt"
+  cmp "$TEST_ADDON/screensaver.ps5.sprx-test/screensaver.ps5.sprx-test.sprx" \
+    "$DIST/share/kodi/addons/screensaver.ps5.sprx-test/screensaver.ps5.sprx-test.sprx"
+  cp "$TEST_ADDON/artifacts.sha256" "$DIST/sprx-addon-build.txt"
 fi
+python3 "$ROOT/tools/ps5/verify-shared-title.py" --app "$APP" --sdk "$SHARED_SDK" \
+  --archive-map "$NATIVE_DEPENDS_MAP"
 chmod -R 0755 "$DIST"
 du -sh "$DIST" | awk '{print "    title folder size: "$1}'
 
@@ -595,20 +522,8 @@ print(f"Build manifest: {out}")
 PY
 fi
 
-if [ -n "${PS5_HOST:-}" ]; then
-   PS5_DEPLOY_JOBS="${PS5_DEPLOY_JOBS:-8}"
-   [[ "$PS5_DEPLOY_JOBS" =~ ^[1-8]$ ]] || {
-     echo "!! PS5_DEPLOY_JOBS must be between 1 and 8" >&2; exit 1; }
-   command -v lftp >/dev/null || {
-     echo "!! lftp is required for deployment; install lftp or copy the folder manually" >&2; exit 1; }
-   echo "==> uploading to ftp://$PS5_HOST:${PS5_FTP_PORT:-2121}/data/homebrew/$TITLE_ID"
-   # mirror skips files whose size matches and whose remote time is newer. The
-   # console clock can run ahead, and a relayout can keep eboot.bin's size, so
-   # always re-send the eboot explicitly.
-   lftp -e "set cmd:fail-exit yes; mirror -R --delete --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST' '/data/homebrew/$TITLE_ID'; put -O '/data/homebrew/$TITLE_ID' '$DIST/eboot.bin'; quit" -p "${PS5_FTP_PORT:-2121}" "$PS5_HOST"
-fi
 echo
 echo "Title folder: $DIST"
-echo "Copy it to /data/homebrew/$TITLE_ID, restart ShadowMountPlus, launch Kodi."
+echo "Packaging only; deployment and launch are separate user-operated steps."
 echo "Log: KODI_LOG_TO_CONSOLE is not set in a title, so read /download0/.kodi/temp/kodi.log over FTP;"
 echo "     klog (nc \$PS5_HOST 3232) shows loader messages and Kodi's stdout."

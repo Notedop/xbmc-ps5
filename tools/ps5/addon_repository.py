@@ -14,6 +14,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from addon_catalogue import IDENTIFIER, VERSION, prepare_manifest
+from native_addon import validate_binary
+from native_contract import validate_sdk
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("installed_addons", HERE / "stage-installed-addons.py")
@@ -128,33 +130,26 @@ def add_release(files, base, folder, provenance=None):
     return root, digest(archive)
 
 
-def package(root, catalogue, prefixes, output, title, record):
-    """Generate both channels; all candidates are checked against the real title."""
-    if not title.is_file():
-        raise ValueError(f"missing original title ELF: {title}; build ps5-title first")
-    title_sha256 = digest(title.read_bytes())
-    receipt_path = title.with_name("ps5-addon-runtime.json")
-    if not receipt_path.is_file():
-        raise ValueError(f"missing PS5 runtime receipt: {receipt_path}; repackage ps5-title first")
-    receipt = json.loads(receipt_path.read_text())
-    if (receipt.get("schema") != 1 or receipt.get("runtime") != catalogue["runtime"] or
-            receipt.get("title_sha256") != title_sha256):
-        raise ValueError("title runtime receipt does not match the catalogue/original ELF")
+def package(root, catalogue, prefixes, output, title, record, sdk, archive_map):
+    """Generate native feeds only after verifying the standard title and all candidates."""
+    contract = validate_sdk(sdk, archive_map)
+    subprocess.run([sys.executable, str(HERE / "verify-shared-title.py"),
+                    "--app", str(title), "--sdk", str(sdk),
+                    "--archive-map", str(archive_map)], check=True)
     exclusions = json.loads((HERE / "addon-exclusions.json").read_text())
     selected, _ = staging.discover(prefixes, exclusions, catalogue=catalogue)
     found = {item[0] for item in selected}
     missing = set(catalogue["addons"]) - found
     if missing:
         raise ValueError(f"whitelisted add-ons not installed: {', '.join(sorted(missing))}")
-    elfs = [str(elf) for _, _, _, binary, helpers in selected for elf in [binary, *helpers]]
-    subprocess.run([sys.executable, str(HERE / "verify-addon-exports.py"), str(title), *elfs],
-                   check=True)
+    requirements = {addon: validate_binary(binary, sdk)
+                    for addon, _, _, binary, _ in selected}
     output.parent.mkdir(parents=True, exist_ok=True)
     files = {}
     runtime_path = Path("repo") / catalogue["runtime"]
     indexes = {channel: ET.Element("addons") for channel in REPOSITORIES}
-    manifest = {"schema": 1, "runtime": catalogue["runtime"],
-                "title_sha256": title_sha256, "addons": {}}
+    manifest = {"schema": 2, "format": "ps5-native-repository", "runtime": catalogue["runtime"],
+                "runtime_contract": contract, "addons": {}}
     with tempfile.TemporaryDirectory(prefix="ps5-repository-", dir=output.parent) as temp:
         temporary = Path(temp)
         staging.stage(selected, temporary)
@@ -167,7 +162,8 @@ def package(root, catalogue, prefixes, output, title, record):
             target = record["targets"][policy["target"]]
             provenance = {"target": policy["target"], "source_revision": target["source_revision"],
                           "url": target["url"], "fingerprint": target["fingerprint"],
-                          "runtime": catalogue["runtime"], "revision": policy["revision"]}
+                          "runtime": catalogue["runtime"], "revision": policy["revision"],
+                          "native": requirements[addon]}
             channels = ["testing"]
             if policy["channel"] == "stable":
                 channels.append("stable")
@@ -179,6 +175,7 @@ def package(root, catalogue, prefixes, output, title, record):
             manifest["addons"][addon] = dict(provenance, version=tree.getroot().get("version"),
                                              sha256=sha256, channels=channels,
                                              bundled=policy["bundled"])
+        bootstraps = []
         for channel, repo_id in REPOSITORIES.items():
             folder = root / "addons" / repo_id
             config = ET.parse(folder / "addon.xml").getroot()
@@ -199,6 +196,7 @@ def package(root, catalogue, prefixes, output, title, record):
             entry, _ = add_release(files, runtime_path / channel, folder)
             indexes[channel].append(entry)
             bootstrap = f"{repo_id}-{entry.get('version')}.zip"
+            bootstraps.append(bootstrap)
             files[Path(bootstrap)] = (zip_directory(folder), True)
             index = xml_bytes(indexes[channel])
             files[runtime_path / channel / "addons.xml"] = (index, False)
@@ -207,8 +205,7 @@ def package(root, catalogue, prefixes, output, title, record):
             files[runtime_path / channel / "build-manifest.json"] = (json_bytes(manifest), False)
     files[Path("index.html")] = (
         ('<!doctype html><html><body>\n' + "\n".join(
-            f'<a href="{repo}-{ET.parse(root / "addons" / repo / "addon.xml").getroot().get("version")}.zip">'
-            f'{repo}</a><br>' for repo in REPOSITORIES.values()) +
+            f'<a href="{bootstrap}">{bootstrap}</a><br>' for bootstrap in bootstraps) +
          "\n</body></html>\n").encode(), False)
     files[Path("README.md")] = ((
         "# Kodi PS5 binary add-ons\n\n"
@@ -218,18 +215,23 @@ def package(root, catalogue, prefixes, output, title, record):
         "repository, disabled on first discovery. Enable Kodi PS5 Testing Add-ons under "
         "My add-ons > Add-on repository to opt in to unaccepted candidates; the testing "
         "repository ZIP linked by index.html also remains available for manual installation. "
-        "Build success and host export validation are not console acceptance. "
+        "**Upgrade Kodi to the native shared-runtime title before installing these packages.** "
+        "Legacy titles are unsupported; do not install the runtime marker separately. "
+        "Build/package qualification is not console acceptance. "
         "Packages are not generic FreeBSD binaries.\n\n"
         "## Maintaining this repository\n\n"
         "Use `tools/ps5/addon-repository.py` in the configured PS5 Kodi source checkout; "
         "see `docs/PS5-BINARY-ADDONS.md` there for prerequisites, the nested whitelist, "
         "source locks and stable-promotion evidence.\n\n"
         "1. Run `python3 tools/ps5/addon-repository.py build --jobs 4`.\n"
-        "2. Rebuild/package the Kodi title when its candidate exports or runtime change.\n"
-        "3. Run `python3 tools/ps5/addon-repository.py package`.\n"
-        "4. Run `python3 tools/ps5/addon-repository.py publish --checkout PATH --commit`; "
+        "2. Verify the upgraded shared-runtime Kodi title against the prepared SDK.\n"
+        "3. Run `python3 tools/ps5/addon-repository.py package --title-app <stage>/app`.\n"
+        "4. Review `python3 tools/ps5/addon-repository.py publish --checkout PATH --dry-run`, "
+        "then run `python3 tools/ps5/addon-repository.py publish --checkout PATH "
+        "--apply-native-migration --commit`; "
         "add `--push` only when publication is intended.\n\n"
-        "Subsequent build/package runs can use `build --jobs 4 --package`. "
+        "Subsequent build/package runs can use "
+        "`build --jobs 4 --package --title-app <stage>/app`. "
         "Upstream changes require an explicit `build --refresh-sources`. "
         "Never overwrite an existing package version: increment its PS5 revision. "
         "Stable promotion requires console evidence and approval of the exact ZIP SHA256. "
@@ -237,7 +239,8 @@ def package(root, catalogue, prefixes, output, title, record):
         "package's license obligations before distribution.\n\n"
         "The generated feeds are under `repo/<runtime>/stable` and "
         "`repo/<runtime>/testing`. Do not run the original template generator over them. "
-        "Older package versions are retained. GitHub Pages is optional; repository "
+        "The native-only migration removes legacy binary packages in the owned feed scope. "
+        "GitHub Pages is optional; repository "
         "definitions use raw GitHub URLs.\n"
     ).encode(), False)
     # Check every immutable artifact before exposing any new index.
@@ -253,7 +256,8 @@ def package(root, catalogue, prefixes, output, title, record):
         write_changed(output / relative, data, immutable)
     inventory = {path.as_posix(): digest(data) for path, (data, _) in sorted(files.items())}
     write_changed(output / "publication.json", json_bytes(
-        {"schema": 1, "runtime": catalogue["runtime"],
+        {"schema": 2, "format": "ps5-native-publication", "runtime": catalogue["runtime"],
+         "qualified_addons": sorted(found),
          "catalogue_sha256": digest(json_bytes(catalogue)), "files": inventory}))
     return manifest
 
@@ -263,7 +267,122 @@ def git(checkout, *args):
                                    text=True).strip()
 
 
-def publish(output, checkout, commit=False, push=False, catalogue=None):
+def compare_version(first, second):
+    """Compare the epoch/revision-free catalogue subset like CAddonVersion::CompareComponent."""
+    first, second = first.lower(), second.lower()
+    while first and second:
+        if not first[0].isdigit() and not second[0].isdigit():
+            if first[0] != second[0]:
+                if "~" in (first[0], second[0]):
+                    return -1 if first[0] == "~" else 1
+                return -1 if first[0] < second[0] else 1
+            first, second = first[1:], second[1:]
+        elif first[0].isdigit() != second[0].isdigit():
+            if "~" in (first[0], second[0]):
+                return -1 if first[0] == "~" else 1
+            return -1 if first[0].isdigit() else 1
+        else:
+            left = re.match(r"\d+", first)[0]
+            right = re.match(r"\d+", second)[0]
+            if int(left) != int(right):
+                return -1 if int(left) < int(right) else 1
+            first, second = first[len(left):], second[len(right):]
+    if first:
+        return -1 if first[0] == "~" else 1
+    if second:
+        return 1 if second[0] == "~" else -1
+    return 0
+
+
+def publication_path(root, relative):
+    path = PurePosixPath(relative)
+    if path.is_absolute() or ".." in path.parts or "\\" in relative or not path.parts:
+        raise ValueError(f"invalid publication path: {relative}")
+    destination = root
+    for part in path.parts:
+        destination /= part
+        if destination.is_symlink():
+            raise ValueError(f"symlink in publication path: {destination}")
+    staging.contained(destination, root)
+    return destination
+
+
+def migration_inventory(checkout, publication, catalogue):
+    """Inventory only tracked artifacts in the existing feeds and known add-on folders."""
+    current = publication["files"]
+    runtime = publication["runtime"]
+    owners = set(catalogue["addons"]) | set(REPOSITORIES.values())
+    versions = {}
+    for channel in REPOSITORIES:
+        relative = f"repo/{runtime}/{channel}/addons.xml"
+        existing = publication_path(checkout, relative)
+        if not existing.is_file():
+            continue
+        index = ET.fromstring(existing.read_bytes())
+        if index.tag != "addons":
+            raise ValueError(f"invalid existing publication index: {existing}")
+        for addon in index:
+            if addon.get("id") in catalogue["addons"] and addon.get("version"):
+                versions.setdefault(addon.get("id"), []).append((addon.get("version"), None))
+    candidates = []
+    tracked = git(checkout, "ls-files", "-z").split("\0")
+    new_versions = {}
+    new_hashes = {}
+    for relative in current:
+        match = re.fullmatch(r"repo/" + re.escape(runtime) +
+                             r"/(?:stable|testing)/([^/]+)/\1-(.+)\.zip", relative)
+        if match:
+            new_versions[match[1]] = match[2]
+            new_hashes.setdefault((match[1], match[2]), set()).add(current[relative])
+    old_hashes = {}
+    for relative in filter(None, tracked):
+        path = PurePosixPath(relative)
+        bootstrap = re.fullmatch(
+            r"repository\.ps5(?:\.testing)?-[A-Za-z0-9.+_@~]+\.zip(?:\.sha256|\.build\.json)?",
+            relative)
+        owned = (len(path.parts) >= 3 and path.parts[:2] == ("repo", runtime) and
+                 path.parts[2] in REPOSITORIES)
+        obsolete = bool(bootstrap)
+        if owned:
+            if len(path.parts) == 4:
+                obsolete = path.name in (
+                    "addons.xml", "addons.xml.md5", "addons.xml.sha256",
+                    "build-manifest.json", "ps5-addon-runtime.json", "title-exports.json")
+            elif len(path.parts) >= 5 and path.parts[3] in owners:
+                obsolete = (path.name.endswith((".zip", ".sha256", ".build.json",
+                                                ".sprx", ".sprx.json")) or
+                            re.search(r"\.so(?:\.|$)", path.name) is not None or
+                            path.name == "ps5-auxiliaries.list")
+                if path.name.endswith(".zip"):
+                    addon = path.parts[3]
+                    match = re.fullmatch(re.escape(addon) + r"-(.+)\.zip", path.name)
+                    if addon in catalogue["addons"] and match:
+                        checksum = digest(publication_path(checkout, relative).read_bytes())
+                        versions.setdefault(addon, []).append((match[1], checksum))
+                        old_hashes.setdefault((addon, match[1]), set()).add(checksum)
+            elif len(path.parts) >= 5 and path.parts[3] in (
+                    "runtime", "runtimes", "ps5-runtime", "title-runtime"):
+                obsolete = True
+        if obsolete and relative not in current:
+            destination = publication_path(checkout, relative)
+            candidates.append({"path": relative, "sha256": digest(destination.read_bytes())})
+    for addon, published in versions.items():
+        candidate = new_versions.get(addon)
+        if candidate is None:
+            raise ValueError(f"native migration is missing a replacement for {addon}")
+        for version, checksum in published:
+            if not VERSION.fullmatch(version) or compare_version(candidate, version) < 0:
+                raise ValueError(f"{addon}: native version {candidate} does not supersede {version}")
+            if compare_version(candidate, version) == 0:
+                previous = {checksum} if checksum else old_hashes.get((addon, version), set())
+                if not previous or not previous <= new_hashes.get((addon, candidate), set()):
+                    raise ValueError(f"{addon}: published version {version} has different or "
+                                     "unverifiable bytes; increment catalogue revision")
+    return sorted(candidates, key=lambda item: item["path"])
+
+
+def publish(output, checkout, commit=False, push=False, catalogue=None,
+            apply_migration=False, dry_run=False):
     """Copy generated files only; commit and push require explicit opt-in."""
     if push and not commit:
         raise ValueError("--push requires --commit")
@@ -282,8 +401,12 @@ def publish(output, checkout, commit=False, push=False, catalogue=None):
             f"ssh://git@github.com/{REMOTE}"):
         raise ValueError(f"unexpected publication remote: {remote}")
     publication = json.loads((output / "publication.json").read_text())
-    if publication.get("schema") != 1 or not isinstance(publication.get("files"), dict):
+    if (publication.get("schema") != 2 or
+            publication.get("format") != "ps5-native-publication" or
+            not isinstance(publication.get("files"), dict)):
         raise ValueError("invalid publication inventory")
+    if catalogue is None or publication.get("qualified_addons") != sorted(catalogue["addons"]):
+        raise ValueError("native publication requires the complete qualified catalogue")
     if catalogue is not None and publication.get("catalogue_sha256") != digest(json_bytes(catalogue)):
         raise ValueError("publication does not match the current catalogue; package again")
     runtime = publication.get("runtime", "")
@@ -299,9 +422,8 @@ def publish(output, checkout, commit=False, push=False, catalogue=None):
                 (len(path.parts) >= 4 and path.parts[:2] == ("repo", runtime) and
                  path.parts[2] in REPOSITORIES)):
             raise ValueError(f"unexpected publication path: {relative}")
-        source, destination = output / path, checkout / path
-        staging.contained(source, output)
-        staging.contained(destination, checkout)
+        source = publication_path(output, relative)
+        destination = publication_path(checkout, relative)
         data = source.read_bytes()
         if digest(data) != expected:
             raise ValueError(f"publication output modified: {source}; package again")
@@ -309,11 +431,39 @@ def publish(output, checkout, commit=False, push=False, catalogue=None):
         if immutable and destination.exists() and destination.read_bytes() != data:
             raise ValueError(f"published version changed: {destination}; increment catalogue revision")
         pending.append((destination, data, immutable))
-    for destination, data, immutable in pending:
-        write_changed(destination, data, immutable)
+    removals = migration_inventory(checkout, publication, catalogue)
+    changes = [{"path": path.relative_to(checkout).as_posix(), "sha256": digest(data),
+                "previous_sha256": digest(path.read_bytes()) if path.exists() else None}
+               for path, data, _ in pending if not path.exists() or path.read_bytes() != data]
+    print(json_bytes({"native_publication_changes": changes,
+                      "native_migration_removals": removals}).decode(), end="")
+    if dry_run:
+        return bool(removals or any(not p.exists() or p.read_bytes() != data
+                                   for p, data, _ in pending))
+    if removals and not apply_migration:
+        raise ValueError("review the removal inventory, then pass --apply-native-migration")
+    snapshots = {path: path.read_bytes() if path.exists() else None
+                 for path, _, _ in pending}
+    for removal in removals:
+        path = publication_path(checkout, removal["path"])
+        if digest(path.read_bytes()) != removal["sha256"]:
+            raise ValueError(f"migration input changed: {path}")
+        snapshots[path] = path.read_bytes()
+    try:
+        for destination, data, immutable in pending:
+            write_changed(destination, data, immutable)
+        for removal in removals:
+            publication_path(checkout, removal["path"]).unlink()
+    except BaseException:
+        for path, original in snapshots.items():
+            if original is None:
+                path.unlink(missing_ok=True)
+            else:
+                write_changed(path, original)
+        raise
     changed = bool(git(checkout, "status", "--porcelain", "--untracked-files=all"))
     if commit and changed:
-        git(checkout, "add", "--", *publication["files"])
+        git(checkout, "add", "--", *publication["files"], *(p["path"] for p in removals))
         git(checkout, "commit", "-m", f"Publish PS5 add-ons ({publication['runtime']})\n\n"
             "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>")
     if push:

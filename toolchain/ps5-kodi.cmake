@@ -8,7 +8,8 @@
 # Usage (from an empty build dir):
 #   cmake -DCMAKE_TOOLCHAIN_FILE=/path/to/ps5-kodi.cmake [options] /path/to/kodi
 #
-# Environment overrides: PS5_PAYLOAD_SDK, PS5_OPENGL_PREFIX
+# Environment overrides: PS5_PAYLOAD_SDK, PS5_OPENGL_PREFIX, PS5_NATIVE_RUNTIME_SDK,
+# PS5_DEPENDS_PREFIX, PS5_HOMEBREW_PREFIX
 
 if(NOT DEFINED PS5_PAYLOAD_SDK)
   if(DEFINED ENV{PS5_PAYLOAD_SDK})
@@ -72,7 +73,15 @@ if(PS5_DEPENDS_PREFIX)
 endif()
 
 # --- Libraries built by pacbrew-repo (inside the sysroot) -------------------
-set(PS5_HBROOT "${PS5_PAYLOAD_SDK}/target/user/homebrew")
+if(NOT DEFINED PS5_HOMEBREW_PREFIX)
+  if(DEFINED ENV{PS5_HOMEBREW_PREFIX})
+    set(PS5_HOMEBREW_PREFIX "$ENV{PS5_HOMEBREW_PREFIX}")
+  else()
+    set(PS5_HOMEBREW_PREFIX "${PS5_PAYLOAD_SDK}/target/user/homebrew")
+  endif()
+endif()
+set(PS5_HOMEBREW_PREFIX "${PS5_HOMEBREW_PREFIX}" CACHE PATH "PS5 homebrew dependency prefix")
+set(PS5_HBROOT "${PS5_HOMEBREW_PREFIX}")
 list(APPEND CMAKE_FIND_ROOT_PATH "${PS5_HBROOT}")
 set(ENV{PKG_CONFIG_LIBDIR} "${PS5_HBROOT}/lib/pkgconfig:${PS5_PAYLOAD_SDK}/target/lib/pkgconfig")
 set(ENV{PKG_CONFIG_SYSROOT_DIR} "${PS5_PAYLOAD_SDK}/target")
@@ -89,3 +98,46 @@ set(PS5_OPENGL_PREFIX "${PS5_OPENGL_PREFIX}" CACHE PATH "ps5-opengl relocatable 
 set(PS5OpenGL_DIR "${PS5_OPENGL_PREFIX}/lib/cmake/PS5OpenGL" CACHE PATH "PS5OpenGL CMake config dir")
 list(APPEND CMAKE_FIND_ROOT_PATH "${PS5_OPENGL_PREFIX}")
 set(ENV{PKG_CONFIG_LIBDIR} "$ENV{PKG_CONFIG_LIBDIR}:${PS5_OPENGL_PREFIX}/lib/pkgconfig")
+
+if(NOT DEFINED PS5_NATIVE_RUNTIME_SDK)
+  set(PS5_NATIVE_RUNTIME_SDK "$ENV{PS5_NATIVE_RUNTIME_SDK}")
+endif()
+set(PS5_NATIVE_RUNTIME_SDK "${PS5_NATIVE_RUNTIME_SDK}" CACHE PATH
+    "Required prepared native shared runtime SDK")
+if(NOT DEFINED PS5_NATIVE_DEPENDS_MAP)
+  set(PS5_NATIVE_DEPENDS_MAP "$ENV{PS5_NATIVE_DEPENDS_MAP}")
+endif()
+set(PS5_NATIVE_DEPENDS_MAP "${PS5_NATIVE_DEPENDS_MAP}" CACHE FILEPATH
+    "Verified isolated native static dependency replacements")
+if(NOT PS5_NATIVE_RUNTIME_SDK)
+  message(FATAL_ERROR "PS5 requires a prepared PS5_NATIVE_RUNTIME_SDK; use tools/ps5/configure.sh. The static runtime profile is no longer supported.")
+endif()
+if(PS5_NATIVE_RUNTIME_SDK)
+  foreach(_file include/stdio.h tools/native-clang.py PS5NativeRuntimeConfig.cmake)
+    if(NOT EXISTS "${PS5_NATIVE_RUNTIME_SDK}/${_file}")
+      message(FATAL_ERROR "Incomplete PS5 native runtime SDK: ${PS5_NATIVE_RUNTIME_SDK}/${_file}")
+    endif()
+  endforeach()
+  find_program(PS5_NATIVE_PYTHON NAMES python3 REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+  set(_ps5_launcher "${PS5_NATIVE_PYTHON};${PS5_NATIVE_RUNTIME_SDK}/tools/native-clang.py")
+  set(CMAKE_C_COMPILER_LAUNCHER "${_ps5_launcher}")
+  set(CMAKE_CXX_COMPILER_LAUNCHER "${_ps5_launcher}")
+  foreach(_language C CXX)
+    string(FIND "${CMAKE_${_language}_FLAGS_INIT}"
+           "-I\"${PS5_NATIVE_RUNTIME_SDK}/include\"" _ps5_overlay_position)
+    if(_ps5_overlay_position EQUAL -1)
+      if(_language STREQUAL "CXX")
+        string(APPEND CMAKE_CXX_FLAGS_INIT
+               " -nostdinc++ -I\"${PS5_PAYLOAD_SDK}/target/include/c++/v1\"")
+      endif()
+      string(APPEND CMAKE_${_language}_FLAGS_INIT
+             " -fPIC -femulated-tls -fno-stack-protector -I\"${PS5_NATIVE_RUNTIME_SDK}/include\"")
+    endif()
+  endforeach()
+  list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
+       PS5_NATIVE_RUNTIME_SDK PS5_DEPENDS_PREFIX PS5_HOMEBREW_PREFIX)
+  unset(_ps5_launcher)
+  unset(_ps5_overlay_position)
+  unset(_language)
+  unset(_file)
+endif()

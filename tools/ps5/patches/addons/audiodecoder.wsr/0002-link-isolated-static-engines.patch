@@ -1,0 +1,96 @@
+Link the WSR track and playback engines statically with isolated global state.
+
+Like Nosefart, WSR otherwise installs three ordinary ELF helper libraries.
+Preserve separate track-scanning and alternating playback engines without
+requiring dlopen or adding a private native dependency contract.
+Upstream: PS5-only native packaging integration.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -23,4 +23,1 @@
+-add_definitions(-DLIBRARY_PREFIX="${CMAKE_SHARED_LIBRARY_PREFIX}"
+-                -DLIBRARY_SUFFIX="${CMAKE_SHARED_LIBRARY_SUFFIX}")
+-
+-set(WSR_ADDITIONAL_BINARY $<TARGET_FILE:in_wsr_track> $<TARGET_FILE:in_wsr_0> $<TARGET_FILE:in_wsr_1>)
++set(DEPLIBS in_wsr_track in_wsr_0 in_wsr_1)
+--- a/lib/in_wsr/CMakeLists.txt
++++ b/lib/in_wsr/CMakeLists.txt
+@@ -10,3 +10,22 @@
+-add_library(in_wsr_0 SHARED ${SOURCES})
+-add_library(in_wsr_1 SHARED ${SOURCES})
+-add_library(in_wsr_track SHARED ${SOURCES})
++set(WSR_GLOBALS
++    CPU_Count CPU_Cycles CPU_Run ChannelMuting Close_SampleData Close_WSR
++    DMACycles Get_ChannelMuting Get_FirstSong Init_SampleData Init_WSR
++    Load_WSR ROM ROMBank ROMSize Reset_WSR SampleRate Sample_Enable
++    Sample_Length Sample_Offset Set_ChannelMuting Set_Frequency
++    Update_SampleData Update_WSR WSRPlayerSetUp WS_Cpu_Clock WaveAdrs baseBank
++    cpu_interrupt cpu_readmem20 cpu_readport cpu_writemem20 cpu_writeport
++    initialIoValue mul_div nec_Cycles nec_ICount nec_execute nec_exit
++    nec_get_reg nec_getcycles nec_instruction nec_int nec_reset nec_set_reg
++    nec_yield romAddressMask romSize sample_buffer seg_prefix ws_audio_done
++    ws_audio_init ws_audio_port_read ws_audio_port_write ws_audio_process
++    ws_audio_reset ws_audio_sounddma ws_audio_update ws_internalRam ws_ioRam
++    ws_io_done ws_io_init ws_io_reset ws_memory_done ws_memory_init
++    ws_memory_reset ws_rom ws_staticRam ws_timer ws_timer_count ws_timer_min
++    ws_timer_pending ws_timer_reset ws_timer_set ws_timer_update)
++
++foreach(engine IN ITEMS in_wsr_track in_wsr_0 in_wsr_1)
++  add_library(${engine} STATIC ${SOURCES})
++  foreach(symbol IN LISTS WSR_GLOBALS)
++    target_compile_definitions(${engine} PRIVATE "${symbol}=${engine}_${symbol}")
++  endforeach()
++endforeach()
+--- a/src/WSRCodec.h
++++ b/src/WSRCodec.h
+@@ -14,1 +14,0 @@
+-#include <kodi/tools/DllHelper.h>
+@@ -25,2 +24,1 @@
+-class ATTR_DLL_LOCAL CWSRCodec : public kodi::addon::CInstanceAudioDecoder,
+-                                 private kodi::tools::CDllHelper
++class ATTR_DLL_LOCAL CWSRCodec : public kodi::addon::CInstanceAudioDecoder
+@@ -48,1 +46,0 @@
+-  WSRPlayerApi* (*WSRPlayerSetUp)(void);
+--- a/src/WSRCodec.cpp
++++ b/src/WSRCodec.cpp
+@@ -22,1 +22,8 @@
++extern "C"
++{
++decltype(::WSRPlayerSetUp) in_wsr_track_WSRPlayerSetUp;
++decltype(::WSRPlayerSetUp) in_wsr_0_WSRPlayerSetUp;
++decltype(::WSRPlayerSetUp) in_wsr_1_WSRPlayerSetUp;
++}
++
+ unsigned int CWSRCodec::m_usedLib = 0;
+@@ -51,8 +58,2 @@
+-    std::string source = kodi::addon::GetAddonPath(LIBRARY_PREFIX + std::string("in_wsr_") +
+-                                                   std::to_string(m_usedLib) + LIBRARY_SUFFIX);
+-    if (!LoadDll(source))
+-      return false;
+-    if (!REGISTER_DLL_SYMBOL(WSRPlayerSetUp))
+-      return false;
+-    m_wsrPlayerApi = WSRPlayerSetUp();
++    m_wsrPlayerApi = m_usedLib ? in_wsr_1_WSRPlayerSetUp() : in_wsr_0_WSRPlayerSetUp();
+     if (!m_wsrPlayerApi)
+@@ -317,9 +318,2 @@
+-    std::string source =
+-        kodi::addon::GetAddonPath(LIBRARY_PREFIX + std::string("in_wsr_track") + LIBRARY_SUFFIX);
+-
+-    if (!LoadDll(source))
+-      return false;
+-    if (!REGISTER_DLL_SYMBOL(WSRPlayerSetUp))
+-      return false;
+-    m_wsrPlayerApi = WSRPlayerSetUp();
++    m_wsrPlayerApi = in_wsr_track_WSRPlayerSetUp();
+     if (!m_wsrPlayerApi)
+@@ -483,9 +477,2 @@
+-    std::string source =
+-        kodi::addon::GetAddonPath(LIBRARY_PREFIX + std::string("in_wsr_track") + LIBRARY_SUFFIX);
+-
+-    if (!LoadDll(source))
+-      return -1;
+-    if (!REGISTER_DLL_SYMBOL(WSRPlayerSetUp))
+-      return -1;
+-    m_wsrPlayerApi = WSRPlayerSetUp();
++    m_wsrPlayerApi = in_wsr_track_WSRPlayerSetUp();
+     if (!m_wsrPlayerApi)

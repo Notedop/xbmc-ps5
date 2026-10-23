@@ -24,6 +24,10 @@ def main():
         os.environ.get("PS5_PAYLOAD_SDK", "/opt/ps5-payload-sdk")))
     parser.add_argument("--depends", type=Path, default=Path(os.environ.get(
         "PS5_DEPENDS_PREFIX", str(ROOT / "build/ps5-depends-test/x86_64-unknown-freebsd-debug"))))
+    parser.add_argument("--runtime-sdk", type=Path, default=Path(os.environ.get(
+        "PS5_NATIVE_RUNTIME_SDK", str(ROOT / "build/ps5-native/sdk"))))
+    parser.add_argument("--archive-map", type=Path, default=Path(os.environ.get(
+        "PS5_NATIVE_DEPENDS_MAP", str(ROOT / "build/ps5-native/depends/archive-map.json"))))
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list", help="show the whitelist without compiling or contacting upstream")
     build_parser = commands.add_parser("build", help="incrementally build whitelisted targets")
@@ -35,13 +39,18 @@ def main():
                               help="also verify and package the complete catalogue after building")
     package_parser = commands.add_parser("package", help="verify the title and create repository ZIPs")
     for command_parser in (build_parser, package_parser):
-        command_parser.add_argument("--title-elf", type=Path,
-                                    default=ROOT / "build/ps5-stage/app/build/llvm-pie.elf")
+        command_parser.add_argument("--title-app", type=Path,
+                                    required=command_parser is package_parser,
+                                    help="app directory from the matching fresh title stage")
     publish_parser = commands.add_parser("publish", help="copy packages to a clean local repo checkout")
     publish_parser.add_argument("--checkout", required=True, type=Path)
     publish_parser.add_argument("--commit", action="store_true")
     publish_parser.add_argument("--push", action="store_true")
+    publish_parser.add_argument("--dry-run", action="store_true")
+    publish_parser.add_argument("--apply-native-migration", action="store_true")
     args = parser.parse_args()
+    if args.command == "build" and args.package and args.title_app is None:
+        parser.error("--title-app is required with build --package")
     try:
         with ExitStack() as locks:
             if args.command in ("build", "package"):
@@ -68,20 +77,25 @@ def execute(args):
         if args.jobs < 1:
             raise ValueError("--jobs must be positive")
         prefixes = build(ROOT, catalogue, args.work.resolve(), args.only, args.jobs,
-                         args.sdk.resolve(), args.depends.resolve(), args.refresh_sources)
+                         args.sdk.resolve(), args.depends.resolve(), args.refresh_sources,
+                         args.runtime_sdk.resolve(), args.archive_map.resolve())
         print("Installed prefixes:\n" + "\n".join(map(str, prefixes)))
     if args.command == "package" or (args.command == "build" and args.package):
         from addon_build import validate_build
 
         record = validate_build(ROOT, catalogue, args.work.resolve(),
-                                args.sdk.resolve(), args.depends.resolve())
+                                args.sdk.resolve(), args.depends.resolve(),
+                                args.runtime_sdk.resolve(), args.archive_map.resolve())
         result = package(ROOT, catalogue, [Path(p) for p in record["prefixes"]],
-                         args.output.resolve(), args.title_elf.resolve(), record)
+                         args.output.resolve(), args.title_app.resolve(), record,
+                         args.runtime_sdk.resolve(), args.archive_map.resolve())
         print(f"Packaged {len(result['addons'])} add-ons into {args.output}")
     elif args.command == "publish":
-        changed = publish(args.output, args.checkout, args.commit, args.push, catalogue)
-        print("Publication updated." if changed else "Publication already matches; no changes.")
-        if changed and not args.commit:
+        changed = publish(args.output, args.checkout, args.commit, args.push, catalogue,
+                          args.apply_native_migration, args.dry_run)
+        print(("Publication changes planned; checkout unchanged." if args.dry_run else
+               "Publication updated.") if changed else "Publication already matches; no changes.")
+        if changed and not args.commit and not args.dry_run:
             print("Changes are local and uncommitted; review the publication checkout.")
 
 

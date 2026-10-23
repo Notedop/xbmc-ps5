@@ -8,9 +8,9 @@
 
 #pragma once
 
-#include "platform/posix/CPUInfoPosix.h"
+#include "utils/CPUInfo.h"
 
-class CCPUInfoPS5 : public CCPUInfoPosix
+class CCPUInfoPS5 : public CCPUInfo
 {
 public:
 

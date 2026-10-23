@@ -1,0 +1,23 @@
+Use the native CONFIG_SITE compiler commands for sidplay2's ABI flags.
+
+The shared native CONFIG_SITE already supplies the compiler launcher, forced
+ABI header and stdio overlay. Copying shell-quoted CMake flags into Autoconf's
+CFLAGS/CXXFLAGS passes literal quotes to Clang, producing an empty include
+filename. Keep the platform defines and linker flags without duplicating ABI
+options in a different flag-string format.
+
+Upstream: PS5-only; requires the native catalogue's shared CONFIG_SITE.
+
+--- a/depends/common/sidplay2/CMakeLists.txt
++++ b/depends/common/sidplay2/CMakeLists.txt
+@@ -11,8 +11,8 @@
+                                    autoreconf -vif builders/hardsid-builder &&
+                                    autoreconf -vif libsidutils
+                     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
+-                      "CFLAGS=${CMAKE_C_FLAGS}"
+-                      "CXXFLAGS=${CMAKE_CXX_FLAGS} -DHAVE_UNIX"
++                      "CFLAGS=-DTARGET_POSIX -DTARGET_FREEBSD"
++                      "CXXFLAGS=-DTARGET_POSIX -DTARGET_FREEBSD -DHAVE_UNIX"
+                       "LDFLAGS=${CMAKE_EXE_LINKER_FLAGS}"
+                       <SOURCE_DIR>/configure
+                       --prefix=${OUTPUT_DIR}

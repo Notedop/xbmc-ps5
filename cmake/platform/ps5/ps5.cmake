@@ -20,12 +20,27 @@ if(NOT _ps5_app_lc)
   set(_ps5_app_lc kodi)
 endif()
 
-find_package(PS5OpenGL CONFIG REQUIRED)
+if(NOT PS5_NATIVE_RUNTIME_SDK OR NOT PS5_NATIVE_DEPENDS_MAP)
+  message(FATAL_ERROR "PS5 requires PS5_NATIVE_RUNTIME_SDK and PS5_NATIVE_DEPENDS_MAP; use tools/ps5/configure.sh")
+endif()
+find_program(PS5_NATIVE_PYTHON NAMES python3 REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+execute_process(
+  COMMAND "${PS5_NATIVE_PYTHON}" "${CMAKE_SOURCE_DIR}/tools/ps5/native_contract.py"
+          --sdk "${PS5_NATIVE_RUNTIME_SDK}" --archive-map "${PS5_NATIVE_DEPENDS_MAP}"
+  RESULT_VARIABLE _ps5_contract_result ERROR_VARIABLE _ps5_contract_error
+  OUTPUT_QUIET)
+if(NOT _ps5_contract_result EQUAL 0)
+  message(FATAL_ERROR "Invalid native PS5 build inputs: ${_ps5_contract_error}")
+endif()
+include("${PS5_NATIVE_RUNTIME_SDK}/PS5NativeRuntimeConfig.cmake")
+set(_ps5_graphics ${_ps5_app_lc}::OpenGl)
+unset(_ps5_contract_result)
+unset(_ps5_contract_error)
 
 if(NOT TARGET ${_ps5_app_lc}::OpenGl)
   add_library(${_ps5_app_lc}::OpenGl INTERFACE IMPORTED)
   set_target_properties(${_ps5_app_lc}::OpenGl PROPERTIES
-                        INTERFACE_LINK_LIBRARIES PS5OpenGL::OpenGL
+                        INTERFACE_LINK_LIBRARIES ${_ps5_graphics}
                         INTERFACE_COMPILE_DEFINITIONS HAS_GL)
   set(OPENGL_FOUND TRUE CACHE INTERNAL "")
 endif()
@@ -33,7 +48,7 @@ endif()
 if(NOT TARGET ${_ps5_app_lc}::EGL)
   add_library(${_ps5_app_lc}::EGL INTERFACE IMPORTED)
   set_target_properties(${_ps5_app_lc}::EGL PROPERTIES
-                        INTERFACE_LINK_LIBRARIES PS5OpenGL::OpenGL
+                        INTERFACE_LINK_LIBRARIES ${_ps5_graphics}
                         INTERFACE_COMPILE_DEFINITIONS "HAS_EGL;EGL_NO_X11;MESA_EGL_NO_X11_HEADERS")
   set(EGL_FOUND TRUE CACHE INTERNAL "")
 endif()
@@ -41,6 +56,7 @@ endif()
 unset(_ps5_app_name_line)
 unset(_ps5_app_name)
 unset(_ps5_app_lc)
+unset(_ps5_graphics)
 
 set(PLATFORM_REQUIRED_DEPS OpenGl EGL)
 

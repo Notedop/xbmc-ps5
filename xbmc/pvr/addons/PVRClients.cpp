@@ -161,6 +161,9 @@ CPVRClients::UpdateClientAction CPVRClients::GetUpdateClientAction(
 
 void CPVRClients::UpdateClients(const std::string& changedAddonId /* = "" */)
 {
+  // Keep the state snapshot and the complete stop/create/destroy/start transaction together.
+  std::unique_lock updateLock(m_updateClientsMutex);
+
   std::vector<std::pair<AddonInfoPtr, bool>> addonsWithStatus;
   if (!GetAddonsWithStatus(changedAddonId, addonsWithStatus))
     return;

@@ -8,9 +8,9 @@
 
 #pragma once
 
-#include "platform/posix/GPUInfoPosix.h"
+#include "utils/GpuInfo.h"
 
-class CGPUInfoPS5 : public CGPUInfoPosix
+class CGPUInfoPS5 : public CGPUInfo
 {
 public:
   CGPUInfoPS5() = default;
@@ -20,4 +20,8 @@ protected:
   bool SupportsPlatformTemperature() const override { return true; }
   bool SupportsCustomTemperatureCommand() const override { return false; }
   bool GetGPUPlatformTemperature(CTemperature& temperature) const override;
+  bool GetGPUTemperatureFromCommand(CTemperature&, const std::string&) const override
+  {
+    return false;
+  }
 };

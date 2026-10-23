@@ -8,6 +8,6 @@ mkdir -p "$BUILD"
 "$CC" -std=c11 -O2 -Wall -Wextra -Werror \
   "$ROOT/tools/ps5/tests/thread-stack.c" -o "$BUILD/thread-stack"
 "$BUILD/thread-stack"
-"$SDK/bin/prospero-clang" --target=x86_64-unknown-freebsd -O2 -Wall -Wextra -Werror \
+"$SDK/bin/prospero-clang" -O2 -Wall -Wextra -Werror -fPIC \
   -c "$ROOT/shims/native-app/thread_stack.c" -o "$BUILD/thread_stack.ps5.o"
-echo "PASS: thread stack policy, caller ownership, errors, diagnostics and SDK compile"
+echo "PASS: thread stack policy, shared TLS drain, caller ownership, errors and native SDK compile"

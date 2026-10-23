@@ -208,6 +208,16 @@ void DllLoaderContainer::ReleaseModule(LibraryLoader*& pDll)
     if (!pDll->HasSymbols())
     {
       pDll->Unload();
+#if defined(TARGET_PS5)
+      if (pDll->GetHModule())
+      {
+        CLog::Log(LOGERROR, "PS5 SPRX: retaining {} after failed module release",
+                  pDll->GetFileName());
+        pDll->IncrRef();
+        pDll = nullptr;
+        return;
+      }
+#endif
       delete pDll;
       pDll=NULL;
     }
@@ -232,8 +242,6 @@ LibraryLoader* DllLoaderContainer::LoadDll(const char* sName, bool bLoadSymbols)
 
   LibraryLoader* pLoader;
 #if defined(TARGET_PS5)
-  // A PS5 title has no dynamic loader; load binary add-ons in-process. See
-  // platform/ps5/elf/. bLoadSymbols/global scope do not apply.
   pLoader = new CPS5AddonLoader(sName);
 #elif defined(TARGET_POSIX)
   pLoader = new SoLoader(sName, bLoadSymbols);
@@ -249,6 +257,13 @@ LibraryLoader* DllLoaderContainer::LoadDll(const char* sName, bool bLoadSymbols)
 
   if (!pLoader->Load())
   {
+#if defined(TARGET_PS5)
+    if (pLoader->GetHModule())
+    {
+      CLog::Log(LOGERROR, "PS5 SPRX: retaining {} after failed start cleanup", sName);
+      return nullptr;
+    }
+#endif
     delete pLoader;
     return NULL;
   }

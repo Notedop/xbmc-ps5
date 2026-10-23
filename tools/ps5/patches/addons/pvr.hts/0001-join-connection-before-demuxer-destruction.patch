@@ -1,0 +1,19 @@
+Join HTSP connection workers before destroying their demuxers.
+
+CTvheadend::Stop only requested disconnection. Its destructor could delete
+demuxers while the registration thread was still in Connected/SetProfile.
+Joining the receive thread also joins its registration thread, while all
+callback targets and the connection object are still alive.
+
+Upstream: generic lifecycle fix worth sending to pvr.hts.
+
+--- a/src/Tvheadend.cpp
++++ b/src/Tvheadend.cpp
+@@ -74,6 +74,7 @@
+     dmx->Close();
+ 
+   m_conn->Stop();
++  m_conn->StopThread();
+   StopThread();
+ }
+ 

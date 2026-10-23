@@ -480,6 +480,7 @@ private:
                               F function,
                               std::vector<int>& failedClients) const;
 
+  CCriticalSection m_updateClientsMutex;
   mutable CCriticalSection m_critSection;
   CPVRClientMap m_clientMap;
 };

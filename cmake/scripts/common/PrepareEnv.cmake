@@ -42,7 +42,9 @@ if(NOT CPU)
   set(CPU ${CMAKE_SYSTEM_PROCESSOR})
 endif()
 
-if(CORE_SYSTEM_NAME STREQUAL android)
+if(CORE_PLATFORM_NAME STREQUAL "ps5")
+  set(PLATFORM_TAG ps5)
+elseif(CORE_SYSTEM_NAME STREQUAL android)
   if (CPU MATCHES "v7a")
     set(PLATFORM_TAG ${PLATFORM_TAG}-armv7)
   elseif (CPU MATCHES "arm64")
@@ -87,6 +89,37 @@ elseif(CORE_SYSTEM_NAME STREQUAL windows)
 endif()
 
 # generate the proper KodiConfig.cmake file
+if(PS5_NATIVE_RUNTIME_SDK)
+  find_program(PS5_NATIVE_PYTHON NAMES python3 REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+  execute_process(COMMAND "${PS5_NATIVE_PYTHON}"
+    "${CORE_SOURCE_DIR}/tools/ps5/build-native-shared-addon.py"
+    --sdk "${PS5_NATIVE_RUNTIME_SDK}" --describe
+    RESULT_VARIABLE sdk_result OUTPUT_QUIET ERROR_VARIABLE sdk_error)
+  if(NOT sdk_result EQUAL 0)
+    message(FATAL_ERROR "Invalid prepared PS5 native runtime SDK: ${sdk_error}")
+  endif()
+  get_filename_component(sdk_source "${PS5_NATIVE_RUNTIME_SDK}" REALPATH)
+  get_filename_component(sdk_destination "${APP_LIB_DIR}/ps5-runtime" ABSOLUTE)
+  if(NOT sdk_source STREQUAL sdk_destination)
+    file(COPY "${sdk_source}/" DESTINATION "${sdk_destination}")
+  endif()
+  file(COPY "${CORE_SOURCE_DIR}/cmake/scripts/ps5/PS5NativeRuntimeConfig.cmake"
+            "${CORE_SOURCE_DIR}/cmake/scripts/ps5/NativeSharedAddon.cmake"
+            "${CORE_SOURCE_DIR}/cmake/scripts/ps5/PS5NativeABI.cmake"
+       DESTINATION "${sdk_destination}")
+  configure_file("${CORE_SOURCE_DIR}/tools/ps5/native_abi_check.h"
+                 "${sdk_destination}/include/ps5_native_abi.h" COPYONLY)
+  file(COPY "${CORE_SOURCE_DIR}/tools/ps5/build-native-shared-addon.py"
+            "${CORE_SOURCE_DIR}/tools/ps5/native-clang.py"
+       DESTINATION "${sdk_destination}/tools")
+  if(DEFINED BUILD_ARGS)
+    foreach(sdk_variable PS5_PAYLOAD_SDK PS5_OPENGL_PREFIX)
+      if(DEFINED ${sdk_variable})
+        list(APPEND BUILD_ARGS "-D${sdk_variable}:PATH=${${sdk_variable}}")
+      endif()
+    endforeach()
+  endif()
+endif()
 configure_file(${CORE_SOURCE_DIR}/cmake/KodiConfig.cmake.in ${APP_LIB_DIR}/KodiConfig.cmake @ONLY)
 
 # copy cmake helpers to lib/kodi

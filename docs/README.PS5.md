@@ -6,6 +6,8 @@ go from a bare Linux (or WSL) machine to a running PS5 package.
 
 For binary add-on compilation, title integration, testing/stable promotion and
 publication, follow the [PS5 binary add-on workflow](PS5-BINARY-ADDONS.md).
+The required shared-runtime architecture and its qualification boundary are
+documented in [PS5 native SPRX](PS5-NATIVE-SPRX.md#shared-runtime-title-profile).
 
 ## 0. Prerequisites
 
@@ -170,10 +172,25 @@ longer succeed if actually rebuilt.
 
 ## 2. Configure
 
+First prepare the native shared core, graphics, stdio-compatible dependency
+replacements and aggregate SDK. Preparation uses the installed payload/graphics
+SDKs, configured graphics sources and cached dependency source archives. Point
+`--homebrew-sources` at the pacbrew recipe/source cache when it is outside
+`build/ps5-external/pacbrew-repo`; use `--graphics-imports` if the installed
+graphics prefix does not carry its system import libraries.
+
 ```bash
 cd /home/raoul/kodi-fork/xbmc-ps5-fork
+python3 tools/ps5/prepare-native-runtime.py --jobs 4
 bash tools/ps5/configure.sh
 ```
+
+Preparation builds in fingerprinted isolated output directories; it does not
+overwrite SDK installations or baseline dependency archives. Only complete,
+validated results become `build/ps5-native/sdk` and
+`build/ps5-native/depends`. Failed attempts and existing title stages are retained.
+Firmware-analysis files are development-analysis-only: they are not preparation,
+build or validation inputs and must not be packaged or committed.
 
 Optional overrides:
 
@@ -186,6 +203,8 @@ Optional overrides:
   already present)
 - `PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk`
 - `PS5_OPENGL_PREFIX=/opt/ps5-opengl-gl46`
+- `PS5_NATIVE_RUNTIME_SDK=/abs/path/to/prepared/native-sdk`
+- `PS5_NATIVE_DEPENDS_MAP=/abs/path/to/prepared/archive-map.json`
 - `PS5_DEPENDS_PREFIX=/abs/path/to/tools/depends/target/prefix` (preferred
   dependency pkg-config root when present; default:
   `build/ps5-depends-test/x86_64-unknown-freebsd-debug`, i.e. step 1's
@@ -203,20 +222,27 @@ cmake --build /home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release -j$(nproc)
 creates a zip artifact.
 
 ```bash
-# Build title folder under build/ps5-stage/app/dist/PPSA99420
+# Build a new title stage; the output path is printed by packaging.
 cmake --build /home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release --target ps5-title
 
-# Build zip package under build/ps5-stage/artifacts/PPSA99420.zip
+# Build a new title stage and its artifacts/PPSA99420.zip.
 cmake --build /home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release --target ps5-package
 ```
 
 Both targets call `tools/ps5/package.sh`, which uses:
 
 - `BUILD` (default: `/home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release`)
-- `STAGE` (default: `/home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-stage`)
+- `STAGE` (default: a fresh `title-<UTC timestamp>-<pid>` under `BUILD`)
 - `APP_TEMPLATE` (default:
   `build/ps5-external/ps5-opengl/build/native-app/PPSA99005`, i.e.
   `$WORK/ps5-opengl/...` - see 0.2)
+
+An existing stage is never overwritten. For a known output location, set a fresh
+`STAGE` when invoking `package.sh`, or configure `PS5_PACKAGE_STAGE` for the
+CMake targets. Use the resulting `<stage>/app` with repository `--title-app`.
+The required SDK and dependency map must match the Kodi configuration.
+Packaging never uploads or contacts the console, even when `PS5_HOST` is set;
+deployment is a separate user-operated action.
 
 Packaging compiles `shims/native-app/libc_socket.c` directly into the title,
 ahead of the SDK's archived copy in `libkodishim.a`. Socket-shim-only changes
@@ -234,43 +260,20 @@ alone does not establish that the add-on's HTTP server failed to start.
 
 Both targets discover installed binary add-ons using the repository builder's
 `build/ps5-addon-repository/work/build-record.json` when present. They copy only
-catalogue-bundled outputs, including resources/helpers, but use all candidates
-for title export generation. Neither target compiles add-ons or publishes feeds.
+catalogue-bundled outputs, including resources and signed native-module receipts.
+Add-ons import versioned shared providers, never candidate-derived title exports.
+Neither target compiles add-ons or publishes feeds.
 The stable repository is shipped and enabled; testing is shipped but disabled
 on first discovery. Compatibility exclusions remain authoritative.
 
 Use colon-separated `PS5_ADDON_PREFIXES` to override install roots; an explicitly
-empty value disables discovery. Historical depends/audio/screensaver prefixes
-are used only when no override or repository build record exists. Missing
+empty value disables discovery. Missing
 explicit roots, duplicate IDs and invalid/unsafe installed files fail.
 Selection and exclusions are recorded in
-`build/ps5-stage/installed-addons-report.json` (preflight copy in the Kodi build
-directory). Follow the [binary add-on workflow](PS5-BINARY-ADDONS.md) for build
-order, release scenarios and publication commands. `PS5_ADAPTIVE_TEST=1` is only
-needed for direct DASH test/debug content, not ordinary packaging.
-
-Set `PS5_HOST` to upload the packaged title over FTP using `lftp mirror`.
-Install `lftp` on the build host. Deployment uses three concurrent transfers
-by default and prints mirror activity.
-
-```bash
-PS5_HOST=192.168.1.100 PS5_DEPLOY_JOBS=3 \
-  cmake --build build/ps5-release --target ps5-title
-```
-
-`PS5_DEPLOY_JOBS` accepts `1..8`; use `1` to restore serial transfers if the
-console's FTP service struggles with parallel uploads. `PS5_FTP_PORT` defaults
-to `2121`. Normal lftp size/timestamp comparison is retained: unchanged files
-can be skipped, but regenerated files with newer timestamps may be uploaded
-again even when their contents match. Size-only comparison is deliberately
-not enabled because it can miss same-size executable or asset changes.
-
-Fully close Kodi before deploying and wait for deployment to finish before
-launching it. As with the original mirror deployment, files are updated in
-place and files no longer in the local title are removed remotely. No hash
-manifest or extra verification scans are used. The mirror also removes the
-previous Python uploader's manifest and temporary files if they remain in
-the remote title directory.
+`<stage>/native-addons.json`. Follow the
+[binary add-on workflow](PS5-BINARY-ADDONS.md) for build order, release scenarios
+and publication commands. Legacy `PS5_ADAPTIVE_TEST`, `PS5_ADDON_ELFS` and
+audio-decoder staging overrides are not supported.
 
 ## 5. Runtime debugging
 
@@ -448,9 +451,13 @@ of accessing the freed context; VideoPlayer aborts that playback through its
 existing `PLAYER_ABORT` path. A successful reopen waits for fresh input.
 TLS destructor registration also reports failures instead of claiming success
 after failed key creation, allocation or thread-specific storage.
+The shared core is the TLS storage/destructor owner in `shared_tls.c`.
+The thread trampoline always calls `ps5_tls_thread_exit`;
+there is no separate legacy registry or build-mode-specific cleanup API. The
+`exit` wrapper also drains calling-thread TLS before native global finalization.
 
 Run `bash tools/ps5/test-thread-stack.sh`, `bash tools/ps5/test-tls-dtors.sh`
-and `bash tools/ps5/test-pthread-tls.sh` for host regressions and SDK compile
+and `python3 tools/ps5/test.py test-shared-tls.py` for host regressions and SDK compile
 checks. Decoder lifecycle regressions are in `TestDVDVideoCodecFFmpeg`.
 The stack and TLS shims are copied into the native application during packaging;
 changing only those shims needs re-packaging. Native SMB diagnostics and

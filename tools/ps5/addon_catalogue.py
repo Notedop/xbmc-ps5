@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 
 DEFAULT_CATALOGUE = Path(__file__).with_name("addon-catalogue.json")
 RUNTIME_ADDON = "resource.ps5.addon-runtime"
-RUNTIME_VERSION = "1.0.0"
+RUNTIME_VERSION = "2.0.0"
 IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9._-]*")
 VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+_@~]*")
 SHA256 = re.compile(r"[0-9a-f]{64}")

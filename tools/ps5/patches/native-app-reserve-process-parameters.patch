@@ -51,8 +51,8 @@ another section's file bytes.
  
      for (const Section &input : image.sections)
      {
--        if (!input.allocated())
-+        if (!input.allocated() || input.name == kProcessParameterReserve)
+-        if (!input.allocated() || input.name == ".dynamic")
++        if (!input.allocated() || input.name == ".dynamic" || input.name == kProcessParameterReserve)
              continue;
          const std::uint64_t end = input.address + input.size;
          if (input.executable())

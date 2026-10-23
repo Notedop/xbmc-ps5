@@ -10,7 +10,14 @@ NATIVE="${NATIVE:-$ROOT/build/ps5-depends-test/x86_64-linux-gnu-native}"
 TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-$ROOT/toolchain/ps5-kodi.cmake}"
 PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
 PS5_DEPENDS_PREFIX="${PS5_DEPENDS_PREFIX:-$ROOT/build/ps5-depends-test/x86_64-unknown-freebsd-debug}"
-export PS5_DEPENDS_PREFIX
+PS5_HOMEBREW_PREFIX="${PS5_HOMEBREW_PREFIX:-$PS5_PAYLOAD_SDK/target/user/homebrew}"
+export PS5_DEPENDS_PREFIX PS5_HOMEBREW_PREFIX
+PS5_NATIVE_RUNTIME_SDK="${PS5_NATIVE_RUNTIME_SDK:-$ROOT/build/ps5-native/sdk}"
+PS5_NATIVE_DEPENDS_MAP="${PS5_NATIVE_DEPENDS_MAP:-$ROOT/build/ps5-native/depends/archive-map.json}"
+export PS5_NATIVE_RUNTIME_SDK PS5_NATIVE_DEPENDS_MAP
+
+python3 "$ROOT/tools/ps5/native_contract.py" --sdk "$PS5_NATIVE_RUNTIME_SDK" \
+  --archive-map "$PS5_NATIVE_DEPENDS_MAP" >/dev/null
 
 [ -f "$ROOT/version.txt" ] || {
   echo "Kodi source tree not found at $ROOT"
@@ -45,7 +52,7 @@ mkdir -p "$BUILD"
 # applies), producing bogus concatenated paths. So: patch one-time copies
 # of the SDK .pc files here with their real absolute prefix baked in, and
 # drop PKG_CONFIG_SYSROOT_DIR entirely for the combined query below.
-PS5_HBROOT="$PS5_PAYLOAD_SDK/target/user/homebrew"
+PS5_HBROOT="$PS5_HOMEBREW_PREFIX"
 PATCHED_PC="$BUILD/sdk-pkgconfig-patched"
 mkdir -p "$PATCHED_PC/lib/pkgconfig" "$PATCHED_PC/libdata/pkgconfig"
 for _srcdir_dstdir in \
@@ -168,7 +175,12 @@ cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -U "PC_FONTCONFIG*" -U "pkgcfg_lib_PC_FONTCONFIG_*" -U "pkgcfg_lib_FONTCONFIG_*" \
   -U "brotli*" -U "pkgcfg_lib_brotli*" -U "pkgcfg_include_brotli*" -U "Brotli_FOUND" \
   -U "_brotli*" -U "CURL_*" -U "pkgcfg_lib_CURL_*" \
+  -U "FREETYPE_*" -U "PNG_*" -U "BZIP2_*" -U "FMT_*" -U "pkgcfg_lib_*" \
   -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_FILE" \
+  -DPS5_DEPENDS_PREFIX="$PS5_DEPENDS_PREFIX" \
+  -DPS5_HOMEBREW_PREFIX="$PS5_HOMEBREW_PREFIX" \
+  -DPS5_NATIVE_RUNTIME_SDK="$PS5_NATIVE_RUNTIME_SDK" \
+  -DPS5_NATIVE_DEPENDS_MAP="$PS5_NATIVE_DEPENDS_MAP" \
   -DCMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}" \
   -DCMAKE_C_FLAGS_RELEASE="-O2 -g -DNDEBUG" \
   -DCMAKE_CXX_FLAGS_RELEASE="-O2 -g -DNDEBUG" \

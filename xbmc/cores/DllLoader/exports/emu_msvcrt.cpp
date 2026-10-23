@@ -1512,7 +1512,10 @@ extern "C"
     CFile* pFile = g_emuFileWrapper.GetFileXbmcByStream(stream);
     if (pFile != NULL)
     {
-#if !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || \
+#if defined(HAS_PS5_NATIVE_SHARED_RUNTIME)
+      *pos = {};
+      pos->__offset = pFile->GetPosition();
+#elif !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || \
     defined(TARGET_ANDROID)
       *pos = pFile->GetPosition();
 #elif defined(TARGET_WASM)
@@ -1531,7 +1534,9 @@ extern "C"
     int fd = g_emuFileWrapper.GetDescriptorByStream(stream);
     if (fd >= 0)
     {
-#if !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || \
+#if defined(HAS_PS5_NATIVE_SHARED_RUNTIME)
+      if (dll_lseeki64(fd, pos->__offset, SEEK_SET) >= 0)
+#elif !defined(TARGET_POSIX) || defined(TARGET_DARWIN) || defined(TARGET_FREEBSD) || \
     defined(TARGET_ANDROID)
       if (dll_lseeki64(fd, *pos, SEEK_SET) >= 0)
 #elif defined(TARGET_WASM)

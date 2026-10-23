@@ -6,6 +6,7 @@ if(NOT CMAKE_TOOLCHAIN_FILE)
 endif()
 
 set(CORE_MAIN_SOURCE ${CMAKE_SOURCE_DIR}/xbmc/platform/ps5/main.cpp)
+list(APPEND CORE_MAIN_SOURCE ${CMAKE_SOURCE_DIR}/shims/native-app/libc_extras.c)
 
 # Build stamp: generated in the build tree so configure/build never rewrites
 # tracked source files. main.cpp includes platform/ps5/BuildStamp.h; by placing
@@ -93,15 +94,8 @@ foreach(_dep CROSSGUID EXIV2 FLATBUFFERS FMT FSTRCMP LZO2 NLOHMANNJSON PCRE2 SPD
 endforeach()
 unset(_dep)
 
-# Optional: the ps5-opengl native-app template routes malloc through an
-# app-owned heap (native-app/app_heap.c + linker wraps). Its default budget
-# (128 MiB) is far too small for Kodi; if you adopt it, raise the constant in
-# app_heap.c to at least 1536 MiB first.
-set(PS5_APP_HEAP_SOURCE "" CACHE FILEPATH "Path to ps5-opengl native-app/app_heap.c (leave empty to use libc malloc)")
 if(PS5_APP_HEAP_SOURCE)
-  list(APPEND CORE_MAIN_SOURCE ${PS5_APP_HEAP_SOURCE})
-  add_link_options(-Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free
-                   -Wl,--wrap=posix_memalign -Wl,--wrap=malloc_usable_size)
+  message(FATAL_ERROR "PS5_APP_HEAP_SOURCE is obsolete; the shared runtime owns the heap")
 endif()
 
 # Sony library stubs resolved by the payload runtime linker at load time.
@@ -116,6 +110,29 @@ endif()
 # Iconv::Iconv target Kodi links; it need not be repeated here.
 set(SYSTEM_LDFLAGS -lSceNotification -lSceAudioOut -lScePad -lSceUserService -lSceImeDialog -lSceRegMgr -lSceNetCtl -lSceSysmodule
                    -lSceVideodec2 -lprocstat -lsmb2)
+if(PS5_NATIVE_RUNTIME_SDK)
+  list(APPEND ARCH_DEFINES -DHAS_PS5_NATIVE_SHARED_RUNTIME=1)
+  if(PS5_NATIVE_DEPENDS_MAP)
+    include("${CMAKE_SOURCE_DIR}/cmake/scripts/ps5/NativeStaticDepends.cmake")
+    find_library(_ps5_smb2 smb2 REQUIRED)
+    ps5_native_archive("${_ps5_smb2}" _ps5_smb2)
+    list(REMOVE_ITEM SYSTEM_LDFLAGS -lsmb2)
+    list(APPEND SYSTEM_LDFLAGS "${_ps5_smb2}")
+  endif()
+  list(APPEND SYSTEM_LDFLAGS -lSceNet)
+  add_link_options(-nostartfiles -nodefaultlibs)
+  execute_process(COMMAND "${CMAKE_C_COMPILER}" --print-resource-dir
+                  RESULT_VARIABLE _ps5_resource_result OUTPUT_VARIABLE _ps5_resource
+                  OUTPUT_STRIP_TRAILING_WHITESPACE)
+  set(_ps5_builtins "${_ps5_resource}/lib/linux/libclang_rt.builtins-x86_64.a")
+  if(NOT _ps5_resource_result EQUAL 0 OR NOT EXISTS "${_ps5_builtins}")
+    message(FATAL_ERROR "Cannot locate the PS5 compiler's x86-64 builtins archive")
+  endif()
+  list(APPEND SYSTEM_LDFLAGS ${PS5_NATIVE_PROVIDER_LIBRARIES} "${_ps5_builtins}")
+  unset(_ps5_resource_result)
+  unset(_ps5_resource)
+  unset(_ps5_builtins)
+endif()
 
 # A static libpython needs the libraries its built-in modules use (Kodi's
 # FindPython adds them only for its own depends builds); each one that the
@@ -124,7 +141,12 @@ if(ENABLE_PYTHON)
   foreach(_pylib expat lzma bz2 sqlite3 ssl crypto z m)
     find_library(_pylib_${_pylib} ${_pylib})
     if(_pylib_${_pylib})
-      list(APPEND SYSTEM_LDFLAGS -l${_pylib})
+      if(PS5_NATIVE_RUNTIME_SDK AND PS5_NATIVE_DEPENDS_MAP)
+        ps5_native_archive("${_pylib_${_pylib}}" _ps5_python_library)
+        list(APPEND SYSTEM_LDFLAGS "${_ps5_python_library}")
+      else()
+        list(APPEND SYSTEM_LDFLAGS -l${_pylib})
+      endif()
     endif()
   endforeach()
   unset(_pylib)

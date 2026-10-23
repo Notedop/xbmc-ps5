@@ -1,0 +1,146 @@
+Link the three Nosefart engines statically with separate symbol namespaces.
+
+The native build otherwise installs three ordinary ELF .so helpers which cannot
+be loaded by the PS5 native loader. Keep the upstream tag engine and two playback
+engines isolated: sharing one copy would merge the emulator's global state.
+Upstream: PS5-only; avoids dlopen without changing the engine selection policy.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -20,4 +20,1 @@
+-add_definitions(-DLIBRARY_PREFIX="${CMAKE_SHARED_LIBRARY_PREFIX}"
+-                -DLIBRARY_SUFFIX="${CMAKE_SHARED_LIBRARY_SUFFIX}")
+-
+-set(NOSEFART_ADDITIONAL_BINARY $<TARGET_FILE:nosefart_tag> $<TARGET_FILE:nosefart_0> $<TARGET_FILE:nosefart_1>)
++set(DEPLIBS nosefart_tag nosefart_0 nosefart_1)
+--- a/lib/nosefart/CMakeLists.txt
++++ b/lib/nosefart/CMakeLists.txt
+@@ -22,8 +22,24 @@
+-add_library(nosefart_tag SHARED ${SOURCES})
+-add_library(nosefart_0 SHARED ${SOURCES})
+-add_library(nosefart_1 SHARED ${SOURCES})
+-if(NOT WIN32)
+-  target_link_libraries(nosefart_tag m)
+-  target_link_libraries(nosefart_0 m)
+-  target_link_libraries(nosefart_1 m)
+-endif()
++set(NOSEFART_GLOBALS
++    OPLCreate OPLDestroy OPLRead OPLResetChip OPLSetIRQHandler OPLSetTimerHandler
++    OPLSetUpdateHandler OPLTimerOver OPLWrite YM3812UpdateOne
++    SLOT7_1 SLOT7_2 SLOT8_1 SLOT8_2 _my_free _my_malloc acc_nes6502_banks ams_table
++    apu_build_luts apu_create apu_destroy apu_getcontext apu_getcyclerate
++    apu_getpcmdata apu_process apu_read apu_reset apu_setchan apu_setcontext
++    apu_setext apu_setfilter apu_write dmc_clocks fds_ext
++    log_init log_print log_printf log_shutdown max_access mem_checkblocks
++    mem_checkleaks mem_debug mmc5_ext nes6502_chk_mem_access nes6502_execute
++    nes6502_getbyte nes6502_getcontext nes6502_getcycles nes6502_init nes6502_irq
++    nes6502_mem_access nes6502_nmi nes6502_reset nes6502_setcontext nes6502_setdma
++    nes_shutdown nsf_frame nsf_free nsf_init nsf_load nsf_load_extended
++    nsf_nes6502_mem_access nsf_playtrack nsf_setchan nsf_setfilter
++    table vib_table vrc7_ext vrcvi_ext)
++
++foreach(engine IN ITEMS nosefart_tag nosefart_0 nosefart_1)
++  add_library(${engine} STATIC ${SOURCES})
++  foreach(symbol IN LISTS NOSEFART_GLOBALS)
++    target_compile_definitions(${engine} PRIVATE "${symbol}=${engine}_${symbol}")
++  endforeach()
++  if(NOT WIN32)
++    target_link_libraries(${engine} m)
++  endif()
++endforeach()
+--- a/src/NSFCodec.h
++++ b/src/NSFCodec.h
+@@ -11,1 +11,0 @@
+-#include <kodi/tools/DllHelper.h>
+@@ -22,2 +21,1 @@
+-class ATTR_DLL_LOCAL CNSFCodec : public kodi::addon::CInstanceAudioDecoder,
+-                                 private kodi::tools::CDllHelper
++class ATTR_DLL_LOCAL CNSFCodec : public kodi::addon::CInstanceAudioDecoder
+--- a/src/NSFCodec.cpp
++++ b/src/NSFCodec.cpp
+@@ -13,1 +13,23 @@
++#define DECLARE_ENGINE(engine) \
++  extern "C" \
++  { \
++    decltype(::nsf_init) engine##_nsf_init; \
++    decltype(::nsf_load_extended) engine##_nsf_load_extended; \
++    decltype(::nsf_load) engine##_nsf_load; \
++    decltype(::nsf_free) engine##_nsf_free; \
++    decltype(::nsf_playtrack) engine##_nsf_playtrack; \
++    decltype(::nsf_frame) engine##_nsf_frame; \
++    decltype(::nsf_setchan) engine##_nsf_setchan; \
++    decltype(::nsf_setfilter) engine##_nsf_setfilter; \
++    decltype(::nsf_nes6502_mem_access) engine##_nsf_nes6502_mem_access; \
++    decltype(::log_init) engine##_log_init; \
++    decltype(::log_shutdown) engine##_log_shutdown; \
++    decltype(::log_print) engine##_log_print; \
++    decltype(::log_printf) engine##_log_printf; \
++  }
++DECLARE_ENGINE(nosefart_tag)
++DECLARE_ENGINE(nosefart_0)
++DECLARE_ENGINE(nosefart_1)
++#undef DECLARE_ENGINE
++
+ unsigned int CNSFCodec::m_usedLib = 0;
+@@ -182,42 +206,22 @@
+-    std::string source;
+-    if (forTag)
+-    {
+-      source = kodi::addon::GetAddonPath(LIBRARY_PREFIX "nosefart_tag" LIBRARY_SUFFIX);
+-    }
+-    else
+-    {
++    if (!forTag)
+       m_usedLib = !m_usedLib;
+-      source = kodi::addon::GetAddonPath(LIBRARY_PREFIX + std::string("nosefart_") +
+-                                         std::to_string(m_usedLib) + LIBRARY_SUFFIX);
+-    }
+-
+-    if (!LoadDll(source))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(nsf_init))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(nsf_load_extended))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(nsf_load))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(nsf_free))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(nsf_playtrack))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(nsf_frame))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(nsf_setchan))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(nsf_setfilter))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(nsf_nes6502_mem_access))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(log_init))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(log_shutdown))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(log_print))
+-      return nullptr;
+-    if (!REGISTER_DLL_SYMBOL(log_printf))
+-      return nullptr;
++
++#define BIND_ENGINE(symbol) \
++    symbol = forTag ? &nosefart_tag_##symbol : \
++             m_usedLib ? &nosefart_1_##symbol : &nosefart_0_##symbol
++    BIND_ENGINE(nsf_init);
++    BIND_ENGINE(nsf_load_extended);
++    BIND_ENGINE(nsf_load);
++    BIND_ENGINE(nsf_free);
++    BIND_ENGINE(nsf_playtrack);
++    BIND_ENGINE(nsf_frame);
++    BIND_ENGINE(nsf_setchan);
++    BIND_ENGINE(nsf_setfilter);
++    BIND_ENGINE(nsf_nes6502_mem_access);
++    BIND_ENGINE(log_init);
++    BIND_ENGINE(log_shutdown);
++    BIND_ENGINE(log_print);
++    BIND_ENGINE(log_printf);
++#undef BIND_ENGINE
+ 
+     m_dllInited = true;

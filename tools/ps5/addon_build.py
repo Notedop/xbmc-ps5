@@ -21,16 +21,16 @@ import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
-from addon_elf import elf_problems
+from native_addon import installed as native_installed
+from native_contract import validate_sdk
 
 
 RUNTIME = "piers-ps5-1"
 LOCK_VERSION = 1
-RECORD_VERSION = 2
+RECORD_VERSION = 3
 HASH_CACHE_VERSION = 1
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
-_PLACEHOLDER = re.compile(r"@([A-Za-z0-9_]+)@")
 
 
 class AddonBuildError(ValueError):
@@ -444,81 +444,6 @@ def _cmake_quote(value: str) -> str:
     return '"' + _cmake_escape(value) + '"'
 
 
-def _render_toolchain(template: Path, sdk: Path, find_roots: list[Path], destination: Path) -> str:
-    original = template.read_text(encoding="utf-8")
-    ccache = shutil.which("ccache") or ""
-    variables = {
-        "CMAKE_FIND_ROOT_PATH": ";".join(str(path.resolve()) for path in find_roots),
-        "platform_os": "ps5",
-        "host_cpu": "x86_64",
-        "use_cpu": "x86_64",
-        "target_platform": "ps5",
-        "app_rendersystem": "gl",
-        "target_minver": "",
-        "use_sdk_path": "",
-        "CC": str(sdk / "bin" / "prospero-clang"),
-        "CXX": str(sdk / "bin" / "prospero-clang++"),
-        "AR": str(sdk / "bin" / "prospero-ar"),
-        "LD": str(sdk / "bin" / "prospero-lld"),
-        "NM": str(sdk / "bin" / "prospero-nm"),
-        "OBJDUMP": "",
-        "RANLIB": str(sdk / "bin" / "prospero-ranlib"),
-        "use_ccache": "yes" if ccache else "",
-        "CCACHE": ccache,
-        "use_toolchain": str(sdk),
-        "use_host": "x86_64-unknown-freebsd",
-        "use_ndk_path": "",
-        "use_ndk_api": "",
-        "build_tools_path": "",
-        "platform_cppflags": "-fPIC -DPIC -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64",
-        "platform_cflags": "-Og -g -D_DEBUG",
-        "platform_cxxflags": "-Og -g -D_DEBUG",
-        "platform_includes": "",
-        "platform_cflags_release": "-DNDEBUG=1 -O2",
-        "platform_cxxflags_release": "-DNDEBUG=1 -O2",
-        "platform_cppflags_release": "-fPIC -DPIC -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64",
-        "platform_includes_release": "",
-        "platform_cflags_debug": "-Og -g -D_DEBUG",
-        "platform_cxxflags_debug": "-Og -g -D_DEBUG",
-        "platform_cppflags_debug": "-fPIC -DPIC -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64",
-        "platform_includes_debug": "",
-        "platform_ldflags": "",
-    }
-
-    def replace_quoted(match: re.Match[str]) -> str:
-        key = match.group(1)
-        if key not in variables:
-            raise AddonBuildError(f"unknown placeholder @{key}@ in {template}")
-        return _cmake_quote(variables[key])
-
-    rendered = re.sub(r'"@([A-Za-z0-9_]+)@"', replace_quoted, original)
-
-    def replace_plain(match: re.Match[str]) -> str:
-        key = match.group(1)
-        if key not in variables:
-            raise AddonBuildError(f"unknown placeholder @{key}@ in {template}")
-        preceding = match.string[:match.start()]
-        quoted = False
-        escaped = False
-        for character in preceding:
-            if character == '"' and not escaped:
-                quoted = not quoted
-            escaped = character == "\\" and not escaped
-            if character != "\\":
-                escaped = False
-        value = _cmake_escape(variables[key])
-        return value if quoted else f'"{value}"'
-
-    rendered = _PLACEHOLDER.sub(replace_plain, rendered)
-    rendered = rendered.replace("/opt/ps5-payload-sdk", str(sdk.resolve()).replace("\\", "/"))
-    rendered = rendered.replace('"yes"', _cmake_quote("yes" if ccache else ""))
-    rendered = rendered.replace("/usr/bin/ccache", ccache or "")
-    if _PLACEHOLDER.search(rendered):
-        raise AddonBuildError(f"unresolved placeholder in rendered toolchain from {template}")
-    _write_if_changed(destination, rendered.encode("utf-8"))
-    return rendered
-
-
 def _sdk_inputs(sdk: Path) -> list[Path]:
     candidates = [
         sdk / "bin" / name
@@ -613,6 +538,28 @@ def _prepare_sdk_pkgconfig(sdk: Path, destination: Path) -> tuple[list[Path], li
     return lib_dirs, path_dirs
 
 
+def _autoconf_site(sdk: Path, runtime_sdk: Path) -> str:
+    lines = ["cross_compiling=yes", "host=x86_64-unknown-freebsd",
+             "host_alias=x86_64-unknown-freebsd"]
+    for variable, tool in (
+        ("CC", "clang"), ("CXX", "clang++"), ("CPP", "clang"),
+        ("AR", "ar"), ("LD", "lld"), ("NM", "nm"), ("RANLIB", "ranlib"),
+        ("STRIP", "strip"),
+    ):
+        command = [str(sdk / "bin" / f"prospero-{tool}")]
+        if variable in ("CC", "CXX", "CPP"):
+            command = [sys.executable, str(runtime_sdk / "tools/native-clang.py"), *command,
+                       "-fPIC", "-femulated-tls", "-fno-stack-protector",
+                       "-include", str(runtime_sdk / "include/ps5_native_abi.h")]
+            if variable == "CXX":
+                command += ["-nostdinc++", "-I" + str(sdk / "target/include/c++/v1")]
+            command += ["-I" + str(runtime_sdk / "include")]
+            if variable == "CPP":
+                command.append("-E")
+        lines.append(f"{variable}={shlex.quote(shlex.join(command))}")
+    return "\n".join(lines) + "\n"
+
+
 def _validate_environment(root: Path, sdk: Path, depends: Path) -> None:
     required_sdk_tools = (
         "prospero-clang",
@@ -640,8 +587,8 @@ def _validate_environment(root: Path, sdk: Path, depends: Path) -> None:
             f"configured PS5 depends prefix is missing or empty: {depends}; "
             "configure/build tools/depends first"
         )
-    if not (root / "tools" / "depends" / "target" / "Toolchain_binaddons.cmake.in").is_file():
-        raise AddonBuildError("missing tools/depends/target/Toolchain_binaddons.cmake.in")
+    if not (root / "toolchain" / "ps5-native-addon.cmake").is_file():
+        raise AddonBuildError("missing toolchain/ps5-native-addon.cmake")
     if not (root / "cmake" / "addons" / "CMakeLists.txt").is_file():
         raise AddonBuildError("missing cmake/addons/CMakeLists.txt")
     if not shutil.which("cmake"):
@@ -754,13 +701,18 @@ def _stage_sources(
 
 
 def _cmake_inputs(
-    root: Path, addon_ids: list[str], sdk: Path, depends: Path
+    root: Path, addon_ids: list[str], sdk: Path, depends: Path,
+    runtime_sdk: Path | None = None, archive_map: Path | None = None,
 ) -> list[Path]:
     ccache = shutil.which("ccache")
     pkg_config = _pkg_config_tool(root, depends)
     inputs = [
         root / "tools" / "ps5" / "addon_build.py",
-        root / "tools" / "ps5" / "addon_elf.py",
+        root / "tools" / "ps5" / "native_addon.py",
+        root / "tools" / "ps5" / "native_contract.py",
+        root / "toolchain" / "ps5-native-addon.cmake",
+        root / "cmake" / "scripts" / "ps5",
+        archive_map,
         root / "cmake" / "addons" / "CMakeLists.txt",
         root / "cmake" / "KodiConfig.cmake.in",
         root / "cmake" / "addons" / "depends",
@@ -768,7 +720,6 @@ def _cmake_inputs(
         root / "cmake" / "modules",
         root / "cmake" / "platform" / "freebsd",
         root / "cmake" / "platform" / "ps5",
-        root / "tools" / "depends" / "target" / "Toolchain_binaddons.cmake.in",
         root / "tools" / "depends" / "target" / "config-binaddons.site",
         root / "tools" / "depends" / "xbmc-addons.include",
         root / "tools" / "depends" / "Makefile.include",
@@ -777,7 +728,7 @@ def _cmake_inputs(
         root / "tools" / "ps5" / "apply-adaptive-patch.cmake",
         root / "tools" / "ps5" / "apply-patch-series.cmake",
         root / "tools" / "ps5" / "apply-source-patch.cmake",
-        root / "tools" / "ps5" / "inputstream-adaptive-ps5.patch",
+        root / "tools" / "ps5" / "patches" / "inputstream-adaptive-ps5.patch",
         depends,
         *_sdk_inputs(sdk),
         Path(ccache) if ccache else None,
@@ -785,6 +736,11 @@ def _cmake_inputs(
         shutil.which("cmake") and Path(shutil.which("cmake") or ""),
         shutil.which("ninja") and Path(shutil.which("ninja") or ""),
     ]
+    if runtime_sdk is not None:
+        receipt = runtime_sdk / "receipt.json"
+        inputs.append(receipt)
+        inputs.extend(runtime_sdk / relative
+                      for relative in json.loads(receipt.read_text())["files"])
     for addon_id in addon_ids:
         addon_definition = root / "cmake" / "addons" / "addons" / addon_id
         if addon_definition.exists():
@@ -792,6 +748,10 @@ def _cmake_inputs(
         patch_dir = root / "tools" / "ps5" / "patches" / "addons" / addon_id
         if patch_dir.exists():
             inputs.append(patch_dir)
+    if archive_map is not None:
+        for replacement in json.loads(archive_map.read_text()).values():
+            path = Path(replacement)
+            inputs.extend((path, path.parent / "receipt.json"))
     return [path for path in inputs if path and (path.exists() or path.is_symlink())]
 
 
@@ -813,23 +773,10 @@ def _expected_installs(prefix: Path, addon_ids: list[str]) -> list[Path]:
 
 
 def _validate_install(directory: Path, prefix: Path) -> None:
-    metadata = directory / "addon.xml"
-    if not metadata.is_file():
-        raise AddonBuildError(f"installed add-on metadata is missing: {directory / 'addon.xml'}")
-    library = ET.parse(metadata).getroot().find("./extension[@library_freebsd]")
-    name = library.get("library_freebsd", "") if library is not None else ""
-    if not name or Path(name).name != name or "\\" in name:
-        raise AddonBuildError(f"invalid/missing library_freebsd in {metadata}")
-    binary = prefix / "lib/kodi/addons" / directory.name / name
-    if not binary.is_file():
-        raise AddonBuildError(f"installed add-on binary is missing: {binary}")
-    _install_artifacts(prefix, [directory])
-    companions = sorted(path for path in binary.parent.glob("lib*.so")
-                        if not path.is_symlink() and path != binary)
-    for elf in [binary, *companions]:
-        problems = elf_problems(elf)
-        if problems:
-            raise AddonBuildError(f"{elf} is not loadable on PS5: {'; '.join(problems)}")
+    try:
+        native_installed(directory, prefix)
+    except ValueError as error:
+        raise AddonBuildError(str(error)) from error
 
 
 def _install_artifacts(prefix: Path, directories: list[Path]) -> list[Path]:
@@ -930,6 +877,8 @@ def _target_fingerprint(
     depends: Path,
     workspace: Path,
     source_root: Path,
+    runtime_sdk: Path | None = None,
+    archive_map: Path | None = None,
 ) -> str:
     workspace_excludes = [
         workspace / "build",
@@ -941,7 +890,8 @@ def _target_fingerprint(
         workspace / "input-hash-cache.json",
     ]
     cmake_digest = hasher.tree_digest(
-        _cmake_inputs(root, addon_ids, sdk, depends),
+        _cmake_inputs(root, sorted(set([target_name, *addon_ids])),
+                      sdk, depends, runtime_sdk, archive_map),
         exclude=workspace_excludes,
     )
     values = {
@@ -989,6 +939,8 @@ def _build_target(
     fingerprint: str,
     hasher: _InputHasher,
     record: dict[str, Any],
+    runtime_sdk: Path,
+    archive_map: Path,
 ) -> list[Path]:
     entries: dict[str, Any] = record.setdefault("targets", {})
     entries.pop(target_name, None)
@@ -1018,31 +970,25 @@ def _build_target(
     roots = [local_depends, depends, sdk / "target" / "user" / "homebrew"]
     if (sdk / "sysroot" / "usr").is_dir():
         roots.append(sdk / "sysroot" / "usr")
-    _render_toolchain(
-        root / "tools" / "depends" / "target" / "Toolchain_binaddons.cmake.in",
-        sdk,
-        roots,
-        toolchain,
-    )
+    settings = {
+        "PS5_PAYLOAD_SDK": sdk,
+        "PS5_NATIVE_RUNTIME_SDK": runtime_sdk,
+        "PS5_NATIVE_DEPENDS_MAP": archive_map,
+        "PS5_DEPENDS_PREFIX": depends,
+    }
+    rendered = "".join(f"set({name} {_cmake_quote(str(path))} CACHE PATH \"\" FORCE)\n"
+                       for name, path in settings.items())
+    rendered += ("include(" + _cmake_quote(str(root / "toolchain/ps5-native-addon.cmake")) +
+                 ")\nlist(PREPEND CMAKE_FIND_ROOT_PATH " +
+                 " ".join(_cmake_quote(str(path)) for path in roots) + ")\n")
+    _write_if_changed(toolchain, rendered.encode("utf-8"))
     env = os.environ.copy()
     env["CMAKE_BUILD_PARALLEL_LEVEL"] = str(jobs)
     env["PS5_DEPENDS_PREFIX"] = str(depends)
+    env["PS5_NATIVE_RUNTIME_SDK"] = str(runtime_sdk)
+    env["PS5_NATIVE_DEPENDS_MAP"] = str(archive_map)
     config_site = build_dir / "toolchain" / "config.site"
-    site_lines = [
-        "cross_compiling=yes",
-        "host=x86_64-unknown-freebsd",
-        "host_alias=x86_64-unknown-freebsd",
-    ]
-    for variable, tool in (
-        ("CC", "clang"), ("CXX", "clang++"), ("CPP", "clang"),
-        ("AR", "ar"), ("LD", "lld"), ("NM", "nm"), ("RANLIB", "ranlib"),
-        ("STRIP", "strip"),
-    ):
-        value = shlex.quote(str(sdk / "bin" / f"prospero-{tool}"))
-        if variable == "CPP":
-            value += " -E"
-        site_lines.append(f"{variable}={shlex.quote(value)}")
-    _write_if_changed(config_site, ("\n".join(site_lines) + "\n").encode("utf-8"))
+    _write_if_changed(config_site, _autoconf_site(sdk, runtime_sdk).encode("utf-8"))
     env["CONFIG_SITE"] = str(config_site)
     command = [
         shutil.which("cmake") or "cmake",
@@ -1110,6 +1056,8 @@ def _build_target(
             stream=True,
         )
         installed = _expected_installs(install_prefix, addon_ids)
+        for directory in installed:
+            native_installed(directory, install_prefix, runtime_sdk)
         staged_source_digest = hasher.tree_digest([source_prefix])
     except BaseException:
         entries.pop(target_name, None)
@@ -1149,12 +1097,19 @@ def build(
     sdk: Path,
     depends: Path,
     refresh: bool = False,
+    runtime_sdk: Path | None = None,
+    archive_map: Path | None = None,
 ) -> list[Path]:
     """Build selected add-ons and return one absolute install prefix per target."""
     root = Path(root).resolve()
     workspace = Path(workspace).resolve()
     sdk = Path(sdk).resolve()
     depends = Path(depends).resolve()
+    runtime_sdk = Path(runtime_sdk or os.environ.get(
+        "PS5_NATIVE_RUNTIME_SDK", root / "build/ps5-native/sdk")).resolve()
+    archive_map = Path(archive_map or os.environ.get(
+        "PS5_NATIVE_DEPENDS_MAP", root / "build/ps5-native/depends/archive-map.json")).resolve()
+    validate_sdk(runtime_sdk, archive_map)
     if jobs < 1:
         raise AddonBuildError("jobs must be at least 1")
     targets, addons = _validate_catalogue(catalogue)
@@ -1168,6 +1123,9 @@ def build(
     )
     record_path = workspace / "build-record.json"
     record = _read_json(record_path, {"schema": RECORD_VERSION, "prefixes": [], "targets": {}})
+    if record.get("schema") == 2:
+        print("Discarding legacy SO build cache records; retaining locked source downloads.", flush=True)
+        record = {"schema": RECORD_VERSION, "prefixes": [], "targets": {}}
     if (
         record.get("schema") != RECORD_VERSION
         or not isinstance(record.get("prefixes"), list)
@@ -1202,7 +1160,8 @@ def build(
         if not _source_cache_valid(source_root, source):
             raise AddonBuildError(f"invalid cached source for {target_name}: {source_root}")
         fingerprint = _target_fingerprint(
-            hasher, root, target_name, addon_ids, source, sdk, depends, workspace, source_root
+            hasher, root, target_name, addon_ids, source, sdk, depends, workspace, source_root,
+            runtime_sdk, archive_map,
         )
         build_source_prefix = workspace / "build" / target_name / fingerprint / "source-prefix"
         staged_source_digest = (
@@ -1240,6 +1199,8 @@ def build(
                 fingerprint,
                 hasher,
                 record,
+                runtime_sdk,
+                archive_map,
         )
         print(f"{progress}: complete", flush=True)
     hasher.save()
@@ -1255,12 +1216,19 @@ def validate_build(
     workspace: Path,
     sdk: Path,
     depends: Path,
+    runtime_sdk: Path | None = None,
+    archive_map: Path | None = None,
 ) -> dict[str, Any]:
     """Validate every catalogue target from the source lock without network access."""
     root = Path(root).resolve()
     workspace = Path(workspace).resolve()
     sdk = Path(sdk).resolve()
     depends = Path(depends).resolve()
+    runtime_sdk = Path(runtime_sdk or os.environ.get(
+        "PS5_NATIVE_RUNTIME_SDK", root / "build/ps5-native/sdk")).resolve()
+    archive_map = Path(archive_map or os.environ.get(
+        "PS5_NATIVE_DEPENDS_MAP", root / "build/ps5-native/depends/archive-map.json")).resolve()
+    validate_sdk(runtime_sdk, archive_map)
     targets, addons = _validate_catalogue(catalogue)
     _validate_environment(root, sdk, depends)
     record_path = workspace / "build-record.json"
@@ -1297,6 +1265,8 @@ def validate_build(
             depends,
             workspace,
             source_root,
+            runtime_sdk,
+            archive_map,
         )
         build_source_prefix = (
             workspace / "build" / target_name / fingerprint / "source-prefix"
@@ -1320,6 +1290,8 @@ def validate_build(
             raise AddonBuildError(
                 f"build record for {target_name} is missing, stale, or has missing/modified outputs"
             )
+        for directory in installed:
+            native_installed(directory, Path(record["targets"][target_name]["prefix"]), runtime_sdk)
         if not (build_source_prefix / target_name / "CMakeLists.txt").is_file():
             raise AddonBuildError(f"staged source for {target_name} is missing")
         prefix = record["targets"][target_name]["prefix"]

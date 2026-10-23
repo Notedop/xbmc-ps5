@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<addon id="resource.ps5.addon-runtime" name="Kodi PS5 Add-on Runtime" version="1.0.0" provider-name="Kodi PS5">
+<addon id="resource.ps5.addon-runtime" name="Kodi PS5 Add-on Runtime" version="2.0.0" provider-name="Kodi PS5">
   <requires>
     <import addon="xbmc.addon" version="12.0.0"/>
   </requires>
   <extension point="xbmc.addon.metadata">
     <summary lang="en">PS5 binary add-on runtime compatibility marker</summary>
-    <description lang="en">Identifies the piers-ps5-1 title runtime. Binary add-ons require this marker and the title must be rebuilt with their full candidate ELF inventory before publication.</description>
+    <description lang="en">Requires the upgraded native PS5 title with shared core, graphics, DNS, opaque stdio and native compiler ABI. Upgrade Kodi before installing native SPRX add-ons. This marker is bundled with Kodi and must not be installed separately to bypass a title upgrade.</description>
     <platform>ps5</platform>
     <license>GPL-2.0-or-later</license>
   </extension>

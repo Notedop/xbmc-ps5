@@ -18,4 +18,9 @@ set(HEADERS ConvUtils.h
             PosixResourceCounter.h
             XHandle.h)
 
+if(CORE_SYSTEM_NAME STREQUAL "ps5")
+  # PS5 uses native sensors and storage APIs, not desktop shell commands.
+  list(REMOVE_ITEM SOURCES CPUInfoPosix.cpp GPUInfoPosix.cpp PosixMountProvider.cpp)
+endif()
+
 core_add_library(platform_posix)

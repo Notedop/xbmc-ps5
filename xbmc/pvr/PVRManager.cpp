@@ -793,6 +793,7 @@ void CPVRManager::UnloadComponents()
   m_channelGroups->Unload();
   m_providers->Unload();
   m_epgContainer->Unload();
+  m_knownClients.clear();
 }
 
 bool CPVRManager::IsKnownClient(int clientID) const

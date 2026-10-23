@@ -1,0 +1,27 @@
+Build Microcosm with its existing manifest and public repository identity.
+
+The upstream resource directory and CMake target use screensaver.rsxs.microcosm,
+but addon.xml declares screensaver.microcosm.biof. Kodi requires the installed
+directory to match that declared ID. Keep the published identity so upgrades
+continue to reach existing installations; stage its unchanged resources under
+the matching source directory for the normal build_addon install/CPack paths.
+
+Upstream: Generic identity/layout fix; preserves the existing published ID.
+
+--- a/src/microcosm/CMakeLists.txt
++++ b/src/microcosm/CMakeLists.txt
+@@ -1,5 +1,5 @@
+ cmake_minimum_required(VERSION 3.18...4.0)
+-project(screensaver.rsxs.microcosm)
++project(screensaver.microcosm.biof)
+ 
+ message(STATUS "--------------------------------------------------------------------------------")
+ message(STATUS "Create \"${CMAKE_PROJECT_NAME}\"")
+@@ -47,4 +47,6 @@
+                       ${CMAKE_CURRENT_LIST_DIR}/triangleOfSpheres.h
+                       ${CMAKE_CURRENT_LIST_DIR}/ufo.h)
+ 
+-build_addon(screensaver.rsxs.microcosm MICROCOSM DEPLIBS)
++file(COPY "${PROJECT_SOURCE_DIR}/screensaver.rsxs.microcosm/"
++     DESTINATION "${PROJECT_SOURCE_DIR}/screensaver.microcosm.biof")
++build_addon(screensaver.microcosm.biof MICROCOSM DEPLIBS)

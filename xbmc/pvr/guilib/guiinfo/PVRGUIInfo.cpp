@@ -300,6 +300,10 @@ void CPVRGUIInfo::UpdateMisc()
   const CPVRManager& mgr = CServiceBroker::GetPVRManager();
   bool bStarted = mgr.IsStarted();
   const std::shared_ptr<const CPVRPlaybackState> state = mgr.PlaybackState();
+  const std::shared_ptr<const CPVRChannelGroup> allTV =
+      bStarted ? mgr.ChannelGroups()->GetGroupAllTV() : nullptr;
+  const std::shared_ptr<const CPVRChannelGroup> allRadio =
+      bStarted ? mgr.ChannelGroups()->GetGroupAllRadio() : nullptr;
 
   /* safe to fetch these unlocked, since they're updated from the same thread as this one */
   const std::string strPlayingClientName = bStarted ? state->GetPlayingClientName() : "";
@@ -310,8 +314,8 @@ void CPVRGUIInfo::UpdateMisc()
   const bool bIsPlayingRecording = bStarted && state->IsPlayingRecording();
   const bool bIsPlayingEpgTag = bStarted && state->IsPlayingEpgTag();
   const bool bIsPlayingEncryptedStream = bStarted && state->IsPlayingEncryptedChannel();
-  const bool bHasTVChannels = bStarted && mgr.ChannelGroups()->GetGroupAllTV()->HasChannels();
-  const bool bHasRadioChannels = bStarted && mgr.ChannelGroups()->GetGroupAllRadio()->HasChannels();
+  const bool bHasTVChannels = allTV && allTV->HasChannels();
+  const bool bHasRadioChannels = allRadio && allRadio->HasChannels();
   const bool bCanRecordPlayingChannel = bStarted && state->CanRecordOnPlayingChannel();
   const bool bIsRecordingPlayingChannel = bStarted && state->IsRecordingOnPlayingChannel();
   const bool bIsPlayingActiveRecording = bStarted && state->IsPlayingActiveRecording();

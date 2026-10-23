@@ -7,7 +7,7 @@
  *  pthread_create() linked into the title is routed here by --wrap.
  *  Explicit caller attributes, including supplied stack memory, are untouched.
  *  Every start routine is wrapped so thread_local destructors run before the
- *  thread's TLS storage is released (see weak_shims.c).
+ * thread's TLS storage is released (see shared_tls.c).
  *  SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include <pthread.h>
@@ -17,6 +17,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "shared_tls.h"
+
 /* 4 MiB has worked for software decoding; 1 MiB previously overflowed.
  * This is an application default, not a firmware requirement. */
 #define PS5_DEFAULT_THREAD_STACK (4u * 1024u * 1024u)
@@ -25,10 +27,8 @@ int __real_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
                           void* (*start)(void*), void* arg);
 int sceKernelDebugOutText(int channel, const char* text);
 int sceKernelAvailableFlexibleMemorySize(size_t* size);
-void ps5_tls_dtors_thread_exit(void); /* weak_shims.c */
-
 /* Runs thread_local destructors before pthread's key destructors free the
- * emulated TLS storage they operate on (see weak_shims.c). */
+ * emulated TLS storage they operate on (see shared_tls.c). */
 struct ps5_thread_start
 {
   void* (*start)(void*);
@@ -40,7 +40,7 @@ static void* ps5_thread_trampoline(void* raw)
   struct ps5_thread_start entry = *(struct ps5_thread_start*)raw;
   free(raw);
   void* result = entry.start(entry.arg);
-  ps5_tls_dtors_thread_exit();
+  ps5_tls_thread_exit();
   return result;
 }
 

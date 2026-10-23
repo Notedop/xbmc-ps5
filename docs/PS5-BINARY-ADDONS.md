@@ -1,319 +1,241 @@
-# PS5 binary add-ons: build and publish
+# PS5 native binary add-ons: build and publish
 
-Run all commands from the Kodi source root in Linux/WSL, on a native Linux
-filesystem. The PS5 SDK, cross-compiled depends prefix and configured Kodi
-build must already exist; follow [the PS5 build guide](README.PS5.md) first.
-This workflow handles compiled binary add-ons, not ordinary Python plugins.
+**Upgrade Kodi before installing these native packages.** The repository IDs and
+`piers-ps5-1` feed URLs are retained, but native packages require the title's
+`resource.ps5.addon-runtime` version **2.0.0**. Do not copy the marker into an
+older title to bypass this requirement. Feed metadata cannot make a legacy
+installed client safe. There is no software-SO-loader fallback or parallel feed.
 
-## The four separate steps
+The integrated workflow passed local qualification and the in-place public
+repository migration on 2026-10-27: all 34 supported add-ons across 27 source
+targets built and packaged against the verified standard title. All binary
+packages remain in testing. Compilation, signing and publication are not console
+acceptance of the rebuilt bytes.
+
+Run commands from the Kodi source root in Linux/WSL on a native Linux filesystem.
+Prepare dependencies and the native runtime following [README.PS5.md](README.PS5.md).
+The [native architecture reference](PS5-NATIVE-SPRX.md) describes provider
+ownership, ABI limits and the distinction between local and console evidence.
+
+## Normal workflow
 
 | Step | Command | Result |
 |---|---|---|
-| Compile add-ons | `python3 tools/ps5/addon-repository.py build` | Installed binaries/resources and per-target build records |
-| Build/package Kodi | `cmake --build build/ps5-release --target ps5-title` | Deployable title, candidate exports and runtime receipt |
-| Package repository | `python3 tools/ps5/addon-repository.py package` | Add-on ZIPs, testing/stable feeds and publication inventory |
-| Publish | `python3 tools/ps5/addon-repository.py publish --checkout PATH` | Copies generated files to a separate Git checkout |
+| Prepare native inputs | `python3 tools/ps5/prepare-native-runtime.py --jobs 4` | Fingerprinted shared SDK and dependency map |
+| Configure/build Kodi | `bash tools/ps5/configure.sh`, then `cmake --build build/ps5-release -j4` | Normal native Kodi build |
+| Compile catalogue | `python3 tools/ps5/addon-repository.py build --jobs 4` | Independent signed SPRX installs and receipts |
+| Package title | `cmake --build build/ps5-release --target ps5-title` | Fresh title stage with bundled add-ons and system repositories |
+| Package feeds | `python3 tools/ps5/addon-repository.py package --title-app <stage>/app` | Native ZIPs, feeds, hashes and publication inventory |
+| Review publication | `python3 tools/ps5/addon-repository.py publish --checkout PATH --dry-run` | Planned additions and scoped obsolete-file removals |
 
-These steps are not interchangeable. `build` does not generate repository ZIPs.
-`ps5-title` does not compile add-ons. `publish` does not build or package anything.
-The title must support the candidate binaries before repository packaging can
-succeed. A successful build or host check is not console acceptance.
+`list` shows the catalogue without compiling. `build` uses the ordinary
+`cmake/addons` superbuild with `toolchain/ps5-native-addon.cmake`; it does not
+relink Kodi. `ps5-title` neither compiles add-ons nor publishes anything.
+`package` validates the complete catalogue and the matching standard native
+title, including signed-module extraction and provider requirements. A partial
+catalogue cannot qualify for publication.
 
-## First build or full refresh after shared build changes
+Packaging never deploys, including when `PS5_HOST` is inherited. The user
+performs any console installation separately.
+
+## PVR lifecycle stability
+
+PVR client updates serialize the complete state snapshot and manager
+stop/client-change/restart sequence, so rapid add-on events cannot execute
+stale lifecycle plans concurrently. GUI channel checks retain and check group
+snapshots during shutdown. The `pvr.hts` source patch joins the HTSP receive
+thread (and its registration worker) before demuxers are destroyed. Deploy both
+the rebuilt application module and rebuilt `pvr.hts` module for these fixes.
+Unloading PVR components also clears the known-client cache, so restarting
+after an aborted initialization reloads channel groups instead of treating
+discarded data as already loaded.
+Run `python3 tools/ps5/test-pvr-lifecycle.py --addon-source <patched-pvr.hts-source>`
+to exercise transaction serialization, callback teardown ordering, and aborted
+startup followed by re-enabling the same client.
+
+## Inputs, isolation and caching
+
+The default prepared inputs are `build/ps5-native/sdk` and
+`build/ps5-native/depends/archive-map.json`. Global repository options precede
+the subcommand:
 
 ```sh
-# Show the current selection without downloading or compiling.
-python3 tools/ps5/addon-repository.py list
-
-# Compile/install the complete catalogue.
-python3 tools/ps5/addon-repository.py build --jobs "$(nproc)"
-
-# Build Kodi, then package the title using the installed candidate inventory.
-cmake --build build/ps5-release -j"$(nproc)"
-cmake --build build/ps5-release --target ps5-title
-
-# Validate candidates against that title and generate both repository feeds.
-python3 tools/ps5/addon-repository.py package
+python3 tools/ps5/addon-repository.py \
+  --runtime-sdk /path/to/sdk --archive-map /path/to/archive-map.json \
+  --depends /path/to/depends --work /path/to/work --output /path/to/output \
+  build --jobs 4
 ```
 
-Lower `--jobs` if the machine runs out of memory. Some targets build substantial
-dependencies as well as their small Kodi wrapper.
+Use the same inputs for building, validation and feed generation. Payload SDK
+and dependency overrides also accept `PS5_PAYLOAD_SDK` and `PS5_DEPENDS_PREFIX`;
+native inputs accept `PS5_NATIVE_RUNTIME_SDK` and `PS5_NATIVE_DEPENDS_MAP`.
+Firmware-analysis files are not SDK/build/validation inputs and must not be
+shipped or committed. Ordinary SDK import libraries are linker inputs, not
+runtime binaries.
 
-Title packaging normally reads install prefixes from
-`build/ps5-addon-repository/work/build-record.json`. All catalogue candidates
-contribute imports to title export generation, but only entries with
-`bundled: true` are copied into the title. Do not use a partial candidate
-inventory when preparing a title for publication.
+Source refs are pinned in `work/source-lock.json`; unchanged targets reuse
+validated fingerprint-specific installs. SDK/provider/ABI/builder changes
+invalidate affected targets, including their private dependencies. A channel,
+bundling or package-revision change alone does not recompile sources. Legacy SO
+build records cannot satisfy native cache validation.
 
-`ps5-title` uploads when `PS5_HOST` is set in the environment. Leave it unset
-when you only want local packaging. Rebuilding the title does not deploy a
-repository feed.
+```sh
+# Select one source target; repeat --only when needed.
+python3 tools/ps5/addon-repository.py build --only inputstream.adaptive --jobs 4
 
-## Publishing to GitHub
+# Explicitly update that source lock rather than refreshing all upstream refs.
+python3 tools/ps5/addon-repository.py build \
+  --only inputstream.adaptive --refresh-sources --jobs 4
+```
 
-Use a separate checkout of `Notedop/kodi-ps5-binary-addons`. Its working tree must
-be clean, its local branch must be `main`, and `origin` must point to that
-repository. Download URLs explicitly use remote `main`, not the remote's default
-branch.
+A multi-output target builds once for all its catalogued outputs. Source-target
+and output-specific patch series both participate in the target fingerprint.
+Microcosm retains its published `screensaver.microcosm.biof` identity in its
+native build, resource directory and installed package. Preserve the
+workspace/source locks instead of deleting caches. Another add-on using existing
+provider capabilities does not require a title rebuild or new title exports.
+A new runtime requirement needs a compatible upgraded provider/title.
+
+Private Autoconf dependencies use the same native compiler launcher, forced ABI
+header and opaque-stdio overlay as CMake dependencies. Do not bypass the generated
+`CONFIG_SITE` or reuse dependencies compiled against the exposed FreeBSD `FILE`.
+The launcher supports Autoconf's implicit single-object outputs using the Clang
+driver's output plan, while retaining native frontend and init-array lowering.
+After changing SDK tools, prepare fresh fingerprinted inputs rather than editing
+an existing SDK artifact.
+Nosefart and WSR embed separately namespaced tag/track and playback engines in
+their SPRX; they do not ship ordinary ELF helper libraries or merge engine state.
+
+## Title staging and runtime trust
+
+Native CMake installs and repository ZIPs give SPRX files executable permissions
+(`0755`); their JSON receipts remain non-executable (`0644`). Kodi's ordinary ZIP
+installation copies file contents without preserving execute bits. Before native
+loading, the PS5 loader restores missing execute bits on regular SPRX files,
+preserving their read/write permissions. It skips permission changes for already
+executable modules, including read-only title files, and reports filesystem errors
+instead of calling the native loader after a failed repair. This also repairs
+previously installed `0644` modules without reinstalling them.
+
+Title packaging reads `build/ps5-addon-repository/work/build-record.json`, or
+explicit colon-separated `PS5_ADDON_PREFIXES`. An explicitly empty override
+disables discovery. A custom builder `--work` is not discovered automatically:
+pass its recorded install prefixes. Invalid explicit roots, duplicate IDs and
+unsafe binaries fail.
+
+Only catalogue entries with `bundled: true` enter the title. Adaptive is bundled;
+the Bunny DASH diagnostic is opt-in via `PS5_BUNNY_DIAGNOSTIC=1` and requires
+staged native Adaptive. It is not a catalogue binary. The native
+loader smoke sample remains opt-in via `PS5_TEST_BINARY_ADDON=1`.
+Legacy `PS5_ADDON_ELFS`, `PS5_AUDIO_DECODERS` and `PS5_ADAPTIVE_TEST` are rejected.
+
+Stages are fresh `BUILD/title-<UTC timestamp>-<pid>` directories by default.
+For a reproducible chosen path, use a previously nonexistent `STAGE` with
+`package.sh`, or configure `PS5_PACKAGE_STAGE`. Pass that stage's `app` directory
+explicitly to `package --title-app`; do not reuse an old `ps5-stage`.
+`native-addons.json` records staging selection.
+
+| Component | Title behavior |
+|---|---|
+| `repository.ps5` | Shipped, registered, enabled and official; stable feed |
+| `repository.ps5.testing` | Shipped but not enabled on first discovery; opt-in testing feed |
+| `resource.ps5.addon-runtime` | Required title-owned system marker; not a downloadable runtime upgrade |
+
+Enable testing through **My add-ons > Add-on repository > Kodi PS5 Testing
+Add-ons**. Existing enable/disable choices are preserved. Testing does not become
+official merely because it ships. Kodi's normal official-source policy still
+applies; retain its ordinary repository for non-PS5 add-ons.
+
+## In-place native repository migration
+
+Use a separate clean checkout of `Notedop/kodi-ps5-binary-addons`, on local
+`main`, with the correct `origin`. Feed URLs explicitly use remote `main`.
+The publisher does not repair branches/upstreams or force-push.
 
 ```sh
 git -C ~/kodi-ps5-binary-addons status --short
 git -C ~/kodi-ps5-binary-addons branch -vv
 git -C ~/kodi-ps5-binary-addons remote get-url origin
 
-# Copy generated files only; no commit or push.
-python3 tools/ps5/addon-repository.py publish --checkout ~/kodi-ps5-binary-addons
-
-# Inspect and commit only the intended generated changes in that checkout.
-git -C ~/kodi-ps5-binary-addons diff --stat
-# After committing, explicitly push to remote main and set its upstream.
-git -C ~/kodi-ps5-binary-addons push --set-upstream origin main
-```
-
-Alternatively, let the publisher stage the generated paths and commit them:
-
-```sh
+# Review before applying; does not change the checkout.
 python3 tools/ps5/addon-repository.py publish \
-  --checkout ~/kodi-ps5-binary-addons --commit --push
+  --checkout ~/kodi-ps5-binary-addons --dry-run
+
+# Only after complete native qualification and review of the removal inventory.
+python3 tools/ps5/addon-repository.py publish \
+  --checkout ~/kodi-ps5-binary-addons --apply-native-migration --commit --push
 ```
 
-Choose one approach. After copy-only publication, commit or otherwise resolve
-those changes before invoking the publisher again: it refuses a dirty checkout.
-`--commit` alone does not push; `--push` requires `--commit` and explicitly pushes
-`HEAD:main`. It does not repair an existing upstream tracking `origin/master`.
+Migration inventories obsolete ZIPs, sidecars, loose binary artifacts and known
+runtime trees within the owned publication scope. Unrelated files/settings are
+preserved. Additions, replacement indexes and intentional removals form one
+publication commit; history is not rewritten. Failed application rolls back
+modified paths. An unchanged committed rerun is idempotent.
 
-If local `main` still tracks `origin/master`, the explicit push above updates
-tracking without deleting `master`. If local `main` does not exist, switch to
-it when available; rename `master` to `main` only if that is the intended release
-branch. Do not force-push to bypass divergent history. Set GitHub's default
-branch to `main` separately if needed.
+`--commit` alone does not push; `--push` requires it and pushes `HEAD:main`.
+Without `--commit`, review and commit the copied changes before invoking the
+publisher again: a dirty checkout is rejected. Publication requires the generated
+`output/publication.json`, not arbitrary files copied from an old output tree.
 
-Publication preserves older package versions and rejects changed contents at
-an existing version. There is no automatic remote cleanup or forced push.
-Raw GitHub URLs serve the packages; GitHub Pages is not required.
+Native revisions must exceed the published legacy versions. Different bytes at
+an existing immutable version are rejected, including cross-channel collisions.
+Increment the affected catalogue `revision` for changed contents without an
+upstream version bump (`1.2.3`, revision 2 becomes `1.2.3+ps5.2`).
 
-## Common scenarios
+## Catalogue changes and stable promotion
 
-### Repeat an unchanged build
+### Qualified native publication
 
-Run the same `build` command. Valid targets report `cached - skipping build`;
-they are not compiled again. Source refs are pinned on first use and are not
-refreshed just because the branch moved upstream.
+Public commit [`56564388e54a0689bcaa657c646694dda5cbe022`](https://github.com/Notedop/kodi-ps5-binary-addons/commit/56564388e54a0689bcaa657c646694dda5cbe022)
+replaced the legacy packages with native `+ps5.2` revisions and repository
+bootstrap version 2.0.0, retaining the feed URLs and Microcosm's published ID.
+All 269 publication files passed public SHA-256 readback; an unchanged migration
+dry-run reported no changes or removals.
 
-The cache is per source target, not per whole catalogue:
+The matching local title stage is
+`build/ps5-native-standard-91dc852b/title-native-refreshed-sdk-c9525854f2/app`,
+prepared against SDK fingerprint
+`98586060bca1a22017614fb69c8fda24eb11e9ede503c71462a650bf3ccb01dc`.
+All 20 exact completed-title checks passed. Earlier user-operated console
+acceptance applies to the earlier title bytes, not this refreshed title or the
+entire rebuilt catalogue. No console deployment was performed.
 
-| Change | Compilation impact |
-|---|---|
-| Add a new source target to the catalogue | New target only |
-| Change one target's source, definition or PS5 patches | That target |
-| Add another output ID to a multi-output target | That shared target |
-| Change channel, acceptance, bundled policy or package revision | No recompilation by itself |
-| Change shared builder/configuration, API headers, SDK or depends inputs | Can invalidate all targets |
+### Further changes
 
-An invalidated target gets a fresh fingerprint-specific build/install tree,
-including its private dependencies. This is not an in-place incremental rebuild
-of the old dependency tree. Preserve the workspace and source lock; deleting
-them or refreshing upstream unnecessarily makes repeat builds more expensive.
+Keep new/changed bytes in testing. Add exact upstream output IDs to
+`tools/ps5/addon-catalogue.json` and preserve multi-output grouping. The source
+also needs ordinary Kodi build/platform definitions under `cmake/addons/addons`.
+Adding a catalogue entry does not port its dependencies, TLS or runtime behavior.
+Persistent PS5 changes belong in the [add-on patch series](../tools/ps5/patches/addons/README.md).
+Review `addon-exclusions.json`; do not silently exclude a failing supported entry.
 
-### Build or update one target
+Promote only an exact console-tested ZIP: set `channel` to `stable`,
+`accepted_sha256` to its SHA-256, and `acceptance` to the actual title/version,
+scenarios and results. Keep the revision unchanged for a byte-identical promotion.
+Packaging rejects mismatched approval hashes. Historical acceptance of another
+binary is not approval; rebuilt native packages do not inherit legacy acceptance.
+Stable packages also remain available through testing. Demotion changes feed
+selection, not automatic downgrading of installed versions.
+
+ZIP order, timestamps and permissions are deterministic.
+`*.zip.build.json` records provenance, not console acceptance. Retain source
+locks and matching patches, and review license/corresponding-source obligations.
+
+## Failures and focused checks
+
+Missing/stale SDK or dependency-map errors require preparing matching inputs;
+do not bypass receipt checks. Wrong platform metadata must be corrected at
+generation (`ps5` platform, `library_freebsd` selecting the SPRX), not by renaming
+an ELF. Undeclared imports, unsupported TLS/relocations and private Kodi-app
+dependencies require fixing the build/provider contract, not weakening policy.
+Missing or mismatched title proof requires packaging the matching native title.
 
 ```sh
-python3 tools/ps5/addon-repository.py build --only inputstream.adaptive --jobs 4
-
-# Deliberately resolve this target's upstream ref again.
-python3 tools/ps5/addon-repository.py build \
-  --only inputstream.adaptive --refresh-sources --jobs 4
-```
-
-`--only` may be repeated. A multi-output source target compiles once for all
-its catalogued outputs; selecting one output selects that source target.
-Omit `--only` to process the whole catalogue. Without it, `--refresh-sources`
-refreshes every selected target's upstream ref.
-
-After a binary change, rebuild/package the title when its exports or runtime
-need updating, then run `package` and `publish`. `package` always validates the
-complete catalogue, even after a focused build. Once the title is already
-compatible, `build --jobs 4 --package` can combine compilation and repository
-packaging; it does not rebuild the title for you.
-
-### Add a new binary add-on
-
-Edit `tools/ps5/addon-catalogue.json`, adding a source under `targets`:
-
-```json
-"visualization.example": {
-  "url": "https://github.com/OWNER/visualization.example",
-  "ref": "Piers",
-  "addons": {
-    "visualization.example": {
-      "bundled": false,
-      "channel": "testing",
-      "revision": 1
-    }
-  }
-}
-```
-
-This is a template, not an existing supported add-on. Use a public GitHub source
-URL, an existing compatible branch/tag or commit, and exact manifest output IDs.
-List multiple output policies under one target when one build produces several
-add-ons. Keep new candidates in testing and normally leave `bundled` false.
-The catalogue must not conflict with `tools/ps5/addon-exclusions.json`.
-
-The source target also needs Kodi build/platform metadata under
-`cmake/addons/addons/<target>/`; existing Kodi targets normally already have it.
-Ensure the metadata allows FreeBSD, the build platform used for PS5, and the
-source has a supported CMake build root. Catalogue inclusion does not port an
-add-on: dependencies, TLS, imports or runtime behavior may still need work.
-Persistent PS5 patches belong in the
-[add-on patch series](../tools/ps5/patches/addons/README.md).
-
-Run `list`, build the new target with `--only`, then build/package the title with
-the full installed inventory and generate/publish packages. Existing unrelated
-targets remain cached unless shared build inputs also changed.
-
-### Promote testing to stable
-
-Install and console-test the exact generated testing ZIP. Then update its nested
-catalogue policy, keeping `revision` unchanged for promotion of the same ZIP:
-
-```json
-{
-  "bundled": false,
-  "channel": "stable",
-  "revision": 1,
-  "accepted_sha256": "<64-character SHA-256 of the tested ZIP>",
-  "acceptance": "Tested on title <build ID>, firmware <version>, <date>: <scenarios and results>."
-}
-```
-
-Get the hash from `repo/piers-ps5-1/testing/build-manifest.json` inside the output
-directory, or run `sha256sum` on the tested ZIP. Record the actual tested title
-and behavior, not just successful compilation. Historical acceptance of another
-binary is not approval of this ZIP.
-
-Run `package`, then `publish` and commit/push. Promotion alone requires neither
-compilation nor title packaging. Stable candidates also remain in testing.
-Packaging rejects a stable entry if the generated ZIP differs from its accepted
-hash. To demote, set `channel` back to `testing` and remove the acceptance fields;
-regenerate/publish the feeds. Older ZIPs remain archived, and installed versions
-are not automatically downgraded.
-
-### Release changed package contents
-
-If the upstream version stays the same but binaries, resources or helpers change,
-increment that output's `revision`, for example from `1` to `2`. An upstream
-version `1.2.3` becomes `1.2.3+ps5.2`. Never overwrite different contents at an
-already generated/published package version.
-
-Start the changed release in testing and remove stale acceptance fields.
-Build if compilation inputs changed, package against a compatible title, then
-publish. After console testing, promote the exact new ZIP. Bundled and
-downloadable copies use the same revision policy; changing a bundled version
-also requires title repackaging to update the shipped copy.
-
-## What Kodi ships and trusts
-
-| Component | Title behavior |
-|---|---|
-| `repository.ps5` | Shipped, enabled and official in PS5 builds; stable feed |
-| `repository.ps5.testing` | Shipped, disabled on first discovery; manual opt-in |
-| `resource.ps5.addon-runtime` | Required system marker; never published in repository feeds |
-| Catalogue entry with `bundled: true` | Shipped binary add-on, independent of testing/stable channel |
-
-Enable testing through **My add-ons > Add-on repository > Kodi PS5 Testing
-Add-ons**. Existing user enable/disable choices for testing are preserved.
-Repository ZIPs are also generated for manual installation.
-
-Title inclusion is configured by `stage_system_addons()` in
-`tools/ps5/stage-installed-addons.py`. Stable and the runtime marker are registered
-in the packaged `system/addon-manifest.xml`; testing is deliberately absent.
-Even `optional="true"` manifest entries are enabled on first discovery.
-
-Official-source status is separate: `CCompileInfo::LoadOfficialRepoInfos()` in
-`xbmc/CompileInfo.cpp.in` adds only the PS5 stable repository and its exact URL
-prefix, guarded by `TARGET_PS5`. Testing is not official simply because it ships.
-**Update official add-ons from: Official repositories only** permits stable PS5
-updates without letting testing automatically replace official add-ons. Explicit
-testing installation is still possible. Keep Kodi's ordinary official repository
-for non-PS5 add-ons. Changing official-source configuration requires a Kodi
-rebuild, not just repackaging.
-
-## Paths and advanced overrides
-
-| Path | Purpose |
-|---|---|
-| `tools/ps5/addon-catalogue.json` | Source targets, output selection and release policy |
-| `tools/ps5/addon-exclusions.json` | Explicit compatibility/selection blocks and reasons |
-| `build/ps5-addon-repository/work/source-lock.json` | Pinned source commits |
-| `build/ps5-addon-repository/work/build-record.json` | Install prefixes, fingerprints and artifact hashes |
-| `build/ps5-addon-repository/output/publication.json` | Generated inventory required by `publish` |
-| `build/ps5-addon-repository/output/repo/piers-ps5-1/{testing,stable}/` | Feeds, build manifests, add-on ZIPs and hashes |
-| `build/ps5-stage/app/build/llvm-pie.elf` | Original pre-conversion title ELF used by `package` |
-| Beside that ELF: `ps5-addon-runtime.json` | Runtime generation and matching title hash |
-| `build/ps5-release/installed-addons-report.json` | Title preflight selection/exclusion report |
-| `build/ps5-stage/installed-addons-report.json` | Actual title staging report |
-
-Global options go **before** the subcommand: `--sdk`, `--depends`, `--work`,
-`--output`, `--catalogue`. SDK/depends also accept `PS5_PAYLOAD_SDK` and
-`PS5_DEPENDS_PREFIX`. Reuse the same overrides for build, validation and
-publication. `package --title-elf PATH` selects another original title ELF; its
-matching runtime receipt is still required.
-
-Title packaging does not automatically follow a custom builder `--work` path.
-Set colon-separated `PS5_ADDON_PREFIXES` to its recorded install prefixes.
-This overrides discovery; an explicitly empty value disables it. Without an
-override or repository build record, historical depends/audio/screensaver
-prefixes are a compatibility fallback, not the recommended publication workflow.
-Missing explicit prefixes, duplicate IDs and invalid binaries fail closed.
-
-`PS5_TEST_BINARY_ADDON=1` includes the separately built loader probe.
-`PS5_ADAPTIVE_TEST=1` adds adaptive test content/debug markers, not permission to
-ship that add-on. Neither is needed for ordinary repository builds.
-`PS5_ADDON_ELFS` is a trusted exports-only override, not an installer.
-Loader details and diagnostic procedures are in the
-[ELF loader runbook](../xbmc/platform/ps5/elf/README.md).
-
-ZIP ordering, timestamps and permissions are deterministic. Each
-`*.zip.build.json` records source revision/build provenance, not console
-acceptance. Retain source locks, dependency sources and matching Kodi patches;
-review license and corresponding-source obligations before distribution.
-Changing the runtime ABI requires coordinated repository URLs, runtime marker
-version and feed generation changes, not silently reusing `piers-ps5-1`.
-
-## Troubleshooting
-
-| Message or symptom | Action |
-|---|---|
-| Missing `output/publication.json` | Run `package` successfully before `publish`; use the same `--output` |
-| Publication checkout must be on `main` | Check local branch and upstream; publish/push to remote `main` |
-| Publication checkout is dirty | Review and commit/resolve its changes; do not discard unrelated work |
-| Build record missing, stale or modified outputs | Rerun `build` with the same SDK/depends/work configuration |
-| Missing original title ELF or runtime receipt | Build/package `ps5-title`; do not substitute the converted executable |
-| Runtime receipt does not match | Repackage the matching title; do not forge/edit the receipt |
-| Missing title exports | Repackage title with the complete candidate inventory; port unsupported imports rather than bypassing checks |
-| Incomplete candidate inventory warning | Build all catalogue targets, then rebuild/package title before publishing |
-| Existing-version collision | Increment the affected package revision for changed contents |
-| Stable approval hash mismatch | Test and approve the exact new ZIP, or return it to testing |
-| `DT_NEEDED`, TLS or relocation rejection | Fix the add-on/dependency build; do not weaken the loader policy |
-| Every target rebuilds after a shared change | Expected cache invalidation; private dependencies are rebuilt too |
-
-PS5 GL consumers use the generated Kodi CMake header-only interface and leave
-GL calls as title imports. Linking SDK `libGL.so` can introduce an OSMesa
-`DT_NEEDED`, which the loader intentionally rejects. The builder validates
-primary/helper ELF eligibility on fresh builds and cached-result reuse;
-repository packaging additionally checks actual title exports.
-
-Focused host checks, without console deployment:
-
-```sh
-python3 tools/ps5/test-addon-build.py
-python3 tools/ps5/test-addon-repository.py
-python3 tools/ps5/test-stage-installed-addons.py
+python3 tools/ps5/test.py \
+  test-addon-build.py test-addon-repository.py test-stage-installed-addons.py
 bash -n tools/ps5/package.sh
 ```
 
-Per-add-on inventories belong in the catalogue and generated manifests, not
-duplicated tables here. Release acceptance belongs with the exact ZIP hash and
-catalogue policy; earlier console observations remain historical evidence in
-`HANDOVER-PS5-BINARY-ADDONS.md`, not blanket approval of current packages.
+Use the explicit runner: ordinary unittest discovery does not include these
+hyphenated filenames. Functional console acceptance remains a separate,
+user-operated step.

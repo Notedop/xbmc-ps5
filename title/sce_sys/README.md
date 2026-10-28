@@ -1,8 +1,17 @@
 # title/sce_sys
 
-`icon0.png` (Kodi's 512x512 icon) is included and copied into every build by
-`scripts/30-deploy.sh`. `param.json` is generated from the native-app
-template by the same script (title ID, name "Kodi", Media category).
+`tools/ps5/package.sh` copies `param.json` unchanged into every title and verifies
+that the packaged copy matches. Edit `contentVersion` here manually to bump the
+version (format `NN.NNN.NNN`, for example `22.000.001`); there is no automatic
+increment. `titleId`, `masterVersion`, category, HDR flags, memory limits and
+save-data settings also come from this file. The former `TITLE_ID`,
+`KODI_CATEGORY` and `KODI_HDR_TITLE` environment overrides are rejected.
+
+The initial metadata was taken from the completed stage
+`build/ps5-release/title-20261028T164255-2081569/app/dist/PPSA99420/sce_sys/param.json`
+with content version `22.000.000` and master version `22.00`.
+
+`icon0.png` (Kodi's 512x512 icon) is also copied into every build.
 Optional extras you can add here:
 
 - `icon0.png` — replace to use a different 512x512 title icon.
@@ -39,4 +48,3 @@ And one that stays in place:
   remove it again when done.
 - `kodi-swdecode` - use software (FFmpeg) video decoding only, e.g. to
   compare with the hardware decoder.
-

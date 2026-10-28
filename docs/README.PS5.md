@@ -221,6 +221,14 @@ cmake --build /home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release -j$(nproc)
 `ps5-title` creates the deployable title folder, and `ps5-package` additionally
 creates a zip artifact.
 
+The zip excludes the title-root build evidence (`ps5-addon-runtime.json`,
+`ps5-kodi-app-proof.json`, `ps5-loader-companion-proof.json`,
+`ps5-shared-runtime.json`, `ps5-shared-title-proof.json` and
+`sprx-addon-build.txt`). These remain in the local staged title for verification
+and repository tooling. Runtime files, including `sce_sys/param.json` and JSON
+under `share`, are retained. Direct FTP deployment still mirrors the staged
+title, including this evidence.
+
 ```bash
 # Build a new title stage; the output path is printed by packaging.
 cmake --build /home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release --target ps5-title
@@ -241,8 +249,22 @@ An existing stage is never overwritten. For a known output location, set a fresh
 `STAGE` when invoking `package.sh`, or configure `PS5_PACKAGE_STAGE` for the
 CMake targets. Use the resulting `<stage>/app` with repository `--title-app`.
 The required SDK and dependency map must match the Kodi configuration.
-Packaging never uploads or contacts the console, even when `PS5_HOST` is set;
-deployment is a separate user-operated action.
+
+Title metadata is copied unchanged from `title/sce_sys/param.json` and checked
+against the packaged copy. Increment `contentVersion` manually in that file
+(for example `22.000.000` to `22.000.001`) before packaging. The title ID,
+master version, category, HDR flags and memory/save-data settings are also
+owned by that file; `TITLE_ID`, `KODI_CATEGORY` and `KODI_HDR_TITLE` environment
+overrides are rejected. The zip build manifest records the packaged content
+version, category and HDR capability.
+
+When `PS5_HOST` is set, successful packaging uploads the title over FTP using
+`lftp` to `/data/homebrew/<TITLE_ID>` and removes stale remote files. The FTP
+port defaults to 2121 (`PS5_FTP_PORT`), with eight parallel uploads by default
+(`PS5_DEPLOY_JOBS`, range 1..8). The launcher `eboot.bin` and every file under
+`sce_module` are always re-uploaded, regardless of remote timestamps or sizes.
+Without `PS5_HOST`, packaging does not contact the console. Restart
+ShadowMountPlus and launch Kodi manually after uploading.
 
 Packaging compiles `shims/native-app/libc_socket.c` directly into the title,
 ahead of the SDK's archived copy in `libkodishim.a`. Socket-shim-only changes

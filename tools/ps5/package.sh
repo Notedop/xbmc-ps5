@@ -8,15 +8,17 @@
 #   2. Kodi's normal link inputs -> private application link
 #   3. prepare-shared-title.py -> SDK providers and native title builders
 #   4. make app -> dist/<TITLE_ID>/{eboot.bin, sce_module, sce_sys}
-#   5. copy data and verify the completed native title; no console contact.
+#   5. copy data and verify the completed native title; optionally upload over FTP.
 #
 #   BUILD       Kodi build dir           default build/ps5-release
 #   STAGE       fresh staging dir        default unique directory below BUILD
 #   WORK        external sources dir     default build/ps5-external (bootstrap.sh)
 #   APP_TEMPLATE demo app dir            default $WORK/ps5-opengl/build/native-app/PPSA99005
-#   TITLE_ID    default PPSA99420        HEAP_MIB app malloc heap (default 2048)
-#   KODI_CATEGORY  game (default) or media: home-screen area (media is
-#               experimental: the GL driver does not start in its sandbox)
+#   Title metadata is copied unchanged from title/sce_sys/param.json.
+#   HEAP_MIB    app malloc heap (default 2048)
+#   PS5_HOST    console IP for FTP upload (optional)
+#   PS5_FTP_PORT  console FTP port (default 2121)
+#   PS5_DEPLOY_JOBS concurrent FTP uploads (default 8, range 1..8)
 #   PS5_TEST_BINARY_ADDON  1 includes the native SPRX screensaver (default 0)
 #   PS5_BUNNY_DIAGNOSTIC  1 includes the Python DASH diagnostic (default 0);
 #               requires native Adaptive among the selected catalogue prefixes
@@ -37,9 +39,35 @@ BUILD="${BUILD:-$ROOT/build/ps5-release}"
 STAGE="${STAGE:-$BUILD/title-$(date -u +%Y%m%dT%H%M%S)-$$}"
 WORK="${WORK:-$ROOT/build/ps5-external}"
 APP_TEMPLATE="${APP_TEMPLATE:-$WORK/ps5-opengl/build/native-app/PPSA99005}"
-TITLE_ID="${TITLE_ID:-PPSA99420}"
 HEAP_MIB="${HEAP_MIB:-2048}"
 PACKAGE_ZIP="${PACKAGE_ZIP:-0}"
+for setting in TITLE_ID KODI_CATEGORY KODI_HDR_TITLE; do
+  if [ "${!setting+x}" = x ]; then
+    echo "!! $setting is no longer supported; edit title/sce_sys/param.json instead" >&2
+    exit 1
+  fi
+done
+TITLE_METADATA="$(python3 - "$ROOT/title/sce_sys/param.json" <<'PY'
+import json, re, sys
+
+path = sys.argv[1]
+try:
+    metadata = json.load(open(path))
+    if not isinstance(metadata, dict):
+        raise ValueError("expected a JSON object")
+    title_id = metadata.get("titleId")
+    if not isinstance(title_id, str) or not re.fullmatch(r"[A-Z]{4}[0-9]{5}", title_id):
+        raise ValueError("titleId must use four uppercase letters and five digits")
+    version = metadata.get("contentVersion")
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9]{2}\.[0-9]{3}\.[0-9]{3}", version):
+        raise ValueError("contentVersion must use NN.NNN.NNN (for example 22.000.000)")
+except (OSError, ValueError) as error:
+    sys.exit(f"PS5 title metadata: {path}: {error}")
+print(title_id, version)
+PY
+)"
+read -r TITLE_ID CONTENT_VERSION <<< "$TITLE_METADATA"
+echo "==> title $TITLE_ID, content version $CONTENT_VERSION"
 CONFIGURED_HBROOT="$(sed -n 's/^PS5_HOMEBREW_PREFIX:[^=]*=//p' "$BUILD/CMakeCache.txt")"
 HB="${PS5_HOMEBREW_PREFIX:-${CONFIGURED_HBROOT:-$PS5_PAYLOAD_SDK/target/user/homebrew}}"
 if [ -n "$CONFIGURED_HBROOT" ]; then
@@ -265,64 +293,7 @@ if [ -n "$SHARED_SDK" ]; then
 fi
 
 echo "==> 4. title metadata"
-python3 - "$APP/sce_sys/param.json" "$TITLE_ID" <<'PY'
-import json, os, sys
-path, tid = sys.argv[1], sys.argv[2]
-p = json.load(open(path))
-p["titleId"] = tid
-p["conceptId"] = tid[4:]
-p["contentId"] = f"UP9000-{tid}_00-KODIPS5000000001"
-p["contentVersion"] = "01.000.000"
-p["masterVersion"] = "01.00"
-p["downloadDataSize"] = max(int(p.get("downloadDataSize", 0)), 2048)  # /download0 = Kodi's home
-# Home-screen area (boilerplate docs/CONFIGURATION.md):
-#   media: applicationCategoryType 65536, contentBadgeType 2, no gameIntent
-#   game:  applicationCategoryType 0, contentBadgeType 1, gameIntent launchActivity
-# Default: game. As a Media app the kernel halves the page tables (128 MiB
-# max) and applies a stricter sandbox; the PS5 GL driver then fails with
-# EGL_BAD_ALLOC. KODI_CATEGORY=media stays available for experiments.
-# High-refresh entitlement (the flags ps5-opengl sets for its 120 Hz builds,
-# as ProsperoLight declares): the PS5 runs VRR through this preset, which Kodi
-# uses only for VRR during playback, never as a fixed 120 Hz output.
-p["attribute3"] = int(p.get("attribute3", 0)) | 0x80040
-# HDR-capable title metadata (the flags ProsperoLight declares): without it
-# the HDR scanout format is refused (BlackBearReloaded's video research). With
-# it, the PS5 keeps the TV in HDR for the whole session when its HDR setting is
-# "On When Supported", mapping SDR content itself - its standard behaviour fo
-# HDR-capable titles. KODI_HDR_TITLE=0 builds an SDR title instead (TV stays
-# SDR; HDR video is tone mapped by Kodi).
-if os.environ.get("KODI_HDR_TITLE", "1") != "0":
-    p["attribute"] = int(p.get("attribute", 0)) | 0x62000000
-else:
-    p["attribute"] = int(p.get("attribute", 0)) & ~0x62000000
-category = os.environ.get("KODI_CATEGORY", "game")
-if category == "media":
-    p["applicationCategoryType"] = 65536
-    p["contentBadgeType"] = 2
-    p.pop("gameIntent", None)
-    # The kernel caps page tables at 128 MiB for Media apps (games: 256 MiB,
-    # which the GL template asks for) and refuses to launch otherwise:
-    #   property "kernel.cpuPageTableSize" of param.json is not valid.
-    #   value: 268435456, min: 2097152, max: 134217728
-    kernel = p.setdefault("kernel", {})
-    for key in ("cpuPageTableSize", "gpuPageTableSize"):
-        kernel[key] = min(int(kernel.get(key, 134217728)), 134217728)
-else:
-    p["applicationCategoryType"] = 0
-    p["contentBadgeType"] = 1
-    p["gameIntent"] = {"permittedIntents": [{"intentType": "launchActivity"}]}
-lp = p.setdefault("localizedParameters", {"defaultLanguage": "en-US"})
-lp.setdefault("en-US", {})["titleName"] = "Kodi"
-# The save-data entry (Settings > Storage > Saved Data) inherits the title
-# name and icon0 above, so /download0 shows as "Kodi" with the Kodi icon. Make
-# that explicit so a data manager that reads its own field labels it clearly.
-sd = p.setdefault("saveDataInfo", {})
-sd["title"] = "Kodi"
-sd["subtitle"] = "Settings, add-ons and library"
-sd["detail"] = "Kodi configuration, installed add-ons and media library"
-json.dump(p, open(path, "w"), indent=2)
-print(f"    titleId {tid}, {category} app, downloadDataSize {p['downloadDataSize']} MiB")
-PY
+cp "$ROOT/title/sce_sys/param.json" "$APP/sce_sys/param.json"
 # Kodi's icon ships in the repository (title/sce_sys/icon0.png, 512x512).
 cp "$HERE/title/sce_sys/icon0.png" "$APP/sce_sys/icon0.png" || { echo "!! title/sce_sys/icon0.png missing"; exit 1; }
 # Home-screen artwork: the template carries the GL demo's backgrounds and
@@ -364,6 +335,9 @@ if [ "$build_result" -ne 0 ] || [ ! -s "$DIST/eboot.bin" ]; then
   fi
   exit 1
 fi
+
+cmp -s "$ROOT/title/sce_sys/param.json" "$DIST/sce_sys/param.json" || {
+  echo "!! packaged param.json differs from title/sce_sys/param.json" >&2; exit 1; }
 
 KODI_IMAGE="$APP/build/kodi-app/linked.so"
 APPLICATION_RUNTIME="$DIST/sce_module/libkodi-app.sprx"
@@ -432,12 +406,26 @@ if [ "$PACKAGE_ZIP" = "1" ]; then
   ARTIFACT_DIR="${ARTIFACT_DIR:-$STAGE/artifacts}"
   mkdir -p "$ARTIFACT_DIR"
   ZIP_PATH="$ARTIFACT_DIR/${TITLE_ID}.zip"
-  if command -v zip >/dev/null 2>&1; then
-    (cd "$(dirname "$DIST")" && rm -f "$ZIP_PATH" && zip -qry "$ZIP_PATH" "$TITLE_ID")
-  else
+  (
+    cd "$(dirname "$DIST")"
+    shopt -s nullglob dotglob
+    ZIP_INPUTS=()
+    # Keep verification evidence in the stage, not in the runtime archive.
+    for entry in "$TITLE_ID"/*; do
+      case "${entry##*/}" in
+        ps5-addon-runtime.json|ps5-kodi-app-proof.json|ps5-loader-companion-proof.json|\
+        ps5-shared-runtime.json|ps5-shared-title-proof.json|sprx-addon-build.txt)
+          continue ;;
+      esac
+      ZIP_INPUTS+=("$entry")
+    done
     rm -f "$ZIP_PATH"
-    (cd "$(dirname "$DIST")" && cmake -E tar "cf" "$ZIP_PATH" --format=zip "$TITLE_ID")
-  fi
+    if command -v zip >/dev/null 2>&1; then
+      zip -qry "$ZIP_PATH" "${ZIP_INPUTS[@]}"
+    else
+      cmake -E tar "cf" "$ZIP_PATH" --format=zip "${ZIP_INPUTS[@]}"
+    fi
+  )
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$ZIP_PATH" > "$ZIP_PATH.sha256"
   fi
@@ -449,10 +437,13 @@ if [ "$PACKAGE_ZIP" = "1" ]; then
   # paths" requirement). Best-effort: a dependency recipe dir that is missing
   # or was never built via tools/depends just reports null, it never fails
   # packaging.
-  python3 - "$ROOT" "$BUILD" "$ARTIFACT_DIR" "$TITLE_ID" "${KODI_CATEGORY:-game}" "${KODI_HDR_TITLE:-1}" "$ZIP_PATH" <<'PY'
+  python3 - "$ROOT" "$BUILD" "$ARTIFACT_DIR" "$DIST/sce_sys/param.json" "$ZIP_PATH" <<'PY'
 import json, os, pathlib, subprocess, sys, datetime
 
-root, build, artifact_dir, title_id, category, hdr_title, zip_path = sys.argv[1:8]
+root, build, artifact_dir, metadata_path, zip_path = sys.argv[1:6]
+metadata = json.loads(pathlib.Path(metadata_path).read_text())
+title_id = metadata["titleId"]
+category = metadata["applicationCategoryType"]
 
 def git_describe(path):
     try:
@@ -491,8 +482,9 @@ def sha256_of(path):
 manifest = {
     "generated_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "title_id": title_id,
-    "category": category,
-    "hdr_capable": hdr_title not in ("0", "false", "False"),
+    "content_version": metadata["contentVersion"],
+    "category": {0: "game", 65536: "media"}.get(category, category),
+    "hdr_capable": (metadata["attribute"] & 0x62000000) == 0x62000000,
     "kodi_source_revision": git_describe(root),
     "feature_config": {
         "ENABLE_PYTHON": cmake_cache_bool("ENABLE_PYTHON"),
@@ -522,8 +514,19 @@ print(f"Build manifest: {out}")
 PY
 fi
 
+if [ -n "${PS5_HOST:-}" ]; then
+  PS5_DEPLOY_JOBS="${PS5_DEPLOY_JOBS:-8}"
+  [[ "$PS5_DEPLOY_JOBS" =~ ^[1-8]$ ]] || {
+    echo "!! PS5_DEPLOY_JOBS must be between 1 and 8" >&2; exit 1; }
+  command -v lftp >/dev/null || {
+    echo "!! lftp is required for deployment; install lftp or copy the folder manually" >&2; exit 1; }
+  echo "==> uploading to ftp://$PS5_HOST:${PS5_FTP_PORT:-2121}/data/homebrew/$TITLE_ID"
+  # Console timestamps can run ahead; always re-send the launcher and all modules.
+  lftp -e "set cmd:fail-exit yes; mirror -R --delete --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST' '/data/homebrew/$TITLE_ID'; put -O '/data/homebrew/$TITLE_ID' '$DIST/eboot.bin'; mirror -R --transfer-all --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST/sce_module' '/data/homebrew/$TITLE_ID/sce_module'; quit" -p "${PS5_FTP_PORT:-2121}" "$PS5_HOST"
+fi
+
 echo
 echo "Title folder: $DIST"
-echo "Packaging only; deployment and launch are separate user-operated steps."
+echo "Copy it to /data/homebrew/$TITLE_ID if not uploaded, restart ShadowMountPlus, launch Kodi."
 echo "Log: KODI_LOG_TO_CONSOLE is not set in a title, so read /download0/.kodi/temp/kodi.log over FTP;"
 echo "     klog (nc \$PS5_HOST 3232) shows loader messages and Kodi's stdout."

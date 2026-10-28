@@ -8,11 +8,14 @@
 
 #include "PS5StorageProvider.h"
 
+#include "MediaSource.h"
 #include "utils/log.h"
 
-#include "MediaSource.h"
-
+#include <cerrno>
+#include <sys/event.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 std::unique_ptr<IStorageProvider> IStorageProvider::CreateInstance()
 {
@@ -39,6 +42,133 @@ void Add(std::vector<CMediaSource>& drives, const char* path, const char* name)
 }
 } // namespace
 
+CPS5StorageProvider::CPS5StorageProvider() : CThread("PS5Storage")
+{
+}
+
+CPS5StorageProvider::~CPS5StorageProvider()
+{
+  Stop();
+}
+
+void CPS5StorageProvider::Initialize()
+{
+  Stop();
+
+  m_kqueue = kqueue();
+  if (m_kqueue == -1)
+  {
+    CLog::Log(LOGERROR, "CPS5StorageProvider: kqueue failed: {} (errno {})", std::strerror(errno),
+              errno);
+    return;
+  }
+
+  int wakeup[2];
+  if (pipe(wakeup) == -1)
+  {
+    CLog::Log(LOGERROR, "CPS5StorageProvider: shutdown pipe failed: {} (errno {})",
+              std::strerror(errno), errno);
+    Stop();
+    return;
+  }
+  m_wakeupRead = wakeup[0];
+  m_wakeupWrite = wakeup[1];
+
+  struct kevent events[2];
+  EV_SET(&events[0], 0, EVFILT_FS, EV_ADD | EV_ENABLE | EV_CLEAR, VQ_MOUNT | VQ_UNMOUNT | VQ_DEAD,
+         0, nullptr);
+  EV_SET(&events[1], m_wakeupRead, EVFILT_READ, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, nullptr);
+  int result;
+  do
+  {
+    result = kevent(m_kqueue, events, 2, nullptr, 0, nullptr);
+  } while (result == -1 && errno == EINTR);
+  if (result == -1)
+  {
+    CLog::Log(LOGERROR,
+              "CPS5StorageProvider: EVFILT_FS/shutdown registration failed: {} (errno {}); "
+              "storage event monitoring disabled",
+              std::strerror(errno), errno);
+    Stop();
+    return;
+  }
+
+  // Register before taking the baseline so changes during enumeration remain queued.
+  m_removable = GetRemovablePaths();
+  Create();
+}
+
+void CPS5StorageProvider::Stop()
+{
+  StopThread(false);
+  if (m_wakeupWrite != -1)
+  {
+    // EOF on the read end interrupts kevent without closing a descriptor in use.
+    close(m_wakeupWrite);
+    m_wakeupWrite = -1;
+  }
+  StopThread();
+  if (m_wakeupRead != -1)
+  {
+    close(m_wakeupRead);
+    m_wakeupRead = -1;
+  }
+  if (m_kqueue != -1)
+  {
+    close(m_kqueue);
+    m_kqueue = -1;
+  }
+  m_changed = false;
+  m_removable.clear();
+}
+
+void CPS5StorageProvider::Process()
+{
+  while (!m_bStop)
+  {
+    struct kevent event;
+    const int result = kevent(m_kqueue, nullptr, 0, &event, 1, nullptr);
+    if (m_bStop)
+      return;
+    if (result == -1)
+    {
+      if (errno == EINTR)
+        continue;
+      CLog::Log(LOGERROR,
+                "CPS5StorageProvider: kevent wait failed: {} (errno {}); "
+                "storage event monitoring stopped",
+                std::strerror(errno), errno);
+      return;
+    }
+    if (result != 1)
+    {
+      CLog::Log(LOGERROR,
+                "CPS5StorageProvider: unexpected kevent result {}; storage event monitoring stopped",
+                result);
+      return;
+    }
+    if (event.flags & EV_ERROR)
+    {
+      CLog::Log(LOGERROR,
+                "CPS5StorageProvider: kevent error: {} (errno {}); storage event monitoring stopped",
+                std::strerror(static_cast<int>(event.data)), event.data);
+      return;
+    }
+    if (event.filter != EVFILT_FS || event.ident != 0 || (event.flags & EV_EOF))
+    {
+      CLog::Log(LOGERROR,
+                "CPS5StorageProvider: unexpected kevent filter {}, ident {}, flags {}; "
+                "storage event monitoring stopped",
+                event.filter, event.ident, event.flags);
+      return;
+    }
+    if (event.fflags & (VQ_MOUNT | VQ_UNMOUNT | VQ_DEAD))
+      m_changed = true;
+    else
+      CLog::Log(LOGWARNING, "CPS5StorageProvider: unexpected EVFILT_FS flags {}", event.fflags);
+  }
+}
+
 void CPS5StorageProvider::GetLocalDrives(std::vector<CMediaSource>& localDrives)
 {
   Add(localDrives, "/download0", "Kodi data (/download0)");
@@ -59,27 +189,46 @@ const char* const kRemovable[] = {"/mnt/usb0", "/mnt/usb1", "/mnt/usb2", "/mnt/u
 void CPS5StorageProvider::GetRemovableDrives(std::vector<CMediaSource>& removableDrives)
 {
   for (const char* path : kRemovable)
-    Add(removableDrives, path, path);
+  {
+    struct statfs mountInfo{};
+    int result;
+    do
+    {
+      result = statfs(path, &mountInfo);
+    } while (result == -1 && errno == EINTR);
+    if (result == -1)
+    {
+      const int error = errno;
+      if (error != ENOENT && error != ENOTDIR)
+        CLog::Log(LOGERROR, "CPS5StorageProvider: statfs failed for {}: {} (errno {})", path,
+                  std::strerror(error), error);
+      continue;
+    }
+
+    const std::string mountedOn(
+        mountInfo.f_mntonname, strnlen(mountInfo.f_mntonname, sizeof(mountInfo.f_mntonname)));
+    // An empty mount directory belongs to its parent filesystem, not a removable volume.
+    if (mountedOn == path)
+      Add(removableDrives, path, path);
+  }
+}
+
+std::set<std::string> CPS5StorageProvider::GetRemovablePaths()
+{
+  std::vector<CMediaSource> drives;
+  GetRemovableDrives(drives);
+  std::set<std::string> present;
+  for (const auto& drive : drives)
+    present.insert(drive.strPath);
+  return present;
 }
 
 bool CPS5StorageProvider::PumpDriveChangeEvents(IStorageEventsCallback* callback)
 {
-  const auto now = std::chrono::steady_clock::now();
-  if (m_checked && now - m_lastCheck < std::chrono::seconds(2))
+  if (!m_changed.exchange(false))
     return false;
-  m_lastCheck = now;
 
-  std::set<std::string> present;
-  for (const char* path : kRemovable)
-    if (Exists(path))
-      present.insert(path);
-  if (!m_checked)
-  {
-    m_checked = true;
-    m_removable = present; // the initial set: listed, not announced
-    return false;
-  }
-
+  std::set<std::string> present = GetRemovablePaths();
   bool changed = false;
   for (const auto& path : present)
     if (!m_removable.count(path))
@@ -103,5 +252,7 @@ bool CPS5StorageProvider::PumpDriveChangeEvents(IStorageEventsCallback* callback
 
 std::vector<std::string> CPS5StorageProvider::GetDiskUsage()
 {
+  // TODO: Report statfs capacity/free space for USB mounts; verify onboard/M.2 SSD mount
+  // mappings before labeling internal storage, and avoid counting the same filesystem twice.
   return {};
 }

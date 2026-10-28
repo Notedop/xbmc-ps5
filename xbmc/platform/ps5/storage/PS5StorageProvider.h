@@ -9,30 +9,34 @@
 #pragma once
 
 #include "storage/IStorageProvider.h"
+#include "threads/Thread.h"
 
-#include <chrono>
+#include <atomic>
 #include <set>
 #include <string>
 #include <vector>
 
-class CPS5StorageProvider : public IStorageProvider
+class CPS5StorageProvider : public IStorageProvider, private CThread
 {
 public:
-  CPS5StorageProvider() = default;
-  ~CPS5StorageProvider() override = default;
+  CPS5StorageProvider();
+  ~CPS5StorageProvider() override;
 
-  void Initialize() override {}
-  void Stop() override {}
+  void Initialize() override;
+  void Stop() override;
   void GetLocalDrives(std::vector<CMediaSource>& localDrives) override;
   void GetRemovableDrives(std::vector<CMediaSource>& removableDrives) override;
   bool Eject(const std::string& mountpath) override { return false; }
   std::vector<std::string> GetDiskUsage() override;
-  // USB (and extended-storage) mounts appearing or disappearing while Kodi
-  // runs: checked every 2 seconds, reported as Kodi's storage events
   bool PumpDriveChangeEvents(IStorageEventsCallback* callback) override;
 
 private:
-  std::set<std::string> m_removable; // paths present at the last check
-  std::chrono::steady_clock::time_point m_lastCheck{};
-  bool m_checked = false;
+  void Process() override;
+  std::set<std::string> GetRemovablePaths();
+
+  int m_kqueue = -1;
+  int m_wakeupRead = -1;
+  int m_wakeupWrite = -1;
+  std::atomic<bool> m_changed{false};
+  std::set<std::string> m_removable;
 };

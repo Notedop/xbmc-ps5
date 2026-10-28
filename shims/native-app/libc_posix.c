@@ -760,9 +760,7 @@ mode_t umask(mode_t mask)
 }
 
 /* ======================================================================
- * Calls only libkernel_sys exports (a system-process module titles do not
- * get). Each answers the way the real call does when the feature is not
- * available, so callers take their usual fallback path.
+ * POSIX calls without standard-name exports available to titles.
  * ====================================================================== */
 
 #include <sys/mount.h>
@@ -781,19 +779,25 @@ pid_t fork(void)
   return -1;
 }
 
-/* Filesystem statistics: Kodi's free-space query and fontconfig's
-   filesystem-type checks both handle failure. */
+extern int _fstatfs(int fd, struct statfs* buf);
+
 int statfs(const char* path, struct statfs* buf)
 {
-  (void)path; (void)buf;
-  errno = ENOSYS;
-  return -1;
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd == -1)
+    return -1;
+
+  int result = fstatfs(fd, buf);
+  int saved = errno;
+  if (close(fd) == -1 && result == 0)
+    return -1;
+  errno = saved;
+  return result;
 }
+
 int fstatfs(int fd, struct statfs* buf)
 {
-  (void)fd; (void)buf;
-  errno = ENOSYS;
-  return -1;
+  return _fstatfs(fd, buf);
 }
 
 /* No hard or symbolic links on the title's filesystems. EPERM is what

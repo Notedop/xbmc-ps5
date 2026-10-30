@@ -10,6 +10,7 @@
 
 #include "FileItem.h"
 #include "GameClientCallbacks.h"
+#include "GameClientFastForward.h"
 #include "GameClientInGameSaves.h"
 #include "GameClientProperties.h"
 #include "GameClientTranslator.h"
@@ -125,7 +126,8 @@ std::string NormalizeExtension(const std::string& strExtension)
 CGameClient::CGameClient(const ADDON::AddonInfoPtr& addonInfo)
   : CAddonDll(addonInfo, ADDON::AddonType::GAMEDLL),
     m_subsystems(CGameClientSubsystem::CreateSubsystems(*this, *m_ifc.game, m_critSection)),
-    m_bIsPlaying(false)
+    m_bIsPlaying(false),
+    m_fastForward(std::make_unique<CGameClientFastForward>())
 {
   using namespace ADDON;
 
@@ -215,6 +217,7 @@ bool CGameClient::Initialize(void)
   m_ifc.game->toKodi->CloseGame = cb_close_game;
   m_ifc.game->toKodi->ReportMissingFile = cb_report_missing_file;
   m_ifc.game->toKodi->GetPlaybackSpeed = cb_get_playback_speed;
+  m_ifc.game->toKodi->SetFastForwarding = cb_set_fast_forwarding;
   m_ifc.game->toKodi->SetGameTiming = cb_set_game_timing;
   m_ifc.game->toKodi->OpenStream = cb_open_stream;
   m_ifc.game->toKodi->StartStream = cb_start_stream;
@@ -245,6 +248,7 @@ bool CGameClient::Initialize(void)
   m_ifc.game->toKodi->RCOnLeaderboardScoreboard = cb_rc_on_leaderboard_scoreboard;
   m_ifc.game->toKodi->RCOnReset = cb_rc_on_reset;
   m_ifc.game->toKodi->RCOnSubsetCompleted = cb_rc_on_subset_completed;
+  m_ifc.game->toKodi->RCOnAchievementSets = cb_rc_on_achievement_sets;
 
   memset(m_ifc.game->toAddon, 0, sizeof(KodiToAddonFuncTable_Game));
 
@@ -347,16 +351,6 @@ bool CGameClient::OpenFile(const CFileItem& file,
 
   error = loadGame();
 
-  if (error != GAME_ERROR_NO_ERROR && SupportsDiscControl() && Discs().HasPersistedState())
-  {
-    CLog::Log(LOGWARNING,
-              "GameClient: Load with persisted disc hint failed; retrying original source media");
-    Streams().Deinitialize();
-    Streams().Initialize(streamManager);
-    Discs().Initialize(path, false);
-    error = loadGame();
-  }
-
   if (error != GAME_ERROR_NO_ERROR)
   {
     NotifyError(error);
@@ -437,42 +431,14 @@ bool CGameClient::InitializeGameplay(const std::string& gamePath,
                                      RETRO::IStreamManager& streamManager,
                                      IGameInputCallback* input)
 {
-  bool gameInfoLoaded = LoadGameInfo();
-  if (SupportsDiscControl() && Discs().HasPersistedState() &&
-      (!gameInfoLoaded || !Discs().RestoreDiscList()))
-  {
-    CLog::Log(
-        LOGWARNING,
-        "GameClient: Startup with persisted disc state failed; reloading original source media");
-    if (!UnloadGame() || gamePath.empty())
-      return false;
-
-    Streams().Deinitialize();
-    Streams().Initialize(streamManager);
-    Discs().Initialize(gamePath, false);
-    GAME_ERROR error = GAME_ERROR_FAILED;
-    try
-    {
-      CClientFrameScope hwScope(Streams());
-      if (hwScope.IsBound())
-        LogError(error = m_ifc.game->toAddon->LoadGame(m_ifc.game, gamePath.c_str()), "LoadGame()");
-    }
-    catch (...)
-    {
-      LogException("LoadGame()");
-    }
-    if (error != GAME_ERROR_NO_ERROR)
-      return false;
-    gameInfoLoaded = LoadGameInfo();
-  }
-
+  const bool gameInfoLoaded = LoadGameInfo();
   if (!gameInfoLoaded)
   {
     UnloadGame();
     return false;
   }
   if (SupportsDiscControl())
-    Discs().RefreshDiscStateLive();
+    Discs().RefreshDiscState();
 
   Input().Start(input);
 
@@ -480,9 +446,6 @@ bool CGameClient::InitializeGameplay(const std::string& gamePath,
   m_hasFrameRun = false;
   m_gamePath = gamePath;
   m_input = input;
-
-  if (SupportsDiscControl())
-    Discs().SaveDiscState();
 
   m_inGameSaves = std::make_unique<CGameClientInGameSaves>(this, m_ifc.game);
   m_inGameSaves->Load();
@@ -701,6 +664,7 @@ void CGameClient::CloseFile()
     m_gamePath.clear();
     m_serializeSize = 0;
     m_input = nullptr;
+    m_fastForward->Reset();
 
     Input().Stop();
 
@@ -921,12 +885,7 @@ RestoreResult CGameClient::Deserialize(const uint8_t* data,
   if (bSuccess && SupportsDiscControl())
   {
     bSuccess = Discs().RestoreDiscList();
-    if (discState)
-    {
-      if (bSuccess && previousDiscs)
-        Discs().SaveDiscState();
-    }
-    else if (bSuccess)
+    if (bSuccess && !discState)
       Discs().RefreshDiscState();
   }
 
@@ -1113,7 +1072,16 @@ double CGameClient::cb_get_playback_speed(KODI_HANDLE kodiInstance)
   if (!gameClient)
     return 0.0;
 
-  return gameClient->m_playbackSpeed;
+  return gameClient->m_fastForward->ClientSpeed(gameClient->m_playbackSpeed);
+}
+
+void CGameClient::cb_set_fast_forwarding(KODI_HANDLE kodiInstance, bool fastForward, double ratio)
+{
+  CGameClient* gameClient = static_cast<CGameClient*>(kodiInstance);
+  if (!gameClient)
+    return;
+
+  gameClient->m_fastForward->Request(fastForward, ratio, gameClient->m_playbackSpeed);
 }
 
 void CGameClient::cb_set_game_timing(KODI_HANDLE kodiInstance, const game_system_timing* timingInfo)
@@ -1445,6 +1413,16 @@ void CGameClient::cb_rc_on_subset_completed(KODI_HANDLE kodiInstance, const char
     return;
 
   gameClient->Cheevos().OnSubsetCompleted(title != nullptr ? title : "");
+}
+
+void CGameClient::cb_rc_on_achievement_sets(KODI_HANDLE kodiInstance,
+                                            const game_rc_achievement_sets* data)
+{
+  CGameClient* gameClient = static_cast<CGameClient*>(kodiInstance);
+  if (gameClient == nullptr || data == nullptr)
+    return;
+
+  gameClient->Cheevos().OnAchievementSets(*data);
 }
 
 std::pair<std::string, std::string> CGameClient::ParseLibretroName(const std::string& addonName)

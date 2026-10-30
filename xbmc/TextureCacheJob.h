@@ -82,7 +82,7 @@ public:
    \param url location of the image
    \return a hash string for this image
    */
-  bool CacheTexture(std::unique_ptr<CTexture>* texture = nullptr);
+  bool CacheTexture();
 
   static bool ResizeTexture(const std::string& url,
                             unsigned int height,

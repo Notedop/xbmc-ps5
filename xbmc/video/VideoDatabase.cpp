@@ -4852,8 +4852,8 @@ bool CVideoDatabase::GetStreamDetails(CVideoInfoTag& tag)
 
   bool retVal = false;
 
-  CStreamDetails& details = tag.m_streamDetails;
-  details.Reset();
+  // Filled locally and published once, so the GUI never sees the details empty or half filled
+  CStreamDetails details;
 
   std::unique_ptr<Dataset> pDS(m_pDB->CreateDataset());
   try
@@ -4873,10 +4873,11 @@ bool CVideoDatabase::GetStreamDetails(CVideoInfoTag& tag)
   {
     CLog::LogF(LOGERROR, "({}) failed", tag.m_iFileId);
   }
-  details.DetermineBestStreams();
+  // Assigning determines the best streams, which GetVideoDuration() reads
+  tag.m_streamDetails = details;
 
-  if (details.GetVideoDuration() > 0)
-    tag.SetDuration(details.GetVideoDuration());
+  if (const int duration{tag.m_streamDetails.GetVideoDuration()}; duration > 0)
+    tag.SetDuration(duration);
 
   return retVal;
 }
@@ -10484,6 +10485,7 @@ void CVideoDatabase::CleanDatabase(CGUIDialogProgressBarHandle* handle,
           {
             progress->Close();
             m_pDS2->close();
+            RollbackTransaction();
             CServiceBroker::GetAnnouncementManager()->Announce(ANNOUNCEMENT::VideoLibrary,
                                                                "OnCleanFinished");
             return;
@@ -11017,6 +11019,8 @@ void CVideoDatabase::CleanDatabase(CGUIDialogProgressBarHandle* handle,
       for (const auto& i : changedMovies)
         AnnounceUpdate(MediaTypeMovie, i);
     }
+    else
+      RollbackTransaction(); // No files to check, so nothing has been changed
   }
   catch (...)
   {

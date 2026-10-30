@@ -7,15 +7,19 @@
  */
 
 #include "utils/MemUtils.h"
+#include "utils/log.h"
 
+#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 
-#include <sys/types.h>
-
-#include <sys/sysctl.h>
+extern "C"
+{
+int sceKernelConfiguredFlexibleMemorySize(size_t* size);
+int sceKernelAvailableFlexibleMemorySize(size_t* size);
+}
 
 namespace KODI
 {
@@ -45,22 +49,26 @@ void GetMemoryStatus(MemoryStatus* buffer)
   if (!buffer)
     return;
 
-  // 16 GiB GDDR6 shared with the GPU. There is no public API for the budget a
-  // homebrew title is actually granted, so report physical memory when the
-  // kernel answers and a conservative figure otherwise. Kodi only uses this
-  // for the system-info screen and cache-size heuristics.
-  // Asked once: Kodi's GUI polls this several times a second, and a refused
-  // sysctl ("hw.physmem is not approved") is logged by the kernel every time.
-  static uint64_t physmem = 0;
-  if (physmem == 0)
+  *buffer = {};
+  size_t total = 0;
+  size_t available = 0;
+  const int totalResult = sceKernelConfiguredFlexibleMemorySize(&total);
+  const int availableResult = sceKernelAvailableFlexibleMemorySize(&available);
+  if (totalResult != 0 || availableResult != 0 || total == 0 || available > total)
   {
-    size_t len = sizeof(physmem);
-    if (sysctlbyname("hw.physmem", &physmem, &len, nullptr, 0) != 0 || physmem == 0)
-      physmem = 5ULL * 1024 * 1024 * 1024;
+    static std::atomic_flag logged = ATOMIC_FLAG_INIT;
+    if (!logged.test_and_set())
+      CLog::Log(LOGERROR,
+                "PS5 flexible-memory query failed: total status {:#x}, available status {:#x}, "
+                "total {}, available {}",
+                totalResult, availableResult, total, available);
+    return;
   }
 
-  buffer->totalPhys = physmem;
-  buffer->availPhys = physmem / 2; // TODO: derive from the process' actual allocation
+  // Flexible-memory budgets exclude the separate direct/graphics memory pool.
+  buffer->totalPhys = total;
+  buffer->availPhys = available;
+  buffer->memoryLoad = static_cast<unsigned int>((total - available) * 100 / total);
 }
 
 } // namespace MEMORY

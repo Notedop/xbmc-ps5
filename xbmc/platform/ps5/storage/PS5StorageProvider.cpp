@@ -7,11 +7,20 @@
  */
 
 #include "PS5StorageProvider.h"
+#include "PS5StorageUsage.h"
 
 #include "MediaSource.h"
+#include "ServiceBroker.h"
+#include "platform/Filesystem.h"
+#include "resources/LocalizeStrings.h"
+#include "resources/ResourcesComponent.h"
+#include "utils/StringUtils.h"
 #include "utils/log.h"
 
+#include <array>
 #include <cerrno>
+#include <cstdint>
+#include <utility>
 #include <sys/event.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
@@ -183,7 +192,7 @@ namespace
 // USB drives and extended storage appear here once the sandbox is open
 const char* const kRemovable[] = {"/mnt/usb0", "/mnt/usb1", "/mnt/usb2", "/mnt/usb3",
                                   "/mnt/usb4", "/mnt/usb5", "/mnt/usb6", "/mnt/usb7",
-                                  "/mnt/ext0", "/mnt/ext1"};
+                                  "/mnt/ext0", "/mnt/ext1", "/mnt/disc"};
 }
 
 void CPS5StorageProvider::GetRemovableDrives(std::vector<CMediaSource>& removableDrives)
@@ -252,7 +261,97 @@ bool CPS5StorageProvider::PumpDriveChangeEvents(IStorageEventsCallback* callback
 
 std::vector<std::string> CPS5StorageProvider::GetDiskUsage()
 {
-  // TODO: Report statfs capacity/free space for USB mounts; verify onboard/M.2 SSD mount
-  // mappings before labeling internal storage, and avoid counting the same filesystem twice.
-  return {};
+  const auto& localize = CServiceBroker::GetResourcesComponent().GetLocalizeStrings();
+  const auto size = [&localize](const std::optional<uint64_t>& bytes)
+  {
+    if (!bytes)
+      return localize.Get(10006);
+    if (*bytes == 0)
+      return std::string{"0 KB"};
+    constexpr std::array<const char*, 7> units = {"B", "KB", "MB", "GB", "TB", "PB", "EB"};
+    size_t unit = 0;
+    double value = static_cast<double>(*bytes);
+    while (value >= 1000.0 && unit + 1 < units.size())
+    {
+      value /= 1000.0;
+      ++unit;
+    }
+    if (unit == 0)
+      return StringUtils::Format("{} B", *bytes);
+    return StringUtils::Format("{:.{}f} {}", value, value >= 100.0 ? 1 : 2, units[unit]);
+  };
+  const auto internal = GetPS5InternalStorageUsage();
+  std::vector<std::string> result;
+  result.push_back(StringUtils::Format(
+      "{}: {} {}, {} {}", localize.Get(39220), localize.Get(20161), size(internal.total),
+      localize.Get(160), size(internal.free)));
+  for (const auto& [label, bytes] :
+       {std::make_pair(39222, internal.games), std::make_pair(39223, internal.media),
+        std::make_pair(39224, internal.savedData), std::make_pair(29921, internal.other)})
+  {
+    result.push_back(StringUtils::Format("[TABS]1[/TABS]{}: {} ({})", localize.Get(label), size(bytes),
+                                        localize.Get(20162)));
+  }
+
+  std::vector<CMediaSource> drives;
+  GetRemovableDrives(drives);
+  std::set<std::pair<int32_t, int32_t>> filesystems;
+  std::vector<std::string> external;
+  std::vector<std::string> usb;
+  std::vector<std::string> disc;
+  for (const auto& drive : drives)
+  {
+    const auto& path = drive.strPath;
+    struct statfs mountInfo{};
+    int status;
+    do
+    {
+      status = statfs(path.c_str(), &mountInfo);
+    } while (status == -1 && errno == EINTR);
+    if (status == -1)
+    {
+      const int error = errno;
+      CLog::Log(LOGERROR, "CPS5StorageProvider: statfs failed for {}: {} (errno {})", path,
+                std::strerror(error), error);
+      continue;
+    }
+
+    const std::string mountedOn(
+        mountInfo.f_mntonname, strnlen(mountInfo.f_mntonname, sizeof(mountInfo.f_mntonname)));
+    if (mountedOn != path)
+      continue;
+
+    const auto filesystem = std::make_pair(mountInfo.f_fsid.val[0], mountInfo.f_fsid.val[1]);
+    if (filesystems.count(filesystem))
+      continue;
+    filesystems.insert(filesystem);
+
+    auto label = path.substr(5);
+    StringUtils::ToUpper(label);
+    auto& section = StringUtils::StartsWith(path, "/mnt/ext") ? external
+                    : StringUtils::StartsWith(path, "/mnt/usb") ? usb : disc;
+    std::error_code ec;
+    const auto usage = KODI::PLATFORM::FILESYSTEM::space(path, ec);
+    if (ec || usage.free > usage.capacity)
+    {
+      CLog::Log(LOGERROR,
+                "CPS5StorageProvider: invalid/failed space query for {}: {}, capacity {}, free {}",
+                path, ec.message(), usage.capacity, usage.free);
+      section.push_back(StringUtils::Format("[TABS]1[/TABS]{}: {}", label, localize.Get(10006)));
+      continue;
+    }
+    section.push_back(StringUtils::Format(
+        "[TABS]1[/TABS]{}: {} {}, {} {}", label, localize.Get(20162),
+        size(usage.capacity - usage.free), localize.Get(160), size(usage.free)));
+  }
+  for (const auto& [label, section] :
+       {std::make_pair(39221, &external), std::make_pair(39225, &usb), std::make_pair(427, &disc)})
+  {
+    if (!section->empty())
+    {
+      result.push_back(localize.Get(label));
+      result.insert(result.end(), section->begin(), section->end());
+    }
+  }
+  return result;
 }

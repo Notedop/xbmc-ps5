@@ -25231,7 +25231,43 @@ msgctxt "#39219"
 msgid "Use the system Dolby Vision extensions to correctly display Dolby Vision profile 5, 7 (excludes FEL reconstruction), 8 and 10 video."
 msgstr ""
 
-#empty strings from id 39220 to 39899
+#. Internal console storage heading in System information
+#: xbmc/platform/ps5/storage/PS5StorageProvider.cpp
+msgctxt "#39220"
+msgid "Internal"
+msgstr ""
+
+#. Extended console storage heading in System information
+#: xbmc/platform/ps5/storage/PS5StorageProvider.cpp
+msgctxt "#39221"
+msgid "External"
+msgstr ""
+
+#. Internal console storage usage category
+#: xbmc/platform/ps5/storage/PS5StorageProvider.cpp
+msgctxt "#39222"
+msgid "Games and apps"
+msgstr ""
+
+#. Internal console storage usage category
+#: xbmc/platform/ps5/storage/PS5StorageProvider.cpp
+msgctxt "#39223"
+msgid "Media gallery"
+msgstr ""
+
+#. Internal console storage usage category
+#: xbmc/platform/ps5/storage/PS5StorageProvider.cpp
+msgctxt "#39224"
+msgid "Saved data"
+msgstr ""
+
+#. USB storage heading in System information
+#: xbmc/platform/ps5/storage/PS5StorageProvider.cpp
+msgctxt "#39225"
+msgid "USB"
+msgstr ""
+
+#empty strings from id 39226 to 39899
 
 #. List formatting: pattern used to join a list of exactly two items, e.g. "A and B"
 #. STR_LIST_AND_TWO

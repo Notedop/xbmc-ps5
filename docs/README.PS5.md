@@ -297,6 +297,68 @@ Selection and exclusions are recorded in
 and publication commands. Legacy `PS5_ADAPTIVE_TEST`, `PS5_ADDON_ELFS` and
 audio-decoder staging overrides are not supported.
 
+### PS5 controllers
+
+Controller input uses `CPeripheralBusPS5` and `CPS5InputBackend`, not synthetic
+keyboard events. The backend opens the standard pad port at index zero for each
+of up to four logged-in users. Logical user/port identities survive login-list
+reordering; failed opens are retried, and disconnect/logout/shutdown neutralize
+input and cancel owned vibration. Native handle access is serialized, and Kodi
+callbacks run outside the native backend lock. The existing peripheral event
+scanner processes bounded batches of up to 64 reports in order.
+
+The title must bundle the native `peripheral.joystick` mapping provider.
+Staging rejects a title without it and registers it as a required system add-on.
+Build it through the binary add-on catalogue before packaging.
+The bundled `game.controller.dualsense` profile supplies a controller image
+and PlayStation button labels without replacing Kodi's default profile.
+PS, Create and Mute are console-reserved and are not advertised as inputs.
+
+An absent Kodi or DualSense button map is seeded and saved automatically:
+Cross/Circle/Square/Triangle map to `a/b/x/y`, Options to `start`, touchpad click
+to `back`, with both sticks, analog triggers, D-pad and shoulder/thumb buttons.
+Duplicate digital trigger primitives are ignored during configuration. Existing
+maps are loaded first and are not overwritten. No first-start mapping prompt is
+needed for these seeded profiles. Optional remapping remains under
+**Settings > System > Input > Configure attached controllers**; configure the
+Kodi profile to change media-center bindings. The DualSense profile can be
+selected as the device's appearance or configured separately for game use.
+
+PS5 installs the tracked `xbmc/platform/ps5/input/joystick.xml` instead of the
+stock controller keymap. It was derived once from the keyboard bridge's actions
+and is maintained as ordinary XML, with no build-time generator. This preserves
+the bridge's window-specific actions
+(including Triangle/context menu, Square/info, Options/play-pause,
+L1/R1/page navigation, L2/R2/rewind-fast-forward, L3/player debug and R3/menu)
+without hardcoding actions in the driver. User action keymaps still take
+precedence. Kodi now handles direction/hold timing and analog deadzones; the
+right stick is available and controls volume by default. During the native IME,
+input and rumble are suppressed and both sticks/triggers must return to neutral
+before Kodi accepts further input.
+
+Owned handles support conventional two-motor rumble when the native vibration
+mode succeeds. Motor zero is the large/low-frequency motor; motor one is the
+small/high-frequency motor. Borrowed handles are input-only and are never closed
+or have their output mode changed. Adaptive triggers and audio-driven haptics
+are not implemented.
+
+The exposed device is named **PS5 standard controller**: the native standard-port
+report contract is known, but no product ID/serial-number ABI is assumed.
+DualSense is its default appearance, not proof of physical device enumeration.
+Nonstandard ports, the Sony Media Remote, physical keyboard/mouse adapters and
+private HID ioctls are not enabled by this implementation.
+
+Run `python3 tools/ps5/test-controller-input.py` for focused host sanitizer
+regressions and controller data checks,
+then use the normal PS5 configure/build/package workflow. The controller PNGs
+are stored directly in the profile; there is no artwork generation step.
+Host tests and a signed package do not establish console report-queue semantics
+or hardware acceptance. Check startup/reconnection, optional remapping, IME
+closure and rumble on the console after user-controlled deployment.
+Set `PS5_CONTROLLER_PACKAGE` to a completed title ZIP when running the controller
+tests to also check its actual action keymap, required provider/profile and
+controller artwork.
+
 ## 5. Runtime debugging
 
 Startup requires sandbox escape. Writable data lives under

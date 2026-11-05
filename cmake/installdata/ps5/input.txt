@@ -1,0 +1,1 @@
+xbmc/platform/ps5/input/joystick.xml system/keymaps

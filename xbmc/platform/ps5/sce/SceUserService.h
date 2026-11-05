@@ -10,7 +10,7 @@
 
 /*
  * Clean-room declarations for libSceUserService. A controller is bound to a
- * logged-in user, so pads are opened per user id (see input/PS5PadInput.cpp).
+ * logged-in user, so pads are opened per user id (see input/PS5InputBackend.cpp).
  */
 
 #include <cstddef>

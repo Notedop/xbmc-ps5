@@ -24,6 +24,8 @@ Other platforms never see these patches.
 
 | Add-on | Patch | Purpose | Upstream |
 |---|---|---|---|
+| peripheral.joystick | 0001-native-buttonmap-provider | retain upstream mapping/storage while Kodi's native bus owns PS5 enumeration, events and rumble; omit Linux driver settings | PS5-only |
+| peripheral.joystick | 0002-use-kodi-logging | omit the unused syslog sink whose `closelog` symbol is unavailable in native imports; retain Kodi and console logging | PS5-only |
 | asap | 0001-readtag-free-player-on-load-failure | free the player when a tag read is rejected | yes |
 | dumb | 0001-include-stdint | `dumb.h` needs `<stdint.h>` with the SDK libc | yes |
 | dumb | 0002-fix-double-free-on-open-failure | buffer was freed twice when DUMB rejects a file | yes |

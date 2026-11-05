@@ -474,6 +474,8 @@ bool CPeripheralJoystick::SetMotorState(unsigned int motorIndex, float magnitude
       bHandled = addonBus->SendRumbleEvent(m_strLocation, motorIndex, magnitude);
     }
   }
+  else if (m_bus)
+    bHandled = m_bus->SetMotorState(m_strLocation, motorIndex, magnitude);
   return bHandled;
 }
 

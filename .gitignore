@@ -119,6 +119,8 @@ cmake_install.cmake
 /addons/pvr.*
 /addons/peripheral.*
 /addons/game.*
+!/addons/game.controller.dualsense/
+!/addons/game.controller.dualsense/**
 /addons/kodi.binary.global.audioengine/addon.xml
 /addons/kodi.binary.global.filesystem/addon.xml
 /addons/kodi.binary.global.general/addon.xml

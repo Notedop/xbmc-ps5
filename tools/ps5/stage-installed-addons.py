@@ -85,6 +85,10 @@ def discover(prefixes, exclusions, audio_ids=None, include=(), catalogue=None, s
 def stage(selected, destination, catalogue=None, bundled_only=False):
     if bundled_only and catalogue is None:
         raise ValueError("bundled-only staging requires a catalogue")
+    if (bundled_only and catalogue["addons"].get("peripheral.joystick", {}).get("bundled")
+            and not any(entry[0] == "peripheral.joystick" for entry in selected)):
+        raise ValueError("PS5 controller support requires installed peripheral.joystick; "
+                         "build --only peripheral.joystick before packaging the title")
     if catalogue is not None:
         from addon_catalogue import prepare_manifest
         manifests = {}
@@ -143,6 +147,17 @@ def stage_system_addons(source, destination, *, bunny_diagnostic=False):
             continue
         if not entries:
             ET.SubElement(root, "addon").text = addon
+        else:
+            entries[0].attrib.pop("optional", None)
+            for duplicate in entries[1:]:
+                root.remove(duplicate)
+    provider = destination / "addons/peripheral.joystick"
+    if provider.exists():
+        native_installed(provider, destination.parents[1])
+        entries = [entry for entry in root.findall("addon")
+                   if (entry.text or "").strip() == "peripheral.joystick"]
+        if not entries:
+            ET.SubElement(root, "addon").text = "peripheral.joystick"
         else:
             entries[0].attrib.pop("optional", None)
             for duplicate in entries[1:]:

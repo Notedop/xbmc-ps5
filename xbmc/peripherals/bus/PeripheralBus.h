@@ -200,6 +200,11 @@ public:
    */
   virtual void PowerOff(const std::string& strLocation) {}
 
+  virtual bool SetMotorState(const std::string& location, unsigned int motorIndex, float magnitude)
+  {
+    return false;
+  }
+
 protected:
   void Process(void) override;
   virtual bool ScanForDevices(void);

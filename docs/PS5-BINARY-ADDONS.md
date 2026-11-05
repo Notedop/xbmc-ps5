@@ -124,7 +124,19 @@ pass its recorded install prefixes. Invalid explicit roots, duplicate IDs and
 unsafe binaries fail.
 
 Only catalogue entries with `bundled: true` enter the title. Adaptive is bundled;
-the Bunny DASH diagnostic is opt-in via `PS5_BUNNY_DIAGNOSTIC=1` and requires
+`peripheral.joystick` is also bundled and registered as a required system add-on
+in PS5 title stages, so Kodi enables its button-map provider at startup. Title
+packaging fails if this required bundled provider has not been built/installed.
+Its upstream appearance, mapping and persistent button-map storage are retained;
+the native Kodi PS5 peripheral bus owns controller enumeration, events and
+rumble. The add-on has no PS5 device enumerator and advertises only button maps,
+not joystick input. Linux driver settings are omitted. Build it independently:
+
+```sh
+python3 tools/ps5/addon-repository.py build --only peripheral.joystick --jobs 4
+```
+
+The Bunny DASH diagnostic is opt-in via `PS5_BUNNY_DIAGNOSTIC=1` and requires
 staged native Adaptive. It is not a catalogue binary. The native
 loader smoke sample remains opt-in via `PS5_TEST_BINARY_ADDON=1`.
 Legacy `PS5_ADDON_ELFS`, `PS5_AUDIO_DECODERS` and `PS5_ADAPTIVE_TEST` are rejected.
@@ -140,6 +152,7 @@ explicitly to `package --title-app`; do not reuse an old `ps5-stage`.
 | `repository.ps5` | Shipped, registered, enabled and official; stable feed |
 | `repository.ps5.testing` | Shipped but not enabled on first discovery; opt-in testing feed |
 | `resource.ps5.addon-runtime` | Required title-owned system marker; not a downloadable runtime upgrade |
+| `peripheral.joystick` | Required bundled upstream button-map provider; native PS5 bus owns input and rumble |
 
 Enable testing through **My add-ons > Add-on repository > Kodi PS5 Testing
 Add-ons**. Existing enable/disable choices are preserved. Testing does not become

@@ -1,0 +1,24 @@
+Use Kodi's logger instead of probing the unused system syslog sink on PS5.
+
+The SDK has syslog.h, but native linking fails with undefined symbol closelog
+from LogSyslog.cpp. The add-on routes logs to CLogAddon at startup and CLogConsole
+on teardown; its system syslog sink is not used. Disable that optional sink on
+PS5 rather than inventing a native import or exposing a libc replacement.
+
+Upstream: PS5-only.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -119,7 +119,11 @@
+   list(APPEND JOYSTICK_HEADERS src/utils/windows/CharsetConverter.h)
+ endif()
+ 
+-check_include_files("syslog.h" HAVE_SYSLOG)
++if(CORE_PLATFORM_NAME STREQUAL ps5)
++  set(HAVE_SYSLOG FALSE)
++else()
++  check_include_files("syslog.h" HAVE_SYSLOG)
++endif()
+ 
+ if(HAVE_SYSLOG)
+   list(APPEND JOYSTICK_SOURCES src/log/LogSyslog.cpp)

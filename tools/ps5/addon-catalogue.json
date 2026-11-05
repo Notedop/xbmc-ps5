@@ -2,6 +2,10 @@
   "schema": 1,
   "runtime": "piers-ps5-1",
   "targets": {
+    "peripheral.joystick": {
+      "url": "https://github.com/xbmc/peripheral.joystick", "ref": "Piers",
+      "addons": {"peripheral.joystick": {"bundled": true, "channel": "testing", "revision": 1}}
+    },
     "inputstream.adaptive": {
       "url": "https://github.com/xbmc/inputstream.adaptive", "ref": "Piers",
       "addons": {"inputstream.adaptive": {"bundled": true, "channel": "testing", "revision": 2}}

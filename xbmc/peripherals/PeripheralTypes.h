@@ -44,6 +44,9 @@ enum PeripheralBusType
 #if defined(TARGET_DARWIN)
   PERIPHERAL_BUS_GCCONTROLLER,
 #endif
+#if defined(TARGET_PS5)
+  PERIPHERAL_BUS_PS5,
+#endif
   PERIPHERAL_BUS_APPLICATION,
 };
 
@@ -218,6 +221,10 @@ public:
       case PERIPHERAL_BUS_GCCONTROLLER:
         return "darwin_gccontroller";
 #endif
+#if defined(TARGET_PS5)
+      case PERIPHERAL_BUS_PS5:
+        return "ps5";
+#endif
       case PERIPHERAL_BUS_APPLICATION:
         return "application";
       default:
@@ -245,6 +252,10 @@ public:
 #if defined(TARGET_DARWIN)
     else if (strTypeLowerCase == "darwin_gccontroller")
       return PERIPHERAL_BUS_GCCONTROLLER;
+#endif
+#if defined(TARGET_PS5)
+    else if (strTypeLowerCase == "ps5")
+      return PERIPHERAL_BUS_PS5;
 #endif
     else if (strTypeLowerCase == "application")
       return PERIPHERAL_BUS_APPLICATION;

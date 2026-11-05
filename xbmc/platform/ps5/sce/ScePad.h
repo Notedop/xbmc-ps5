@@ -26,6 +26,7 @@ extern "C"
   int scePadGetHandle(int userId, int type, int index);
   int scePadClose(int handle);
   int scePadReadState(int handle, void* data);
+  int scePadRead(int handle, void* data, int count);
   int scePadSetLightBar(int handle, const void* color);
   int scePadSetVibrationMode(int handle, int mode);
   int scePadSetVibration(int handle, const void* vibration);

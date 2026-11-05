@@ -109,6 +109,13 @@ class InstalledAddons(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires a catalogue"):
             staging.stage([], self.root / "out", bundled_only=True)
 
+    def test_required_joystick_provider_must_be_installed(self):
+        catalogue = self.catalogue("peripheral.joystick")
+        catalogue["addons"]["peripheral.joystick"]["bundled"] = True
+        output = self.root / "out"
+        with self.assertRaisesRegex(ValueError, "requires installed peripheral.joystick"):
+            staging.stage([], output, catalogue=catalogue, bundled_only=True)
+
     def test_versionless_manifest_remains_legacy_only(self):
         prefix, data, _ = self.install()
         manifest = data / "addon.xml"

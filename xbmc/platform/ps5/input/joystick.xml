@@ -1,0 +1,320 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- PS5 media-center actions, initially derived from the keyboard bridge. -->
+<!-- Installed in place of the stock joystick.xml on PS5 only. -->
+<keymap>
+  <global>
+    <joystick profile="game.controller.default">
+      <righttrigger>FastForward</righttrigger>
+      <lefttrigger>Rewind</lefttrigger>
+      <left>Left</left>
+      <right>Right</right>
+      <up>Up</up>
+      <down>Down</down>
+      <leftbumper>PageUp</leftbumper>
+      <rightbumper>PageDown</rightbumper>
+      <a>Select</a>
+      <b>Back</b>
+      <rightthumb>Menu</rightthumb>
+      <back>PreviousMenu</back>
+      <x>Info</x>
+      <y>ContextMenu</y>
+      <start>PlayPause</start>
+      <leftstick direction="up">Up</leftstick>
+      <leftstick direction="right">Right</leftstick>
+      <leftstick direction="down">Down</leftstick>
+      <leftstick direction="left">Left</leftstick>
+      <rightstick direction="left">VolumeDown</rightstick>
+      <rightstick direction="right">VolumeUp</rightstick>
+      <rightstick direction="up">VolumeUp</rightstick>
+      <rightstick direction="down">VolumeDown</rightstick>
+    </joystick>
+  </global>
+  <Home>
+    <joystick profile="game.controller.default">
+      <x>info</x>
+    </joystick>
+  </Home>
+  <VirtualKeyboard>
+    <joystick profile="game.controller.default">
+      <left>Left</left>
+      <right>Right</right>
+      <up>Up</up>
+      <down>Down</down>
+      <a>Select</a>
+      <b>Backspace</b>
+      <start>VoiceRecognizer</start>
+      <leftstick direction="up">Up</leftstick>
+      <leftstick direction="right">Right</leftstick>
+      <leftstick direction="down">Down</leftstick>
+      <leftstick direction="left">Left</leftstick>
+    </joystick>
+  </VirtualKeyboard>
+  <TVRecordings>
+    <joystick profile="game.controller.default">
+      <lefttrigger>Rename</lefttrigger>
+    </joystick>
+  </TVRecordings>
+  <TVTimers>
+    <joystick profile="game.controller.default">
+      <lefttrigger>Rename</lefttrigger>
+    </joystick>
+  </TVTimers>
+  <TVTimerRules>
+    <joystick profile="game.controller.default">
+      <lefttrigger>Rename</lefttrigger>
+    </joystick>
+  </TVTimerRules>
+  <RadioRecordings>
+    <joystick profile="game.controller.default">
+      <lefttrigger>Rename</lefttrigger>
+    </joystick>
+  </RadioRecordings>
+  <RadioTimers>
+    <joystick profile="game.controller.default">
+      <lefttrigger>Rename</lefttrigger>
+    </joystick>
+  </RadioTimers>
+  <RadioTimerRules>
+    <joystick profile="game.controller.default">
+      <lefttrigger>Rename</lefttrigger>
+    </joystick>
+  </RadioTimerRules>
+  <FileManager>
+    <joystick profile="game.controller.default">
+      <rightthumb>Move</rightthumb>
+      <lefttrigger>Rename</lefttrigger>
+    </joystick>
+  </FileManager>
+  <FullscreenVideo>
+    <joystick profile="game.controller.default">
+      <righttrigger>FastForward</righttrigger>
+      <lefttrigger>Rewind</lefttrigger>
+      <b>Fullscreen</b>
+      <a>OSD</a>
+      <rightthumb>OSD</rightthumb>
+      <x>Info</x>
+      <leftthumb>PlayerDebug</leftthumb>
+      <left>StepBack</left>
+      <right>StepForward</right>
+      <up>ChapterOrBigStepForward</up>
+      <down>ChapterOrBigStepBack</down>
+      <back>Fullscreen</back>
+      <y>Playlist</y>
+      <leftbumper>SkipNext</leftbumper>
+      <rightbumper>SkipPrevious</rightbumper>
+      <leftstick direction="up">ChapterOrBigStepForward</leftstick>
+      <leftstick direction="right">StepForward</leftstick>
+      <leftstick direction="down">ChapterOrBigStepBack</leftstick>
+      <leftstick direction="left">StepBack</leftstick>
+    </joystick>
+  </FullscreenVideo>
+  <FullscreenGame>
+    <joystick profile="game.controller.default">
+      <righttrigger>FastForward</righttrigger>
+      <lefttrigger>Rewind</lefttrigger>
+      <b>OSD</b>
+      <a>OSD</a>
+      <rightthumb>OSD</rightthumb>
+      <x>Info</x>
+      <back>OSD</back>
+    </joystick>
+  </FullscreenGame>
+  <GameOSD>
+    <joystick profile="game.controller.default">
+      <rightthumb>OSD</rightthumb>
+    </joystick>
+  </GameOSD>
+  <VideoTimeSeek>
+    <joystick profile="game.controller.default">
+      <a>Select</a>
+    </joystick>
+  </VideoTimeSeek>
+  <FullscreenInfo>
+    <joystick profile="game.controller.default">
+      <righttrigger>FastForward</righttrigger>
+      <lefttrigger>Rewind</lefttrigger>
+      <x>Back</x>
+      <rightthumb>OSD</rightthumb>
+    </joystick>
+  </FullscreenInfo>
+  <Visualisation>
+    <joystick profile="game.controller.default">
+      <righttrigger>FastForward</righttrigger>
+      <lefttrigger>Rewind</lefttrigger>
+      <leftbumper>IncreaseRating</leftbumper>
+      <rightbumper>DecreaseRating</rightbumper>
+      <b>Fullscreen</b>
+      <a>OSD</a>
+      <rightthumb>OSD</rightthumb>
+      <x>Info</x>
+      <left>StepBack</left>
+      <right>StepForward</right>
+      <up>SkipNext</up>
+      <down>SkipPrevious</down>
+      <back>FullScreen</back>
+      <leftstick direction="up">SkipNext</leftstick>
+      <leftstick direction="right">StepForward</leftstick>
+      <leftstick direction="down">SkipPrevious</leftstick>
+      <leftstick direction="left">StepBack</leftstick>
+    </joystick>
+  </Visualisation>
+  <MusicOSD>
+    <joystick profile="game.controller.default">
+      <righttrigger>FastForward</righttrigger>
+      <lefttrigger>Rewind</lefttrigger>
+      <rightthumb>Back</rightthumb>
+      <x>Info</x>
+    </joystick>
+  </MusicOSD>
+  <VisualisationPresetList>
+    <joystick profile="game.controller.default">
+      <righttrigger>FastForward</righttrigger>
+      <lefttrigger>Rewind</lefttrigger>
+      <rightthumb>Back</rightthumb>
+      <x>Info</x>
+    </joystick>
+  </VisualisationPresetList>
+  <SlideShow>
+    <joystick profile="game.controller.default">
+      <x>Info</x>
+      <a>Rotate</a>
+      <lefttrigger>Rotate</lefttrigger>
+    </joystick>
+  </SlideShow>
+  <ScreenCalibration>
+    <joystick profile="game.controller.default">
+      <a>NextCalibration</a>
+      <lefttrigger>NextResolution</lefttrigger>
+    </joystick>
+  </ScreenCalibration>
+  <ScreenCalibration>
+    <joystick profile="game.controller.default">
+      <a>NextCalibration</a>
+    </joystick>
+  </ScreenCalibration>
+  <VideoOSD>
+    <joystick profile="game.controller.default">
+      <rightthumb>Back</rightthumb>
+      <x>Info</x>
+    </joystick>
+  </VideoOSD>
+  <VideoMenu>
+    <joystick profile="game.controller.default">
+      <rightthumb>OSD</rightthumb>
+      <x>Info</x>
+      <back>Fullscreen</back>
+      <a>Select</a>
+      <leftbumper>SkipNext</leftbumper>
+      <rightbumper>SkipPrevious</rightbumper>
+    </joystick>
+  </VideoMenu>
+  <OSDVideoSettings>
+    <joystick profile="game.controller.default">
+      <x>Info</x>
+    </joystick>
+  </OSDVideoSettings>
+  <OSDAudioSettings>
+    <joystick profile="game.controller.default">
+      <x>Info</x>
+    </joystick>
+  </OSDAudioSettings>
+  <ContextMenu>
+    <joystick profile="game.controller.default">
+      <y>Back</y>
+    </joystick>
+  </ContextMenu>
+  <MusicInformation>
+    <joystick profile="game.controller.default">
+      <x>Back</x>
+    </joystick>
+  </MusicInformation>
+  <MovieInformation>
+    <joystick profile="game.controller.default">
+      <x>Back</x>
+    </joystick>
+  </MovieInformation>
+  <PictureInfo>
+    <joystick profile="game.controller.default">
+      <x>Back</x>
+    </joystick>
+  </PictureInfo>
+  <NumericInput>
+    <joystick profile="game.controller.default">
+      <b>Close</b>
+    </joystick>
+  </NumericInput>
+  <FullscreenLiveTV>
+    <joystick profile="game.controller.default">
+      <left>StepBack</left>
+      <right>StepForward</right>
+      <up>Up</up>
+      <down>Down</down>
+      <a>OSD</a>
+      <y>ActivateWindow(PVROSDChannels)</y>
+      <leftbumper>ChannelUp</leftbumper>
+      <rightbumper>ChannelDown</rightbumper>
+      <leftstick direction="up">Up</leftstick>
+      <leftstick direction="right">StepForward</leftstick>
+      <leftstick direction="down">Down</leftstick>
+      <leftstick direction="left">StepBack</leftstick>
+    </joystick>
+  </FullscreenLiveTV>
+  <FullscreenRadio>
+    <joystick profile="game.controller.default">
+      <left>StepBack</left>
+      <right>StepForward</right>
+      <up>Up</up>
+      <down>Down</down>
+      <a>OSD</a>
+      <y>ActivateWindow(PVROSDChannels)</y>
+      <leftbumper>ChannelUp</leftbumper>
+      <rightbumper>ChannelDown</rightbumper>
+      <leftstick direction="up">Up</leftstick>
+      <leftstick direction="right">StepForward</leftstick>
+      <leftstick direction="down">Down</leftstick>
+      <leftstick direction="left">StepBack</leftstick>
+    </joystick>
+  </FullscreenRadio>
+  <FullscreenLiveTvPreview>
+    <joystick profile="game.controller.default">
+      <a>Select</a>
+    </joystick>
+  </FullscreenLiveTvPreview>
+  <FullscreenRadioPreview>
+    <joystick profile="game.controller.default">
+      <a>Select</a>
+    </joystick>
+  </FullscreenRadioPreview>
+  <FullscreenLiveTvInput>
+    <joystick profile="game.controller.default">
+      <a>Select</a>
+    </joystick>
+  </FullscreenLiveTvInput>
+  <FullscreenRadioInput>
+    <joystick profile="game.controller.default">
+      <a>Select</a>
+    </joystick>
+  </FullscreenRadioInput>
+  <PVROSDChannels>
+    <joystick profile="game.controller.default">
+      <b>Close</b>
+      <back>Close</back>
+    </joystick>
+  </PVROSDChannels>
+  <PVRChannelGuide>
+    <joystick profile="game.controller.default">
+      <b>Close</b>
+      <back>Close</back>
+    </joystick>
+  </PVRChannelGuide>
+  <PVRSettings>
+    <joystick profile="game.controller.default">
+      <b>PreviousMenu</b>
+    </joystick>
+  </PVRSettings>
+  <AddonInformation>
+    <joystick profile="game.controller.default">
+      <x>Back</x>
+    </joystick>
+  </AddonInformation>
+</keymap>

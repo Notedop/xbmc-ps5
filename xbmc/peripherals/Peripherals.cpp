@@ -24,6 +24,8 @@
 #include "platform/android/peripherals/PeripheralBusAndroid.h"
 #elif defined(TARGET_DARWIN)
 #include "platform/darwin/peripherals/PeripheralBusGCController.h"
+#elif defined(TARGET_PS5)
+#include "platform/ps5/input/PeripheralBusPS5.h"
 #endif
 #include "FileItem.h"
 #include "GUIUserMessages.h"
@@ -126,6 +128,8 @@ void CPeripherals::Initialise()
   busses.push_back(std::make_shared<CPeripheralBusAndroid>(*this));
 #elif defined(TARGET_DARWIN)
   busses.push_back(std::make_shared<CPeripheralBusGCController>(*this));
+#elif defined(TARGET_PS5)
+  busses.push_back(std::make_shared<CPeripheralBusPS5>(*this));
 #endif
   busses.push_back(std::make_shared<CPeripheralBusApplication>(*this));
 

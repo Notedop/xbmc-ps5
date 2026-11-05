@@ -850,5 +850,61 @@ class SidplayConfigureTests(unittest.TestCase):
             self.assertEqual(flags["CONFIG_SITE"], environment["CONFIG_SITE"])
 
 
+class PeripheralJoystickConfigureTests(unittest.TestCase):
+    def test_native_bus_provider_configuration(self):
+        root = Path(__file__).resolve().parents[2]
+        if not all(shutil.which(tool) for tool in ("cmake", "cc", "c++", "patch")):
+            self.skipTest("CMake, host C/C++ compilers and patch required")
+        cached = None
+        for relative in ("build/ps5-addon-repository/work",
+                         "build/ps5-provider-repository/work"):
+            work = root / relative
+            lock = work / "source-lock.json"
+            if lock.is_file():
+                entry = json.loads(lock.read_text())["targets"].get("peripheral.joystick")
+                if entry:
+                    candidate = work / "sources/peripheral.joystick" / entry["sha"]
+                    if candidate.is_dir():
+                        cached = candidate
+                        break
+        if cached is None:
+            self.skipTest("locked peripheral.joystick source cache required")
+        with tempfile.TemporaryDirectory(prefix="test-joystick-provider-",
+                                         dir=root / "build") as temporary:
+            directory = Path(temporary)
+            source = directory / "source"
+            shutil.copytree(cached, source)
+
+            def run(*command):
+                result = subprocess.run(list(map(str, command)), text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            run("cmake", "-DSOURCE_DIR=" + str(source),
+                "-DSERIES_DIR=" + str(root / "tools/ps5/patches/addons/peripheral.joystick"),
+                "-P", root / "tools/ps5/apply-patch-series.cmake")
+            modules = directory / "modules"
+            modules.mkdir()
+            (modules / "FindKodi.cmake").write_text(
+                "set(Kodi_FOUND TRUE)\n"
+                "function(build_addon)\n"
+                "  configure_file(peripheral.joystick/addon.xml.in addon.xml @ONLY)\n"
+                "  get_directory_property(definitions COMPILE_DEFINITIONS)\n"
+                '  file(WRITE "${CMAKE_BINARY_DIR}/definitions.txt" "${definitions}")\n'
+                '  file(WRITE "${CMAKE_BINARY_DIR}/sources.txt" "${JOYSTICK_SOURCES}")\n'
+                "endfunction()\n")
+            (modules / "FindTinyXML2.cmake").write_text(
+                "set(TinyXML2_FOUND TRUE)\nadd_library(tinyxml2::tinyxml2 INTERFACE IMPORTED)\n")
+            binary = directory / "build"
+            run("cmake", "-S", source, "-B", binary,
+                "-DCMAKE_MODULE_PATH=" + str(modules),
+                "-DCORE_SYSTEM_NAME=freebsd", "-DCORE_PLATFORM_NAME=ps5")
+            extension = addon_build.ET.parse(binary / "addon.xml").getroot().find(
+                "./extension[@point='kodi.peripheral']")
+            self.assertEqual((extension.get("provides_joysticks"),
+                              extension.get("provides_buttonmaps")), ("false", "true"))
+            self.assertIn("PS5_BUTTONMAP_PROVIDER", (binary / "definitions.txt").read_text())
+            self.assertNotIn("src/log/LogSyslog.cpp", (binary / "sources.txt").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

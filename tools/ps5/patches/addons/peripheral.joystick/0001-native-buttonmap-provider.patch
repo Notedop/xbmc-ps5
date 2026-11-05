@@ -1,0 +1,60 @@
+Use upstream button-map storage without an add-on-owned PS5 device enumerator.
+
+Kodi's native PS5 peripheral bus owns device scanning, events and rumble.
+The add-on supplies upstream mapping, appearance and persistence callbacks only.
+The native addon toolchain identifies PS5 with CORE_PLATFORM_NAME, while its
+CORE_SYSTEM_NAME is freebsd. Do not advertise joystick enumeration or display
+Linux driver settings on this platform.
+
+Upstream: PS5-only.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -12,6 +12,13 @@
+ 
+ include_directories(${PROJECT_SOURCE_DIR}/src
+                     ${KODI_INCLUDE_DIR}/..) # Hack way with "/..", need bigger Kodi cmake rework to match right include ways (becomes done in future)
++
++set(PROVIDES_JOYSTICKS true)
++if(CORE_PLATFORM_NAME STREQUAL ps5)
++  set(PROVIDES_JOYSTICKS false)
++  add_definitions(-DPS5_BUTTONMAP_PROVIDER)
++endif()
++
+ 
+ set(JOYSTICK_SOURCES src/addon.cpp
+                      src/api/IJoystickInterface.cpp
+@@ -277,7 +284,7 @@
+   endif()
+ elseif(CORE_SYSTEM_NAME STREQUAL osx)
+   set(OSX_SELECT "${OSX_SELECT_LINE}")
+-else()
++elseif(NOT CORE_PLATFORM_NAME STREQUAL ps5)
+   if(SDL2_FOUND)
+     set(SDL_SELECT "${SDL_SELECT_LINE}")
+   else()
+--- a/src/addon.cpp
++++ b/src/addon.cpp
+@@ -68,7 +68,11 @@
+ 
+ void CPeripheralJoystick::GetCapabilities(kodi::addon::PeripheralCapabilities& capabilities)
+ {
++#if defined(PS5_BUTTONMAP_PROVIDER)
++  capabilities.SetProvidesJoysticks(false);
++#else
+   capabilities.SetProvidesJoysticks(true);
++#endif
+   capabilities.SetProvidesButtonmaps(true);
+ }
+ 
+--- a/peripheral.joystick/addon.xml.in
++++ b/peripheral.joystick/addon.xml.in
+@@ -7,7 +7,7 @@
+   <requires>@ADDON_DEPENDS@</requires>
+   <extension
+     point="kodi.peripheral"
+-    provides_joysticks="true"
++    provides_joysticks="@PROVIDES_JOYSTICKS@"
+     provides_buttonmaps="true"
+     library_@PLATFORM@="@LIBRARY_FILENAME@"/>
+   <extension point="xbmc.addon.metadata">

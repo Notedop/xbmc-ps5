@@ -21,11 +21,6 @@
 
 class IDispResource;
 
-namespace KODI::PLATFORM::PS5
-{
-class CPadInput;
-}
-
 namespace KODI::WINDOWING::PS5
 {
 
@@ -34,8 +29,8 @@ namespace KODI::WINDOWING::PS5
  *
  * The console has one output whose geometry is fixed by the ps5-opengl SDK
  * build profile (1080p60, 1440p120 or 4K120): no windowed mode, no cursor,
- * no screensaver, no runtime mode switching. Input is pushed straight into
- * the application port by the pad thread, so MessagePump() has nothing to do.
+ * no screensaver, no runtime mode switching. Controller input is handled by
+ * the peripheral event scanner, so MessagePump() has nothing to do.
  */
 class CWinSystemPS5 : public CWinSystemBase
 {
@@ -139,7 +134,6 @@ protected:
   CCriticalSection m_resourceSection;
   std::vector<IDispResource*> m_resources;
 
-  std::unique_ptr<KODI::PLATFORM::PS5::CPadInput> m_padInput;
 };
 
 } // namespace KODI::WINDOWING::PS5

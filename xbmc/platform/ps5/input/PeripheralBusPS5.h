@@ -25,6 +25,11 @@ public:
   explicit CPeripheralBusPS5(CPeripherals& manager);
   ~CPeripheralBusPS5() override;
 
+  bool SupportsFeature(PeripheralFeature feature) const override
+  {
+    return feature == FEATURE_JOYSTICK || feature == FEATURE_RUMBLE;
+  }
+
   bool InitializeProperties(CPeripheral& peripheral) override;
   bool InitializeButtonMap(const CPeripheral& peripheral,
                            KODI::JOYSTICK::IButtonMap& buttonMap) const override;

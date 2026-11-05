@@ -13,6 +13,7 @@
 #include "platform/ps5/BuildStamp.h"
 #include "platform/ps5/SandboxPS5.h"
 #include "platform/ps5/input/PS5ImeDialog.h"
+#include "platform/ps5/storage/PS5StorageUsage.h"
 #include "platform/ps5/video/VideoDec2.h"
 #include "platform/xbmc.h"
 
@@ -266,11 +267,13 @@ int main(int argc, char* argv[])
         KODI::PLATFORM::PS5::AppDirectory appDirectory;
         if (!appDirectory.IsValid())
             return ExitRequest(EXIT_FAILURE);
-        // Module loads require the original sandbox, before the jailbreak request.
+        // Activate these modules in the original title sandbox.
         KODI::PLATFORM::PS5::CVideoDec2::LoadModule();
         KODI::PLATFORM::PS5::CPS5ImeDialog::Preload();
+        PreloadPS5UsbStorage();
         if (!OpenSandbox())
             return ExitRequest(EXIT_FAILURE);
+        PreloadPS5InternalStorageModules();
         if (!appDirectory.Resolve(title))
             return ExitRequest(EXIT_FAILURE);
     }

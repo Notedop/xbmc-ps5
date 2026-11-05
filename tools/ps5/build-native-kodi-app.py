@@ -102,6 +102,8 @@ def providers(app, sdk, inputs):
     declared = {}
     for path in manifests:
         data = native.load_provider(path)
+        data = native.with_symbol_libraries(
+            data, inputs.get("symbol_libraries", {}).get(data["module"], {}))
         require(data["soname"] not in declared, "duplicate provider SONAME")
         library = file_path(path.parent, data["import_library"]["path"])
         require(library.is_relative_to(path.parent), "provider library escapes manifest directory")
@@ -114,6 +116,8 @@ def providers(app, sdk, inputs):
                 f"staged provider identity mismatch: {identity['soname']}")
         ordered.append(item)
     require(not declared, f"unused provider declarations: {sorted(declared)}")
+    require(set(inputs.get("symbol_libraries", {})) <= {p[2]["module"] for p in ordered},
+            "symbol library declarations reference an undeclared provider")
     require([p[2]["module"] for p in ordered[:2]] == ["libkodi-runtime", "libkodi-gl"],
             "core and GL providers must lead provider order")
     wraps = inputs["wrap_symbols"]
@@ -421,7 +425,7 @@ def _build(app, sdk, native_tool, output, log):
     require(needed == [p["soname"] for p in selected], "provider dependency order changed")
     converted.write_bytes(native.convert(linked_bytes, MODULE, selected, process_lifetime=True))
     exports, ownership = runtime.prove_provider(
-        linked_bytes, converted.read_bytes(), MODULE, include_dependencies=True)
+        linked_bytes, converted.read_bytes(), MODULE, include_dependencies=True, providers=selected)
     require(set(exports) == set(ENTRIES), f"unexpected private app exports: {sorted(exports)}")
     require(all(exports[s][1] & 15 == 2 for s in ENTRIES), "entry is not a function")
     run([str(native_tool), "self", "--sign", "--file", str(converted),

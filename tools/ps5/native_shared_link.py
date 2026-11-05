@@ -24,7 +24,7 @@ from native_c_link import (
     Elf, NOTE_HEADER, PAGE, PHDR, RELA, SYM, align, cstring, hash_table,
     module_identity, nid, require,
 )
-from native_runtime_sdk import validate_stub
+from native_runtime_sdk import eligible_symbols, validate_stub
 
 DYNAMIC = struct.Struct("<QQ")
 SUPPORTED_RELOCATIONS = {1: 8, 6: 8, 8: 8}
@@ -53,6 +53,42 @@ def dynamic_entries(image):
     raise ValueError("unterminated ELF dynamic table")
 
 
+def sdk_provider(source, output, module, library, module_version, required):
+    """Record selected imports while preserving the installed SDK stub unchanged."""
+    source, output = Path(source), Path(output)
+    require(source.is_file(), f"missing SDK stub: {source}; see SDK-IMPORTS.md")
+    raw = source.read_bytes()
+    catalogue = eligible_symbols(Elf(raw).symbols(".dynsym"), str(source))
+    validate_stub(raw, catalogue, module)
+    for name in required:
+        require(name in catalogue and catalogue[name][1] & 15 == 2,
+                f"SDK stub missing {name} ({nid(name)}); update SDK/NID database")
+    (output / "lib").mkdir(parents=True, exist_ok=True)
+    stub = output / "lib" / (module + ".so")
+    if not stub.is_file() or stub.read_bytes() != raw:
+        stub.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    manifest = {
+        "schema": 1, "format": "ps5-native-runtime-sdk",
+        "module": module, "library": library, "module_version": module_version,
+        "library_version": 1, "soname": module + ".sprx",
+        "linker_only": True, "runtime_loadable": False,
+        "runtime_implementation_qualified": False, "sdk_library_unmodified": True,
+        "source_import_library_sha256": digest,
+        "proof_scope": "selected SDK imports; not runtime availability or authorization",
+        "import_library": {"path": "lib/" + module + ".so", "sha256": digest},
+        "symbols": [dict(name=name, nid=nid(name), info=catalogue[name][1],
+                         other=catalogue[name][2], size=catalogue[name][5],
+                         value=catalogue[name][4]) for name in sorted(required)],
+    }
+    path = output / "manifest.json"
+    content = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    if not path.is_file() or path.read_text() != content:
+        path.write_text(content)
+    load_provider(path)
+    return path
+
+
 def load_provider(path):
     path = Path(path)
     provider = json.loads(path.read_text())
@@ -61,10 +97,12 @@ def load_provider(path):
     require(isinstance(provider.get("module"), str) and
             re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", provider["module"]) is not None,
             "native provider identity must not contain path separators")
-    require(provider["library"] == provider["module"] and
+    require(isinstance(provider.get("library"), str) and
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", provider["library"]) is not None and
             provider["soname"] == provider["module"] + ".sprx",
             f"inconsistent provider identity: {path}")
-    require(provider["module_version"] == 0x101 and provider["library_version"] == 1,
+    require(all(isinstance(provider[key], int) and not isinstance(provider[key], bool) and
+                0 < provider[key] <= 0xFFFF for key in ("module_version", "library_version")),
             f"unsupported provider version: {path}")
     library = path.parent / provider["import_library"]["path"]
     stub = library.read_bytes()
@@ -77,8 +115,16 @@ def load_provider(path):
             f"empty/duplicate provider symbols: {path}")
     for symbol in symbols:
         require(symbol["nid"] == nid(symbol["name"]), f"provider NID mismatch: {symbol['name']}")
-    validate_stub(stub, {s["name"]: (0, s["info"], s["other"], 1, 0, s["size"])
-                         for s in symbols}, provider["module"])
+    expected = {s["name"]: (0, s["info"], s["other"], 1, 0, s["size"]) for s in symbols}
+    if provider.get("sdk_library_unmodified") is True:
+        require(provider.get("source_import_library_sha256") ==
+                provider["import_library"]["sha256"], "SDK import library was modified")
+        catalogue = eligible_symbols(Elf(stub).symbols(".dynsym"), str(library))
+        for name, symbol in expected.items():
+            require(name in catalogue and catalogue[name][1:3] == symbol[1:3] and
+                    catalogue[name][5] == symbol[5], f"SDK import declaration mismatch: {name}")
+        expected = catalogue
+    validate_stub(stub, expected, provider["module"])
     return provider
 
 
@@ -92,6 +138,21 @@ def select_providers(source, providers):
     require(set(needed) <= declared.keys(),
             f"undeclared source DT_NEEDED: {sorted(set(needed) - declared.keys())}")
     return [declared[name] for name in needed]
+
+
+def with_symbol_libraries(provider, declarations):
+    symbols = {symbol["name"]: dict(symbol) for symbol in provider["symbols"]}
+    for name, identity in declarations.items():
+        require(name in symbols, f"undeclared provider symbol library: {name}")
+        require(set(identity) == {"library", "library_version"}, "invalid symbol library declaration")
+        require(isinstance(identity["library"], str) and
+                re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", identity["library"]) is not None,
+                "invalid symbol library identity")
+        version = identity["library_version"]
+        require(isinstance(version, int) and not isinstance(version, bool) and
+                0 < version <= 0xFFFF, "invalid symbol library version")
+        symbols[name]["import_library_identity"] = dict(identity)
+    return dict(provider, symbols=list(symbols.values()))
 
 
 def convert(source, module, providers=(), *, process_lifetime=False):
@@ -201,7 +262,9 @@ def convert(source, module, providers=(), *, process_lifetime=False):
 
     module_offset, filename_offset = string(module), string(module + ".sprx")
     native_tags = []
+    library_ids = {}
     for index, provider in enumerate(order, 1):
+        library_ids[(index, provider["library"], provider["library_version"])] = index
         native_tags.extend((
             (1, string(provider["soname"])),
             (0x61000045, string(provider["module"]) |
@@ -222,7 +285,7 @@ def convert(source, module, providers=(), *, process_lifetime=False):
         require(s[1] >> 4 in (1, 2) and s[1] & 15 in (0, 1, 2) and s[2] in (0, 3),
                 f"unsupported symbol type/binding/visibility: {name}")
         if s[3]:
-            identity, binding = module, "A#A"
+            library_identity, identity, binding = module, module, "A#A"
             require(s[3] < len(image.section_headers) and
                     image.section_headers[s[3]][2] & 2,
                     f"export outside an allocated section: {name}")
@@ -242,11 +305,24 @@ def convert(source, module, providers=(), *, process_lifetime=False):
                     f"import/provider symbol type mismatch: {name}")
             require(not s[4] and (not s[5] or s[5] == export["size"]),
                     f"import/provider data size/value mismatch: {name}")
+            import_library = export.get("import_library_identity", provider)
+            library_identity = import_library["library"]
+            library_version = import_library["library_version"]
             identity = provider["module"]
-            binding = encode_id(i) + "#" + encode_id(i)
+            key = (i, library_identity, library_version)
+            if key not in library_ids:
+                library_id = len(library_ids) + 1
+                encode_id(library_id)
+                library_ids[key] = library_id
+                native_tags.extend((
+                    (0x61000049, string(library_identity) |
+                     library_version << 32 | library_id << 48),
+                    (0x61000019, library_id << 48 | 9),
+                ))
+            binding = encode_id(library_ids[key]) + "#" + encode_id(i)
         encoded.extend(SYM.pack(string(nid(name) + "#" + binding), s[1], s[2],
                                 1 if s[3] else 0, s[4], s[5]))
-        canonical.append(nid(name) + "#" + identity + "#" + identity)
+        canonical.append(nid(name) + "#" + library_identity + "#" + identity)
     require(any(s[3] for _, s in symbols[1:]), "shared provider has no public exports")
     relocations = []
     for name, h in allocated:

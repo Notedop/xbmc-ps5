@@ -17,9 +17,12 @@
 #include "utils/StringUtils.h"
 #include "utils/log.h"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
+#include <thread>
 #include <utility>
 #include <sys/event.h>
 #include <sys/mount.h>
@@ -39,15 +42,33 @@ bool Exists(const char* path)
   return stat(path, &st) == 0;
 }
 
-void Add(std::vector<CMediaSource>& drives, const char* path, const char* name)
+void Add(std::vector<CMediaSource>& drives,
+         const char* path,
+         const char* name,
+         SourceType type = SourceType::LOCAL)
 {
   if (!Exists(path))
     return;
   CMediaSource share;
   share.strPath = path;
   share.strName = name;
-  share.m_iDriveType = SourceType::LOCAL;
+  share.m_iDriveType = type;
   drives.push_back(share);
+}
+
+std::string GetStorageDevice(const struct statfs& mountInfo)
+{
+  std::string device(
+      mountInfo.f_mntfromname, strnlen(mountInfo.f_mntfromname, sizeof(mountInfo.f_mntfromname)));
+  if (device.starts_with("/dev/cd") &&
+      device.size() > 7 && device[7] >= '0' && device[7] <= '9')
+  {
+    // Disc eject uses the physical drive; USB unmount uses the exact mount device.
+    const auto suffix = device.find_first_not_of("0123456789", 7);
+    if (suffix != std::string::npos)
+      device.resize(suffix);
+  }
+  return device;
 }
 } // namespace
 
@@ -129,6 +150,7 @@ void CPS5StorageProvider::Stop()
   }
   m_changed = false;
   m_removable.clear();
+  m_ejected.clear();
 }
 
 void CPS5StorageProvider::Process()
@@ -218,7 +240,7 @@ void CPS5StorageProvider::GetRemovableDrives(std::vector<CMediaSource>& removabl
         mountInfo.f_mntonname, strnlen(mountInfo.f_mntonname, sizeof(mountInfo.f_mntonname)));
     // An empty mount directory belongs to its parent filesystem, not a removable volume.
     if (mountedOn == path)
-      Add(removableDrives, path, path);
+      Add(removableDrives, path, path, SourceType::REMOVABLE);
   }
 }
 
@@ -232,13 +254,92 @@ std::set<std::string> CPS5StorageProvider::GetRemovablePaths()
   return present;
 }
 
+bool CPS5StorageProvider::Eject(const std::string& mountpath)
+{
+  std::string path = mountpath;
+  while (path.size() > 1 && path.back() == '/')
+    path.pop_back();
+  if (std::none_of(std::begin(kRemovable), std::end(kRemovable),
+                   [&path](const char* removable) { return path == removable; }))
+  {
+    CLog::Log(LOGERROR, "CPS5StorageProvider: refusing to eject non-removable path {}", mountpath);
+    return false;
+  }
+
+  struct statfs mountInfo{};
+  int status;
+  do
+  {
+    status = statfs(path.c_str(), &mountInfo);
+  } while (status == -1 && errno == EINTR);
+  if (status != 0)
+  {
+    const int error = errno;
+    CLog::Log(LOGERROR, "CPS5StorageProvider: cannot eject {}: {} (errno {})", path,
+              std::strerror(error), error);
+    return false;
+  }
+  const std::string mountedOn(
+      mountInfo.f_mntonname, strnlen(mountInfo.f_mntonname, sizeof(mountInfo.f_mntonname)));
+  if (mountedOn != path)
+  {
+    CLog::Log(LOGERROR, "CPS5StorageProvider: refusing to eject {}: not a mounted volume", path);
+    return false;
+  }
+
+  const std::string device = GetStorageDevice(mountInfo);
+  if (path == "/mnt/disc")
+    return EjectPS5Disc(device.c_str());
+
+  if (!UnmountPS5Storage(device.c_str()))
+    return false;
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+  do
+  {
+    struct statfs current{};
+    const int result = statfs(path.c_str(), &current);
+    const int error = errno;
+    if ((result == 0 &&
+         (std::string(current.f_mntonname,
+                      strnlen(current.f_mntonname, sizeof(current.f_mntonname))) != path ||
+          current.f_fsid.val[0] != mountInfo.f_fsid.val[0] ||
+          current.f_fsid.val[1] != mountInfo.f_fsid.val[1])) ||
+        (result != 0 && (error == ENOENT || error == ENOTDIR)))
+    {
+      CLog::Log(LOGINFO, "CPS5StorageProvider: safely unmounted {}", path);
+      m_ejected.insert(path);
+      m_changed = true;
+      return true;
+    }
+    if (result != 0 && error != EINTR)
+    {
+      CLog::Log(LOGERROR, "CPS5StorageProvider: cannot confirm unmount of {}: {} (errno {})",
+                path, std::strerror(error), error);
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{50});
+  } while (std::chrono::steady_clock::now() < deadline);
+  CLog::Log(LOGERROR, "CPS5StorageProvider: unmount of {} was not confirmed; do not unplug", path);
+  return false;
+}
+
 bool CPS5StorageProvider::PumpDriveChangeEvents(IStorageEventsCallback* callback)
 {
   if (!m_changed.exchange(false))
     return false;
 
-  std::set<std::string> present = GetRemovablePaths();
   bool changed = false;
+  // Deliver completed unmounts before additions, even if a drive was already reinserted.
+  for (const auto& path : m_ejected)
+  {
+    m_removable.erase(path);
+    if (callback)
+      callback->OnStorageSafelyRemoved({path, path, MEDIA_DETECT::STORAGE::Type::UNKNOWN});
+    changed = true;
+  }
+  m_ejected.clear();
+  std::set<std::string> present = GetRemovablePaths();
   for (const auto& path : present)
     if (!m_removable.count(path))
     {
@@ -252,7 +353,12 @@ bool CPS5StorageProvider::PumpDriveChangeEvents(IStorageEventsCallback* callback
     {
       CLog::Log(LOGINFO, "CPS5StorageProvider: {} removed", path);
       if (callback)
-        callback->OnStorageUnsafelyRemoved({path, path, MEDIA_DETECT::STORAGE::Type::UNKNOWN});
+      {
+        if (path == "/mnt/disc")
+          callback->OnStorageSafelyRemoved({path, path, MEDIA_DETECT::STORAGE::Type::UNKNOWN});
+        else
+          callback->OnStorageUnsafelyRemoved({path, path, MEDIA_DETECT::STORAGE::Type::UNKNOWN});
+      }
       changed = true;
     }
   m_removable = present;

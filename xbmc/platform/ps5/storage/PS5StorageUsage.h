@@ -19,3 +19,13 @@ struct PS5InternalStorageUsage
 };
 
 PS5InternalStorageUsage GetPS5InternalStorageUsage();
+
+// Call before sandbox escape; retain the system module for the title lifetime.
+bool PreloadPS5UsbStorage();
+
+// Call after sandbox escape so privileged module loading uses the updated process context.
+bool PreloadPS5InternalStorageModules();
+
+// Success means the system accepted the request; the provider must observe removal separately.
+bool EjectPS5Disc(const char* device);
+bool UnmountPS5Storage(const char* device);

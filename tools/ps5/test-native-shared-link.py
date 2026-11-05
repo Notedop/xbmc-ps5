@@ -81,6 +81,129 @@ class SharedLinkTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate provider SONAME"):
             link.select_providers(source, [provider, provider])
 
+    def test_disc_eject_uses_additional_library_in_existing_system_service_module(self):
+        names = ("sceSystemServiceLoadExec", "sceShellCoreUtilRequestEjectDevice")
+        source_stub = self.build("system-service-sdk", """
+            int sceSystemServiceLoadExec(const char *path, const char *const *args) {
+                return path != 0 && args == 0;
+            }
+            int sceShellCoreUtilRequestEjectDevice(const char *device) { return device != 0; }
+        """)
+        subprocess.run(
+            [LLD, "-shared", "--hash-style=sysv", "--soname=libSceSystemService.sprx",
+             "-o", str(source_stub), str(source_stub.with_suffix(".o"))],
+            check=True, capture_output=True)
+        manifest = link.sdk_provider(
+            source_stub, self.root / "system-service", "libSceSystemService",
+            "libSceSystemService", 0x101, names)
+        provider = link.load_provider(manifest)
+        stub = manifest.parent / provider["import_library"]["path"]
+        mapped = link.with_symbol_libraries(provider, {
+            "sceShellCoreUtilRequestEjectDevice": {
+                "library": "libSceShellCoreUtil", "library_version": 1}})
+        self.assertNotIn("import_library_identity",
+                         next(s for s in provider["symbols"]
+                              if s["name"] == "sceShellCoreUtilRequestEjectDevice"))
+        consumer = self.build("disc-consumer", """
+            extern int sceSystemServiceLoadExec(const char *, const char *const *);
+            extern int sceShellCoreUtilRequestEjectDevice(const char *);
+            int run(void) {
+                return sceSystemServiceLoadExec("exit", 0) |
+                       sceShellCoreUtilRequestEjectDevice("/dev/cd0");
+            }
+        """, libraries=[stub])
+        source = consumer.read_bytes()
+        converted = link.convert(source, "test.disc", [mapped])
+        _, proof = sdk.prove_provider(
+            source, converted, "test.disc", include_dependencies=True, providers=[mapped])
+        self.assertEqual(stub.read_bytes(), source_stub.read_bytes())
+        self.assertEqual(proof["needed"], ["libSceSystemService.sprx"])
+        self.assertEqual(proof["modules"], [
+            {"id": 1, "name": "libSceSystemService", "version": 0x101,
+             "soname": "libSceSystemService.sprx"}])
+        self.assertEqual(proof["libraries"], [
+            {"id": 1, "name": "libSceSystemService", "version": 1},
+            {"id": 2, "name": "libSceShellCoreUtil", "version": 1}])
+        imports = {entry["name"]: entry for entry in proof["imports"]}
+        self.assertEqual((imports[names[0]]["library_id"], imports[names[0]]["module_id"]), (1, 1))
+        self.assertEqual((imports[names[1]]["library_id"], imports[names[1]]["module_id"]), (2, 1))
+        with self.assertRaisesRegex(ValueError, "dependency libraries"):
+            sdk.prove_provider(source, converted, "test.disc")
+        with self.assertRaisesRegex(ValueError, "provider library mismatch"):
+            sdk.prove_provider(source, converted, "test.disc", providers=[provider])
+        for declarations in (
+                {"absent": {"library": "libSceShellCoreUtil", "library_version": 1}},
+                {names[1]: {"library": "../invalid", "library_version": 1}},
+                {names[1]: {"library": "libSceShellCoreUtil", "library_version": 0}},
+                {names[1]: {"library": "libSceShellCoreUtil", "library_version": True}},
+        ):
+            with self.subTest(declarations=declarations), self.assertRaises(ValueError):
+                link.with_symbol_libraries(provider, declarations)
+
+    def test_usb_storage_import_uses_shell_library_and_actual_module_version(self):
+        required = {
+            "sceUsbStorageInit": "BDDZwF5kuTc", "sceUsbStorageTerm": "Wp8zHTocS5E",
+            "_ZN23sceAutoMounterIpcClient14requestUnmountEPKc": "96s31EeG0LM"}
+        def prepare():
+            return link.load_provider(link.sdk_provider(
+                source_stub, output, "libSceUsbStorage", "libSceUsbStorageForShellUI",
+                0x100, required))
+        output = self.root / "usb"
+        source_stub = self.build("usb-sdk", """
+            int sceUsbStorageInit(const void *p) { return p != 0; }
+            int sceUsbStorageTerm(void) { return 0; }
+            int requestUnmount(const char *p)
+                __asm__("_ZN23sceAutoMounterIpcClient14requestUnmountEPKc");
+            int requestUnmount(const char *p) { return p == 0; }
+            int unused_sdk_export(void) { return 0; }
+        """)
+        # SDK stubs use the module SONAME, regardless of source filename.
+        subprocess.run([LLD, "-shared", "--hash-style=sysv",
+                        "--soname=libSceUsbStorage.sprx", "-o", str(source_stub),
+                        str(source_stub.with_suffix(".o"))], check=True, capture_output=True)
+        provider = prepare()
+        paths = [output / "manifest.json", output / "lib/libSceUsbStorage.so"]
+        timestamps = [path.stat().st_mtime_ns for path in paths]
+        self.assertEqual(prepare(), provider)
+        self.assertEqual(paths[1].read_bytes(), source_stub.read_bytes())
+        self.assertEqual([path.stat().st_mtime_ns for path in paths], timestamps)
+        self.assertEqual({symbol["name"]: symbol["nid"] for symbol in provider["symbols"]},
+                         required)
+        consumer = self.build("usb-consumer", """
+            extern int sceUsbStorageInit(const void *);
+            extern int sceUsbStorageTerm(void);
+            extern int requestUnmount(const char *)
+                __asm__("_ZN23sceAutoMounterIpcClient14requestUnmountEPKc");
+            int run(void) {
+                int status = sceUsbStorageInit((void *)0);
+                status |= requestUnmount("/dev/da0");
+                return status | sceUsbStorageTerm();
+            }
+        """, libraries=[paths[1]])
+        source = consumer.read_bytes()
+        converted = link.convert(source, "test.usb", [provider])
+        _, dependencies = sdk.prove_provider(source, converted, "test.usb",
+                                             include_dependencies=True)
+        self.assertEqual(dependencies["needed"], ["libSceUsbStorage.sprx"])
+        self.assertEqual(dependencies["modules"], [
+            {"id": 1, "name": "libSceUsbStorage", "version": 0x100,
+             "soname": "libSceUsbStorage.sprx"}])
+        self.assertEqual(dependencies["libraries"], [
+            {"id": 1, "name": "libSceUsbStorageForShellUI", "version": 1}])
+        self.assertEqual({symbol["name"] for symbol in dependencies["imports"]}, set(required))
+        with self.assertRaisesRegex(ValueError, "no declared provider exports"):
+            extra = self.build("usb-extra", """
+                extern int unused_sdk_export(void);
+                int run(void) { return unused_sdk_export(); }
+            """, libraries=[paths[1]])
+            link.convert(extra.read_bytes(), "test.extra", [provider])
+        for key, value in (("module_version", 0), ("library", "../libOtherShellUI"),
+                           ("soname", "libSceUsbStorageForShellUI.sprx")):
+            changed = dict(provider, **{key: value})
+            paths[0].write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError, "inconsistent provider identity|unsupported provider version"):
+                link.load_provider(paths[0])
+
     def test_provider_preserves_code_data_exports_and_large_bss(self):
         elf, native, provider = self.provider()
         linked = Elf(elf.read_bytes())

@@ -4,6 +4,7 @@
 
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -25,7 +26,15 @@ def fixture():
         imports.update({nid(name): {"module": module, "library": module} for name in names})
     symbols = [("_start", (0, 0x12, 0, 1, 0x100, 16)),
                ("main", (0, 0x12, 0, 1, 0x200, 16))]
-    return SimpleNamespace(symbols=lambda _: symbols, section=lambda _: b""), imports
+    strings = b"\0"
+    dynamics = b""
+    for module in sorted(MODULE.DEPENDENCIES):
+        dynamics += struct.pack("<QQ", 1, len(strings))
+        strings += (module + ".sprx").encode() + b"\0"
+    sections = {".dynstr": strings, ".dynamic": dynamics + bytes(16)}
+    return SimpleNamespace(symbols=lambda _: symbols,
+                           sections={".dynamic": (0,) * 9 + (16,)},
+                           section=lambda name: sections.get(name, b"")), imports
 
 
 class LauncherProofTest(unittest.TestCase):
@@ -33,6 +42,8 @@ class LauncherProofTest(unittest.TestCase):
         linked, imports = fixture()
         proof = MODULE.verify(linked, imports)
         self.assertEqual(proof["native_load_order"], MODULE.LOAD_ORDER)
+        self.assertEqual(proof["system_dependencies"],
+                         ["libSceLibcInternal.sprx", "libkernel.sprx"])
         self.assertEqual(proof["startup_abi"], "ps5-kodi-startup-v1")
         self.assertEqual(proof["entry_handoff"], "module-start-arguments")
         self.assertFalse(proof["executable_symbol_lookup"])
@@ -44,6 +55,20 @@ class LauncherProofTest(unittest.TestCase):
         imports[nid("__wrap_malloc")] = {"module": "libkodi-runtime", "library": "libkodi-runtime"}
         with self.assertRaisesRegex(ValueError, "only native"):
             MODULE.verify(linked, imports)
+
+    def test_rejects_missing_or_extra_native_dependencies(self):
+        for removed in (True, False):
+            with self.subTest(removed=removed):
+                linked, imports = fixture()
+                section = linked.section
+                dynamic = section(".dynamic")
+                if removed:
+                    dynamic = dynamic[16:]
+                else:
+                    dynamic = struct.pack("<QQ", 1, 1) + dynamic
+                linked.section = lambda name: dynamic if name == ".dynamic" else section(name)
+                with self.assertRaisesRegex(ValueError, "kernel/C dependencies"):
+                    MODULE.verify(linked, imports)
 
     def test_rejects_executable_originated_lookup(self):
         linked, imports = fixture()
@@ -61,7 +86,8 @@ class LauncherProofTest(unittest.TestCase):
 
     def test_rejects_old_title_preinitializer(self):
         linked, imports = fixture()
-        linked.section = lambda _: bytes(8)
+        section = linked.section
+        linked.section = lambda name: bytes(8) if name == ".preinit_array" else section(name)
         with self.assertRaisesRegex(ValueError, "preinitializers"):
             MODULE.verify(linked, imports)
 

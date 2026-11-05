@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 
-from native_shared_link import load_provider
+from native_shared_link import load_provider, sdk_provider
 from native_loader_companion import build as build_loader_companion
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -216,8 +216,29 @@ def title_providers(providers, manifests=()):
     return providers, receipts
 
 
-def prepare(sdk, app, manifests=(), native_tool=None):
+def sdk_title_providers(app, system_imports):
+    return [sdk_provider(
+        system_imports / "libSceUsbStorage.so",
+        app / "vendor/system-imports/libSceUsbStorage",
+        "libSceUsbStorage", "libSceUsbStorageForShellUI", 0x100,
+        ("sceUsbStorageInit", "sceUsbStorageTerm",
+         "_ZN23sceAutoMounterIpcClient14requestUnmountEPKc")),
+        sdk_provider(
+            system_imports / "libSceAppInstUtil.so",
+            app / "vendor/system-imports/libSceAppInstUtil",
+            "libSceAppInstUtil", "libSceAppInstUtil", 0x101,
+            ("sceAppInstUtilInitialize", "sceAppInstUtilTerminate",
+             "sceAppInstUtilAppGetAllAppSize")),
+        sdk_provider(
+            system_imports / "libSceSaveData.so",
+            app / "vendor/system-imports/libSceSaveData",
+            "libSceSaveData", "libSceSaveData", 0x101,
+            ("sceSaveDataInitialize3", "sceSaveDataTerminate", "sceSaveDataGetAllSizeProspero"))]
+
+
+def prepare(sdk, app, manifests=(), native_tool=None, system_imports=Path("/opt/ps5-payload-sdk/target/lib")):
     sdk, app = sdk.resolve(), app.resolve()
+    manifests = (*manifests, *sdk_title_providers(app, system_imports))
     result = subprocess.run([
         sys.executable, str(sdk / "tools/build-native-shared-addon.py"),
         "--sdk", str(sdk), "--describe",
@@ -297,6 +318,13 @@ def prepare(sdk, app, manifests=(), native_tool=None):
         "wrap_symbols": described["wrap_symbols"],
         "providers": identities,
         "additional_provider_manifests": manifest_receipts,
+        "symbol_libraries": {
+            "libSceSystemService": {
+                "sceShellCoreUtilRequestEjectDevice": {
+                    "library": "libSceShellCoreUtil", "library_version": 1,
+                },
+            },
+        },
         "loader_companion_sha256": companion_proof["signed_sha256"],
         "startup_sources": startup_sources,
         "runtime_sha256": {module + ".sprx": digest(
@@ -310,13 +338,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk", type=Path, required=True)
     parser.add_argument("--app", type=Path, required=True)
+    parser.add_argument("--system-imports", type=Path,
+                        default=Path("/opt/ps5-payload-sdk/target/lib"),
+                        help="installed payload SDK import-library directory")
     parser.add_argument("--provider", type=Path, action="append", default=[],
                         help="additional verified title-only provider manifest (repeatable)")
     parser.add_argument("--native-tool", type=Path,
                         help="native SELF signer used to build the mandatory loader companion")
     args = parser.parse_args()
     try:
-        prepare(args.sdk, args.app, args.provider, args.native_tool)
+        prepare(args.sdk, args.app, args.provider, args.native_tool, args.system_imports)
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         detail = error.stderr if isinstance(error, subprocess.CalledProcessError) else str(error)
         parser.exit(1, f"prepare-shared-title: {detail}\n")

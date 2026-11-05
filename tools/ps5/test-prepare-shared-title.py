@@ -15,6 +15,7 @@ SPEC = importlib.util.spec_from_file_location(
     "prepare_shared_title", ROOT / "tools/ps5/prepare-shared-title.py")
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+SDK_TITLE_PROVIDERS = MODULE.sdk_title_providers
 WRAPS = [
     "malloc", "calloc", "realloc", "free", "posix_memalign", "malloc_usable_size",
     "aligned_alloc", "memalign", "reallocf", "chdir", "fopen", "pthread_create", "exit",
@@ -60,6 +61,9 @@ strings.add(provider->library_name)});
 
 class SharedTitleTest(unittest.TestCase):
     def setUp(self):
+        sdk_imports = patch.object(MODULE, "sdk_title_providers", return_value=[])
+        sdk_imports.start()
+        self.addCleanup(sdk_imports.stop)
         self.temporary = tempfile.TemporaryDirectory(prefix="shared-title-test-")
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
@@ -158,8 +162,30 @@ class SharedTitleTest(unittest.TestCase):
                          MODULE.digest(self.app / "vendor/ps5-runtime/libc.prx"))
         self.assertEqual(record["wrap_symbols"], WRAPS)
         self.assertFalse(record["console_accepted"])
+        self.assertEqual(record["symbol_libraries"], {
+            "libSceSystemService": {
+                "sceShellCoreUtilRequestEjectDevice": {
+                    "library": "libSceShellCoreUtil", "library_version": 1}}})
         response = (self.app / "vendor/ps5-runtime-imports.rsp").read_text()
         self.assertLess(response.index("libkodi-runtime"), response.index("libkodi-gl"))
+
+    def test_system_imports_use_installed_sdk_not_stale_template_copy(self):
+        installed = self.directory / "installed-sdk/target/lib"
+        with patch.object(MODULE, "sdk_provider", return_value=Path("manifest.json")) as describe:
+            self.assertEqual(SDK_TITLE_PROVIDERS(self.app, installed), [Path("manifest.json")] * 3)
+        expected = (
+            ("libSceUsbStorage", "libSceUsbStorageForShellUI", 0x100,
+             ("sceUsbStorageInit", "sceUsbStorageTerm",
+              "_ZN23sceAutoMounterIpcClient14requestUnmountEPKc")),
+            ("libSceAppInstUtil", "libSceAppInstUtil", 0x101,
+             ("sceAppInstUtilInitialize", "sceAppInstUtilTerminate",
+              "sceAppInstUtilAppGetAllAppSize")),
+            ("libSceSaveData", "libSceSaveData", 0x101,
+             ("sceSaveDataInitialize3", "sceSaveDataTerminate", "sceSaveDataGetAllSizeProspero")),
+        )
+        for call, identity in zip(describe.call_args_list, expected):
+            self.assertEqual(call.args[0], installed / (identity[0] + ".so"))
+            self.assertEqual(call.args[2:], identity)
 
     def test_rejects_sdk_tampering(self):
         (self.sdk / "include/stdio.h").write_text("changed")

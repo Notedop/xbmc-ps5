@@ -26,7 +26,7 @@ public:
   void Stop() override;
   void GetLocalDrives(std::vector<CMediaSource>& localDrives) override;
   void GetRemovableDrives(std::vector<CMediaSource>& removableDrives) override;
-  bool Eject(const std::string& mountpath) override { return false; }
+  bool Eject(const std::string& mountpath) override;
   std::vector<std::string> GetDiskUsage() override;
   bool PumpDriveChangeEvents(IStorageEventsCallback* callback) override;
 
@@ -39,4 +39,5 @@ private:
   int m_wakeupWrite = -1;
   std::atomic<bool> m_changed{false};
   std::set<std::string> m_removable;
+  std::set<std::string> m_ejected;
 };

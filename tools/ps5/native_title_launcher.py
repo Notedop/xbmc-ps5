@@ -2,15 +2,22 @@
 """Verify the system-only title, independently of its build command receipt."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from native_c_link import nid, require
+from native_c_link import cstring, nid, require
+from native_shared_link import dynamic_entries
 
 LOAD_ORDER = ["libkodi-runtime.sprx", "libkodi-gl.sprx", "libkodi-app.sprx"]
 SYSTEM = {"libkernel", "libSceLibcInternal"}
+DEPENDENCIES = SYSTEM
 STARTUP_SOURCES = {"title_native_launcher.cpp", "kodi_app_entry.cpp", "title_native_startup.h"}
 STARTUP_ABI = "ps5-kodi-startup-v1"
 
 
 def verify(linked, imports):
+    needed = [cstring(linked.section(".dynstr"), offset)
+              for offset in dynamic_entries(linked).get(1, [])]
+    require(len(needed) == len(DEPENDENCIES) and
+            set(needed) == {module + ".sprx" for module in DEPENDENCIES},
+            "launcher requires exactly the native kernel/C dependencies")
     require(imports and all(owner["module"] in SYSTEM and owner["library"] == owner["module"]
                             for owner in imports.values()),
             "launcher must have only native kernel/C imports")
@@ -34,6 +41,7 @@ def verify(linked, imports):
             "or obsolete lookup marker")
     require(not linked.section(".preinit_array"), "launcher must not require title preinitializers")
     return {"model": "native-two-stage", "native_load_order": LOAD_ORDER,
+            "system_dependencies": sorted(needed),
             "startup_abi": STARTUP_ABI, "entry_handoff": "module-start-arguments",
             "executable_symbol_lookup": False,
             "launcher_has_no_shared_imports": True, "software_relocation": False,

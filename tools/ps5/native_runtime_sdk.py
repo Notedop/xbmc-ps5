@@ -14,8 +14,10 @@ Its schema-1 module/library identities and raw symbol attributes can be passed
 as a --provider manifest to native_shared_link.py.
 Provider imports are proven at their original dynsym indices against declared
 native library/module identities; their dependencies are recorded, not stubbed.
-The bounded converter contract assigns one library/module ID pair per original
+The default converter contract assigns one library/module ID pair per original
 DT_NEEDED, numbered from 1 in needed order, reserving ID 0 for this provider.
+Explicit provider declarations can qualify individual imports from additional
+export libraries in an existing dependency module without adding DT_NEEDED.
 
 No compiler, SDK, addon lists, or third-party Python packages are required.
 Existing output files are never replaced. TLS, IFUNC, unusual symbol kinds,
@@ -166,7 +168,7 @@ def import_identities(native, strings, tag, own_name):
     return identities
 
 
-def prove_provider(linked_raw, native_raw, module, *, include_dependencies=False):
+def prove_provider(linked_raw, native_raw, module, *, include_dependencies=False, providers=None):
     module_identity(module)
     linked = Elf(linked_raw)
     require(linked.kind == 3, "linked provider must be an original ET_DYN ELF")
@@ -213,8 +215,20 @@ def prove_provider(linked_raw, native_raw, module, *, include_dependencies=False
     modules = import_identities(native, strings, NEEDED_MODULE, module)
     require(set(modules) == set(range(1, len(needed) + 1)),
             "native dependency modules do not match original DT_NEEDED indices")
-    require(set(libraries) == set(modules),
-            "native dependency libraries do not match original DT_NEEDED indices")
+    if providers is None:
+        require(set(libraries) == set(modules),
+                "native dependency libraries do not match original DT_NEEDED indices")
+    else:
+        require(len(providers) == len(needed) and
+                [provider["soname"] for provider in providers] == needed,
+                "provider declarations must match original DT_NEEDED order")
+        require(set(modules) <= set(libraries), "missing default dependency libraries")
+        for index, provider in enumerate(providers, 1):
+            require(modules[index]["name"] == provider["module"] and
+                    modules[index]["version"] == provider["module_version"] and
+                    libraries[index]["name"] == provider["library"] and
+                    libraries[index]["version"] == provider["library_version"],
+                    "declared dependency identity/version mismatch")
     for identity, declaration in modules.items():
         declaration["soname"] = needed[identity - 1]
     expected = {}
@@ -251,14 +265,25 @@ def prove_provider(linked_raw, native_raw, module, *, include_dependencies=False
                 f"native/source import index/NID mismatch at index {index}: {source_name}")
         library_id, module_id = decode_id(parts[1]), decode_id(parts[2])
         require(module_id != 0 and module_id in modules and library_id in libraries and
-                library_id == module_id,
+                (providers is not None or library_id == module_id),
                 f"native import has undeclared/mismatched library/module ID: {source_name}")
         library, dependency = libraries[library_id], modules[module_id]
+        if providers is not None:
+            provider = providers[module_id - 1]
+            export = next((s for s in provider["symbols"] if s["name"] == source_name), None)
+            require(export is not None, f"undeclared provider import: {source_name}")
+            import_library = export.get("import_library_identity", provider)
+            require(library["name"] == import_library["library"] and
+                    library["version"] == import_library["library_version"],
+                    f"native import provider library mismatch: {source_name}")
         canonical.append(parts[0] + "#" + library["name"] + "#" + dependency["name"])
         imports.append({"name": source_name, "dynsym_index": index, "nid": parts[0],
                         "native_name": name, "library_id": library_id, "module_id": module_id,
                         "info": source[1], "other": source[2], "size": source[5],
                         "value": source[4]})
+    if providers is not None:
+        require(set(libraries) == set(modules) | {entry["library_id"] for entry in imports},
+                "unreferenced additional dependency library")
     hashed = hash_table(canonical)
     require(native.tag(HASHSZ) == len(hashed) and
             native.memory(native.tag(4), len(hashed)) == hashed,

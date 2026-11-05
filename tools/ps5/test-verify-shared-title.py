@@ -67,6 +67,7 @@ def imported_title(module_version=0x101, library_version=1):
 PROVIDER = {
     "soname": "provider.sprx", "module": "provider", "module_version": 0x101,
     "library": "provider_exports", "library_version": 1,
+    "symbols": [{"name": "someSymbol", "nid": "someNid"}],
 }
 
 
@@ -142,7 +143,7 @@ class SharedTitleProofTest(unittest.TestCase):
         manifest = sdk / "provider.json"
         manifest.write_text(json.dumps(PROVIDER))
         record = {
-            "providers": [PROVIDER],
+            "providers": [{key: value for key, value in PROVIDER.items() if key != "symbols"}],
             "additional_provider_manifests": [
                 {"path": str(manifest), "sha256": MODULE.digest(manifest)}],
         }

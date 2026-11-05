@@ -12,7 +12,7 @@ import tempfile
 from native_c_link import Elf, PHDR, SYM, cstring, nid, require
 from native_runtime_sdk import DYNAMIC, IMPORT_LIB, NEEDED_MODULE, SYMTABSZ, NativeImage, decode_id
 from native_static_depends import digest, load_verified_map
-from native_shared_link import convert, dynamic_entries, load_provider
+from native_shared_link import convert, dynamic_entries, load_provider, with_symbol_libraries
 from native_loader_companion import verify_artifacts as verify_loader_companion
 from native_title_launcher import verify as verify_launcher
 from native_title_launcher import STARTUP_SOURCES
@@ -95,8 +95,11 @@ def native_imports(raw, providers=None, *, executable=True):
         library, module = libraries[library_id], modules[module_id]
         if providers is not None:
             provider = expected[module_id]
-            require(library == provider["library"] and
-                    library_versions[library_id] == provider["library_version"],
+            export = next((s for s in provider["symbols"] if s["nid"] == parts[0]), None)
+            require(export is not None, f"undeclared native title import: {parts[0]}")
+            import_library = export.get("import_library_identity", provider)
+            require(library == import_library["library"] and
+                    library_versions[library_id] == import_library["library_version"],
                     f"native title provider library identity/version mismatch: {module}")
         require(parts[0] not in imports, "duplicate native title import NID")
         imports[parts[0]] = {"module": module, "library": library}
@@ -135,7 +138,10 @@ def title_providers(sdk, record):
     require(len({p["soname"] for p in providers}) == len(providers),
             "duplicate title provider SONAME")
     require(record["providers"] == identities, "title provider identity receipt changed")
-    return providers
+    require(set(record.get("symbol_libraries", {})) <= {p["module"] for p in providers},
+            "symbol library declarations reference an undeclared provider")
+    return [with_symbol_libraries(provider, record.get("symbol_libraries", {}).get(provider["module"], {}))
+            for provider in providers]
 
 
 def verify_application_proof(proof, signed, native, linked, providers):
@@ -256,7 +262,8 @@ def verify(app, sdk, archive_map):
             "packaged add-on runtime application hash changed")
     NativeImage(application_raw).validate_metadata_layout()
     published, dependencies = prove_provider(application_linked.read_bytes(), application_raw,
-                                             "libkodi-app", include_dependencies=True)
+                                             "libkodi-app", include_dependencies=True,
+                                             providers=application_providers)
     imports = native_imports(application_raw, providers, executable=False)
     symbols = dict(app_linked.symbols(".symtab"))
     core = next(provider for provider in providers if provider["module"] == "libkodi-runtime")

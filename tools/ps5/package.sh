@@ -288,6 +288,7 @@ if [ -n "$SHARED_SDK" ]; then
     title_provider_args+=(--provider "$manifest")
   done
   python3 "$ROOT/tools/ps5/prepare-shared-title.py" --sdk "$SHARED_SDK" --app "$APP" \
+    --system-imports "$PS5_PAYLOAD_SDK/target/lib" \
     --native-tool "$APP_TEMPLATE/build/host/ps5-native-tool" \
     "${title_provider_args[@]}"
 fi

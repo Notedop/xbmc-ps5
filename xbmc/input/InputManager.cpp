@@ -815,7 +815,12 @@ void CInputManager::SetMouseState(MOUSE_STATE mouseState)
 
 bool CInputManager::IsControllerEnabled() const
 {
+#if defined(TARGET_PS5)
+  // A saved setting must not disable the console's primary navigation device.
+  return true;
+#else
   return m_enableController;
+#endif
 }
 
 void CInputManager::OnSettingChanged(const std::shared_ptr<const CSetting>& setting)

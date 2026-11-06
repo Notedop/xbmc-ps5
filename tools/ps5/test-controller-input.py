@@ -4,6 +4,7 @@
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 import zipfile
@@ -13,6 +14,44 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ControllerInputTests(unittest.TestCase):
+    def test_controller_support_cannot_be_disabled_on_ps5(self):
+        source = (ROOT / "xbmc/input/InputManager.cpp").read_text()
+        start = source.index("bool CInputManager::IsControllerEnabled() const")
+        method = source[start:source.index("\n}", start) + 2]
+        compiler = shutil.which("clang++-18") or shutil.which("c++")
+        self.assertIsNotNone(compiler, "A host C++20 compiler is required")
+        harness = """
+#include <cassert>
+class CInputManager
+{
+public:
+  bool m_enableController{false};
+  bool IsControllerEnabled() const;
+};
+""" + method + """
+int main()
+{
+  CInputManager input;
+#if defined(TARGET_PS5)
+  assert(input.IsControllerEnabled());
+#else
+  assert(!input.IsControllerEnabled());
+#endif
+  input.m_enableController = true;
+  assert(input.IsControllerEnabled());
+}
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            (path / "controller-support.cpp").write_text(harness)
+            for defines in ([], ["-DTARGET_PS5"]):
+                with self.subTest(defines=defines):
+                    output = path / "controller-support"
+                    subprocess.run([compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+                                    *defines, str(path / "controller-support.cpp"),
+                                    "-o", str(output)], check=True)
+                    subprocess.run([str(output)], check=True, timeout=30)
+
     def test_native_backend(self):
         build = ROOT / "build/ps5-controller-tests"
         build.mkdir(parents=True, exist_ok=True)

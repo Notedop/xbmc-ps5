@@ -299,6 +299,16 @@ bool CSettings::InitializeDefinitions()
   if (CFile::Exists(SETTINGS_XML_FOLDER "appliance.xml") && !Initialize(SETTINGS_XML_FOLDER "appliance.xml"))
     CLog::Log(LOGFATAL, "Unable to load appliance-specific settings definitions");
 
+#if defined(TARGET_PS5)
+  const SettingPtr controllerSetting = GetSetting("input.enablejoystick");
+  if (!controllerSetting)
+  {
+    CLog::Log(LOGERROR, "Failed to load setting for: input.enablejoystick");
+    return false;
+  }
+  controllerSetting->SetVisible(false);
+#endif
+
   return true;
 }
 

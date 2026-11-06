@@ -1,0 +1,31 @@
+Use portable crypto implementations on PS5's execute-only code mappings.
+
+Nettle's SHA-256 assembly reads its shuffle mask from .text, and GnuTLS's
+accelerated SHA-512 reads round constants from .text. Both cause native
+SYSTEM_XO_VIOLATION faults during HTTPS playback. Disable these dependencies'
+assembly/acceleration through their supported configure switches. TLS and
+certificate verification remain enabled; FFmpeg codec optimizations are
+unaffected.
+
+Upstream: PS5-only; this patch series is not applied on other platforms.
+
+--- a/depends/common/nettle/CMakeLists.txt
++++ b/depends/common/nettle/CMakeLists.txt
+@@ -44,6 +44,7 @@
+                       --enable-static
+                       --disable-shared
+                       --disable-openssl
++                      --disable-assembler
+                       --disable-documentation
+                       --enable-pic
+                       ${nettle_conf}
+--- a/depends/common/gnutls/CMakeLists.txt
++++ b/depends/common/gnutls/CMakeLists.txt
+@@ -52,6 +52,7 @@
+                       --prefix=${CMAKE_INSTALL_PREFIX}
+                       --enable-static
+                       --disable-shared
++                      --disable-hardware-acceleration
+                       --without-p11-kit
+                       --without-idn
+                       --disable-nls

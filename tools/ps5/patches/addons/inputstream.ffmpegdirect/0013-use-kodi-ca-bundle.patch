@@ -1,0 +1,69 @@
+Use Kodi's CA bundle for FFmpeg's initial and nested TLS connections.
+
+The console has no GnuTLS system trust store. HTTPS fails with "Peer
+certificate failed verification" even though Kodi's curl trusts the same
+server. Inject Kodi's translated CA bundle and require TLS verification on
+each format I/O open: HLS does not copy these options to segment requests.
+Delegate to FFmpeg's original callback to preserve its protocol restrictions,
+interrupt handling and native URL contexts used for HTTP connection reuse.
+
+Upstream: PS5-only; this patch series is not applied on other platforms.
+
+--- a/src/stream/FFmpegStream.h
++++ b/src/stream/FFmpegStream.h
+@@ -131,6 +131,10 @@
+   int GetNrOfSubtitleStreams();
+   std::vector<DemuxStream*> GetDemuxStreams() const;
+   DemuxStream* GetDemuxStream(int iStreamId) const;
++  static int OpenWithKodiTrust(AVFormatContext* context, AVIOContext** io,
++                               const char* url, int flags, AVDictionary** options);
++  decltype(AVFormatContext::io_open) m_defaultIOOpen = nullptr;
++
+   void CreateStreams(unsigned int program);
+   void AddStream(int streamIdx, DemuxStream* stream);
+   DemuxStream* AddStream(int streamIdx);
+--- a/src/stream/FFmpegStream.cpp
++++ b/src/stream/FFmpegStream.cpp
+@@ -714,6 +714,9 @@
+ 
+   if (m_openMode == OpenMode::FFMPEG)
+   {
++    m_defaultIOOpen = m_pFormatContext->io_open;
++    m_pFormatContext->opaque = this;
++    m_pFormatContext->io_open = OpenWithKodiTrust;
+     if (!OpenWithFFmpeg(iformat, int_cb))
+       return false;
+   }
+@@ -888,6 +891,23 @@
+   return true;
+ }
+ 
++int FFmpegStream::OpenWithKodiTrust(AVFormatContext* context, AVIOContext** io,
++                                   const char* url, int flags, AVDictionary** options)
++{
++  auto* stream = static_cast<FFmpegStream*>(context->opaque);
++  const std::string caFile =
++      kodi::vfs::TranslateSpecialProtocol("special://xbmc/system/certs/cacert.pem");
++  int result = av_dict_set(options, "ca_file", caFile.c_str(), 0);
++  if (result < 0)
++    return result;
++
++  result = av_dict_set(options, "tls_verify", "1", 0);
++  if (result < 0)
++    return result;
++
++  return stream->m_defaultIOOpen(context, io, url, flags, options);
++}
++
+ bool FFmpegStream::OpenWithFFmpeg(const AVInputFormat* iformat, const AVIOInterruptCB& int_cb)
+ {
+   Log(LOGLEVEL_INFO, "%s - IO handled by FFmpeg's AVFormat", __FUNCTION__);
+@@ -955,6 +975,8 @@
+       av_dict_free(&options);
+       avformat_close_input(&m_pFormatContext);
+       m_pFormatContext = avformat_alloc_context();
++      m_pFormatContext->opaque = this;
++      m_pFormatContext->io_open = OpenWithKodiTrust;
+     }
+ 
+     m_pFormatContext->interrupt_callback = int_cb;

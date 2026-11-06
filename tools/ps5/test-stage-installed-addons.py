@@ -336,6 +336,27 @@ class InstalledAddons(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "without manifest"):
             staging.discover([prefix], {})
 
+    def test_native_addon_with_companion_python_service(self):
+        prefix, data, _ = self.install()
+        manifest = data / "addon.xml"
+        original = manifest.read_text()
+        script = data / "resources/runner.py"
+        script.parent.mkdir()
+        script.write_text("# companion service\n")
+        for library in ("resources/runner.py", "../runner.py", "/runner.py",
+                        "resources/missing.py", "resources/runner.so"):
+            manifest.write_text(original.replace(
+                "</addon>", f'<extension point="xbmc.service" library="{library}"/></addon>'))
+            with self.subTest(library=library):
+                if library == "resources/runner.py":
+                    selected, _ = staging.discover([prefix], {})
+                    staging.stage(selected, self.root / "service-out")
+                    self.assertTrue((self.root / "service-out/addons/screensaver.fake"
+                                     "/resources/runner.py").is_file())
+                else:
+                    with self.assertRaisesRegex(ValueError, "companion Python service"):
+                        staging.discover([prefix], {})
+
     def test_missing_binary_and_forged_helper_manifest(self):
         prefix, data, lib = self.install()
         (data / "ps5-auxiliaries.list").write_text("format 1\nhelper arbitrary.so\n")

@@ -29,6 +29,7 @@ RUNTIME = "piers-ps5-1"
 LOCK_VERSION = 1
 RECORD_VERSION = 3
 HASH_CACHE_VERSION = 1
+DEPENDENCY_CACHE_VERSION = 1
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 
@@ -925,6 +926,367 @@ def _refresh_prefixes(record: dict[str, Any]) -> None:
     record["prefixes"] = sorted(prefixes)
 
 
+def _dependency_context(
+    hasher: _InputHasher, root: Path, target_name: str, addon_ids: list[str],
+    sdk: Path, depends: Path, workspace: Path, runtime_sdk: Path, archive_map: Path,
+) -> dict[str, Any]:
+    inputs = _cmake_inputs(root, sorted(set([target_name, *addon_ids])),
+                           sdk, depends, runtime_sdk, archive_map)
+    # Orchestration changes are qualified by generated commands and this schema,
+    # rather than invalidating every dependency for a cache-management edit.
+    excludes = [
+        root / "tools/ps5/addon_build.py",
+        root / "cmake/addons/CMakeLists.txt",
+        root / "cmake/scripts/common/HandleDepends.cmake",
+        workspace,
+        *(root / "tools/ps5/patches/addons" / name
+          for name in sorted(set([target_name, *addon_ids]))),
+    ]
+    environment = {
+        name: os.environ.get(name) for name in (
+            "PATH", "CC", "CXX", "CCAS", "AR", "AS", "NM", "RANLIB",
+            "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "LIBRARY_PATH",
+            "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "SOURCE_DATE_EPOCH",
+        )
+    }
+    return {
+        "schema": DEPENDENCY_CACHE_VERSION,
+        "shared_inputs": hasher.tree_digest(inputs, exclude=excludes),
+        "native_site": _autoconf_site(sdk, runtime_sdk),
+        "environment": environment,
+    }
+
+
+def _dependency_files(prefix: Path) -> dict[str, dict[str, Any]]:
+    files: dict[str, dict[str, Any]] = {}
+    for path in sorted(prefix.rglob("*")):
+        if path.is_symlink():
+            if not _inside(path.resolve(), prefix.resolve()):
+                raise AddonBuildError(f"dependency output symlink escapes its prefix: {path}")
+            files[str(path.relative_to(prefix))] = {"link": os.readlink(path)}
+        elif path.is_file():
+            files[str(path.relative_to(prefix))] = {
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "mode": stat.S_IMODE(path.stat().st_mode),
+            }
+    return files
+
+
+def _preserve_build_diagnostics(path: Path, workspace: Path) -> None:
+    if not path.exists():
+        return
+    if path.is_symlink() or path.resolve() == workspace.resolve() or not _inside(path.resolve(), workspace.resolve()):
+        raise AddonBuildError(f"refusing to move unqualified build directory: {path}")
+    destination = Path(tempfile.mkdtemp(prefix=f"{path.name}-invalid-", dir=path.parent))
+    os.replace(path, destination)
+
+
+class _DependencyBuild:
+    def work_digest(self, path: Path) -> str | None:
+        return self.hasher.tree_digest([path]) if path.is_dir() else None
+
+    def __init__(
+        self, workspace: Path, target_name: str, fingerprint: str,
+        context: dict[str, Any], hasher: _InputHasher,
+    ) -> None:
+        self.workspace = workspace
+        self.hasher = hasher
+        self.state_path = workspace / "build-state" / f"{target_name}.json"
+        self.state = _read_json(self.state_path, {})
+        self.legacy_recipes: dict[str, str] = {}
+        self.context = context
+        self.environment = context["environment"]
+        if self.state and self.state.get("context") != context:
+            print("  Dependency build inputs changed; selecting a fresh workspace.", flush=True)
+            self.state = {}
+        if not self.state:
+            proof = _read_json(workspace / "legacy-resume-inputs.json", {})
+            if (proof.get("schema") == 1 and proof.get("target") == target_name
+                    and proof.get("shared_inputs") == context["shared_inputs"]):
+                candidate = Path(proof["build_dir"])
+                if (candidate.is_absolute() and _inside(candidate.resolve(), workspace.resolve())
+                        and self.work_digest(candidate / "source-prefix")
+                        == proof.get("staged_source_digest")
+                        and (candidate / "toolchain/config.site").read_text()
+                        == context["native_site"]):
+                    for directory in (candidate / "build").iterdir():
+                        name = directory.name
+                        done = directory / "src" / f"{name}-stamp" / f"{name}-done"
+                        recipe = candidate / "source-prefix" / target_name / "depends/common" / name
+                        if done.is_file() and recipe.is_dir():
+                            self.legacy_recipes[name] = hasher.tree_digest([recipe])
+                    self.state = {
+                        "context": context, "fingerprint": proof["fingerprint"],
+                        "build_dir": str(candidate), "install_prefix": proof["install_prefix"],
+                        "staged_source_digest": proof["staged_source_digest"], "dependencies": {},
+                    }
+                    print("  Adopting the explicitly input-qualified failed build.", flush=True)
+        if self.state:
+            self.build_dir = Path(self.state["build_dir"])
+            self.install_prefix = Path(self.state["install_prefix"])
+            for path in (self.build_dir, self.install_prefix):
+                if not path.is_absolute() or not _inside(path.resolve(), workspace.resolve()):
+                    raise AddonBuildError(f"dependency build state escapes workspace: {path}")
+            if self.work_digest(self.build_dir / "source-prefix") != self.state.get("staged_source_digest"):
+                print("  Staged sources changed outside the builder; refusing dependency reuse.", flush=True)
+                self.state = {}
+                self.legacy_recipes = {}
+        if not self.state:
+            parent = workspace / "build" / target_name
+            self.build_dir = parent / fingerprint
+            if self.build_dir.exists():
+                _preserve_build_diagnostics(self.build_dir, workspace)
+                print("  Preserved unqualified build diagnostics before rebuilding.", flush=True)
+            self.install_prefix = workspace / "install" / target_name / self.build_dir.name
+            self.state = {
+                "context": context, "build_dir": str(self.build_dir),
+                "install_prefix": str(self.install_prefix), "dependencies": {},
+            }
+        self.changed = self.state.get("fingerprint") != fingerprint
+        self.state["fingerprint"] = fingerprint
+        self.prefix = self.build_dir / "build/depends"
+        self.plan_path = self.build_dir / "dependency-plan.tsv"
+        self.plan: dict[str, dict[str, Any]] = {}
+        self.order: list[str] = []
+
+    def save(self) -> None:
+        self.state["staged_source_digest"] = self.hasher.tree_digest([self.build_dir / "source-prefix"])
+        _write_if_changed(self.state_path, _json_bytes(self.state))
+
+    def snapshot(self, files: dict[str, dict[str, Any]], key: str) -> dict[str, Any]:
+        parent = self.workspace / "dependency-cache"
+        parent.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix=f".{key}-", dir=parent))
+        destination = parent / temporary.name.removeprefix(".")
+        try:
+            for relative, metadata in files.items():
+                source = self.prefix / relative
+                output = temporary / relative
+                output.parent.mkdir(parents=True, exist_ok=True)
+                if "link" in metadata:
+                    output.symlink_to(metadata["link"])
+                else:
+                    shutil.copy2(source, output)
+            current = _dependency_files(self.prefix)
+            if any(current.get(relative) != metadata for relative, metadata in files.items()):
+                raise AddonBuildError("dependency outputs changed while recording their cache")
+            os.replace(temporary, destination)
+        finally:
+            if temporary.exists():
+                _safe_remove(temporary, self.workspace)
+        return {"directory": str(destination), "files": files}
+
+    def cache_valid(self, entry: dict[str, Any], *, check_live: bool = True) -> bool:
+        snapshot = entry.get("snapshot")
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("files"), dict):
+            return False
+        directory = Path(snapshot.get("directory", ""))
+        if (not directory.is_absolute()
+                or directory.is_symlink() or not directory.is_dir()
+                or not _inside(directory.resolve(), (self.workspace / "dependency-cache").resolve())):
+            return False
+        for relative, metadata in snapshot["files"].items():
+            if Path(relative).is_absolute() or ".." in Path(relative).parts:
+                return False
+            path = directory / relative
+            live = self.prefix / relative
+            if not _inside(path.absolute(), directory) or not _inside(live.absolute(), self.prefix):
+                return False
+            if "link" in metadata:
+                if not path.is_symlink() or os.readlink(path) != metadata["link"]:
+                    return False
+                if check_live and (not live.is_symlink() or os.readlink(live) != metadata["link"]):
+                    return False
+                target = live.parent / metadata["link"]
+                if not _inside(target.resolve(), self.prefix.resolve()):
+                    return False
+            else:
+                candidates = [(path, directory)]
+                if check_live:
+                    candidates.append((live, self.prefix))
+                for candidate, boundary in candidates:
+                    if (candidate.is_symlink() or not candidate.is_file()
+                            or not _inside(candidate.resolve(), boundary.resolve())
+                            or hashlib.sha256(candidate.read_bytes()).hexdigest() != metadata["sha256"]
+                            or stat.S_IMODE(candidate.stat().st_mode) != metadata["mode"]):
+                        return False
+        return True
+
+    def restore(self) -> None:
+        _safe_remove(self.prefix, self.workspace)
+        self.prefix.mkdir(parents=True)
+        snapshots = [self.state["baseline"]]
+        snapshots.extend(self.state["dependencies"][name]["snapshot"]
+                         for name in self.order if name in self.state["dependencies"])
+        for snapshot in snapshots:
+            directory = Path(snapshot["directory"])
+            for relative, metadata in snapshot["files"].items():
+                destination = self.prefix / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if destination.exists() or destination.is_symlink():
+                    destination.unlink()
+                if "link" in metadata:
+                    destination.symlink_to(metadata["link"])
+                else:
+                    shutil.copy2(directory / relative, destination)
+
+    def prepare(self) -> bool:
+        generated = [
+            self.build_dir / name for name in ("toolchain", "host-tools", "sdk-pkgconfig-patched")
+            if (self.build_dir / name).is_dir()
+        ]
+        generated_digest = self.hasher.tree_digest(generated)
+        for line in self.plan_path.read_text().splitlines():
+            name, recipe, dependencies, prefix, commands, pinned = line.split("\t")
+            if not _SAFE_ID.fullmatch(name):
+                raise AddonBuildError(f"unsafe dependency id in build plan: {name}")
+            build_prefix = Path(prefix)
+            if not _inside(build_prefix.resolve(), self.build_dir.resolve()) or build_prefix == self.build_dir:
+                raise AddonBuildError(f"dependency prefix escapes build directory: {prefix}")
+            self.plan[name] = {
+                "recipe": self.hasher.tree_digest([Path(recipe)]),
+                "dependencies": [dep for dep in dependencies.split(";") if dep],
+                "prefix": prefix, "commands": commands, "pinned": pinned == "TRUE",
+            }
+        visiting: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in self.order:
+                return
+            if name in visiting or name not in self.plan:
+                raise AddonBuildError(f"cyclic or unknown dependency in build plan: {name}")
+            visiting.add(name)
+            node = self.plan[name]
+            for dependency in node["dependencies"]:
+                visit(dependency)
+            node["key"] = hashlib.sha256(_json_bytes({
+                "context": self.context, "prefix": str(self.prefix),
+                "environment": self.environment, "generated_inputs": generated_digest,
+                "recipe": node["recipe"], "commands": node["commands"],
+                "dependencies": {dep: self.plan[dep]["key"] for dep in node["dependencies"]},
+            })).hexdigest()
+            visiting.remove(name)
+            self.order.append(name)
+
+        for name in self.plan:
+            visit(name)
+        entries = self.state["dependencies"]
+        if self.legacy_recipes:
+            if any(name not in self.plan or self.plan[name]["recipe"] != digest
+                   or not self.plan[name]["pinned"]
+                   for name, digest in self.legacy_recipes.items()):
+                raise AddonBuildError("legacy dependency recipes do not qualify for reuse")
+            baseline = self.snapshot(_dependency_files(self.prefix),
+                                     hashlib.sha256((str(self.prefix) + "-legacy").encode()).hexdigest())
+            self.state["baseline"] = baseline
+            self.state["legacy"] = {name: self.plan[name]["key"] for name in self.legacy_recipes}
+            for name in self.legacy_recipes:
+                entries[name] = {
+                    "key": self.plan[name]["key"], "snapshot": {"directory": baseline["directory"], "files": {}},
+                    "work_digest": self.work_digest(Path(self.plan[name]["prefix"])),
+                }
+        if "baseline" not in self.state:
+            self.state["baseline"] = self.snapshot(_dependency_files(self.prefix),
+                                                  hashlib.sha256((str(self.prefix) + "-baseline").encode()).hexdigest())
+        legacy = self.state.get("legacy", {})
+        reset_baseline = (
+            not self.cache_valid({"snapshot": self.state["baseline"]}, check_live=False)
+            or any(name not in self.plan or self.plan[name]["key"] != key for name, key in legacy.items())
+        )
+        invalid: set[str] = set(entries) - set(self.plan)
+        expected = dict(self.state["baseline"]["files"])
+        owners: dict[str, str | None] = dict.fromkeys(expected)
+        for name in self.order:
+            if name in entries:
+                expected.update(entries[name]["snapshot"]["files"])
+                owners.update(dict.fromkeys(entries[name]["snapshot"]["files"], name))
+        current = _dependency_files(self.prefix)
+        for relative, metadata in expected.items():
+            if current.get(relative) != metadata:
+                owner = owners[relative]
+                if owner is None:
+                    reset_baseline = True
+                else:
+                    invalid.add(owner)
+        for name in self.order:
+            node = self.plan[name]
+            entry = entries.get(name)
+            if (entry is not None and (
+                    not node["pinned"] or entry.get("key") != node["key"]
+                    or not self.cache_valid(entry, check_live=False)
+                    or entry.get("work_digest") != self.work_digest(Path(node["prefix"]))
+                    or any(dep in invalid for dep in node["dependencies"]))):
+                invalid.add(name)
+        pending = self.state.get("pending")
+        if isinstance(pending, dict):
+            name = pending["name"]
+            if (name not in self.plan or pending["key"] != self.plan[name]["key"]
+                    or pending["work_digest"] != self.work_digest(Path(self.plan[name]["prefix"]))):
+                invalid.add(name)
+        for name in self.order:
+            if (name not in entries and Path(self.plan[name]["prefix"]).exists()
+                    and (not pending or pending["name"] != name or name in invalid)):
+                invalid.add(name)
+        for name in self.order:
+            if any(dep in invalid for dep in self.plan[name]["dependencies"]):
+                invalid.add(name)
+        if reset_baseline or invalid.intersection(legacy):
+            print("  Dependency baseline/group invalidated; rebuilding its consumers.", flush=True)
+            invalid.update(self.plan)
+            self.state.pop("baseline", None)
+            self.state.pop("legacy", None)
+            _safe_remove(self.prefix, self.workspace)
+        for name in invalid:
+            print(f"  Invalidating dependency {name} and its affected consumers.", flush=True)
+            entries.pop(name, None)
+            if name in self.plan:
+                _preserve_build_diagnostics(Path(self.plan[name]["prefix"]), self.workspace)
+            (self.build_dir / "CMakeFiles" / f"{name}-complete").unlink(missing_ok=True)
+            if pending and pending["name"] == name:
+                self.state.pop("pending", None)
+        if "baseline" in self.state:
+            self.restore()
+        self.save()
+        return bool(invalid)
+
+    def configured(self) -> None:
+        if "baseline" not in self.state:
+            self.state["baseline"] = self.snapshot(
+                _dependency_files(self.prefix),
+                hashlib.sha256((str(self.prefix) + "-baseline").encode()).hexdigest())
+        self.restore()
+        self.save()
+
+    def build(self, env: dict[str, str], jobs: int) -> None:
+        entries = self.state["dependencies"]
+        for name in self.order:
+            node = self.plan[name]
+            if name in entries:
+                print(f"  Dependency {name}: verified cache - skipping build", flush=True)
+                continue
+            before = _dependency_files(self.prefix)
+            print(f"  Dependency {name}: building/resuming", flush=True)
+            self.state["pending"] = {"name": name, "key": node["key"], "work_digest": ""}
+            self.save()
+            try:
+                _run([shutil.which("cmake") or "cmake", "--build", str(self.build_dir),
+                      "--target", name, "--parallel", str(jobs)], env=env, stream=True)
+            except BaseException:
+                self.state["pending"]["work_digest"] = self.work_digest(Path(node["prefix"]))
+                self.save()
+                raise
+            after = _dependency_files(self.prefix)
+            if set(before) - set(after):
+                raise AddonBuildError(f"dependency {name} removed another dependency's installed outputs")
+            files = {relative: metadata for relative, metadata in after.items() if before.get(relative) != metadata}
+            entries[name] = {
+                "key": node["key"], "snapshot": self.snapshot(files, node["key"]),
+                "work_digest": self.work_digest(Path(node["prefix"])),
+            }
+            self.state.pop("pending", None)
+            self.save()
+
+
 def _build_target(
     root: Path,
     workspace: Path,
@@ -949,21 +1311,19 @@ def _build_target(
     if record_path.exists():
         _write_if_changed(record_path, _json_bytes(record))
 
-    build_dir = workspace / "build" / target_name / fingerprint
-    install_prefix = workspace / "install" / target_name / fingerprint
-    if build_dir.exists():
-        _safe_remove(build_dir, workspace)
-    if install_prefix.exists():
-        _safe_remove(install_prefix, workspace)
+    dependency_context = _dependency_context(
+        hasher, root, target_name, addon_ids, sdk, depends, workspace, runtime_sdk, archive_map)
+    dependencies = _DependencyBuild(workspace, target_name, fingerprint, dependency_context, hasher)
+    build_dir = dependencies.build_dir
+    install_prefix = dependencies.install_prefix
     source_prefix = build_dir / "source-prefix"
-    _stage_sources(
-        source_root,
-        source_prefix,
-        [target_name],
-        target_name,
-        [target_name],
-        workspace,
-    )
+    if dependencies.changed:
+        _stage_sources(source_root, source_prefix, [target_name], target_name, [target_name], workspace)
+    if dependencies.changed or dependencies.state.get("finished"):
+        _preserve_build_diagnostics(build_dir / f"{target_name}-prefix", workspace)
+        _safe_remove(install_prefix, workspace)
+        (build_dir / "CMakeFiles" / f"{target_name}-complete").unlink(missing_ok=True)
+    dependencies.state.pop("finished", None)
 
     local_depends = build_dir / "build" / "depends"
     toolchain = build_dir / "toolchain" / "Toolchain_binaddons.cmake"
@@ -1013,6 +1373,7 @@ def _build_target(
         "-DOVERRIDE_PATHS=ON",
         "-DCMAKE_INSTALL_LIBDIR=lib/kodi",
         "-DBUILD_TESTING=OFF",
+        f"-DPS5_ADDON_DEPENDENCY_PLAN={dependencies.plan_path}",
     ]
     autoconf_files = _autoconf_files(root, depends)
     if autoconf_files:
@@ -1046,9 +1407,21 @@ def _build_target(
     env["PKG_CONFIG_PATH"] = os.pathsep.join(str(path) for path in pkgconfig_path_dirs)
     env.pop("PKG_CONFIG_SYSROOT_DIR", None)
     env.pop("PKG_CONFIG_DIR", None)
+    dependencies.environment = {
+        name: env.get(name) for name in (
+            *dependency_context["environment"], "PKG_CONFIG", "PKG_CONFIG_PATH",
+            "PKG_CONFIG_LIBDIR", "CONFIG_SITE", "PS5_DEPENDS_PREFIX",
+            "PS5_NATIVE_RUNTIME_SDK", "PS5_NATIVE_DEPENDS_MAP",
+        )
+    }
     try:
         print(f"  Configuring {target_name}", flush=True)
+        _write_if_changed(dependencies.plan_path, b"")
         _run(command, env=env, stream=True)
+        if dependencies.prepare():
+            _run(command, env=env, stream=True)
+        dependencies.configured()
+        dependencies.build(env, jobs)
         print(f"  Compiling/installing {target_name} ({jobs} jobs)", flush=True)
         _run(
             [shutil.which("cmake") or "cmake", "--build", str(build_dir), "--target", target_name, "--parallel", str(jobs)],
@@ -1058,8 +1431,14 @@ def _build_target(
         installed = _expected_installs(install_prefix, addon_ids)
         for directory in installed:
             native_installed(directory, install_prefix, runtime_sdk)
+        if (_target_fingerprint(hasher, root, target_name, addon_ids, source, sdk,
+                                depends, workspace, source_root, runtime_sdk, archive_map) != fingerprint
+                or _dependency_context(hasher, root, target_name, addon_ids, sdk,
+                                       depends, workspace, runtime_sdk, archive_map) != dependency_context):
+            raise AddonBuildError("add-on build inputs changed during compilation; refusing publication")
         staged_source_digest = hasher.tree_digest([source_prefix])
     except BaseException:
+        dependencies.save()
         entries.pop(target_name, None)
         _refresh_prefixes(record)
         if record_path.exists():
@@ -1077,6 +1456,7 @@ def _build_target(
         "ref": source["ref"],
         "source_revision": source["sha"],
         "fingerprint": fingerprint,
+        "build_dir": str(build_dir),
         "staged_source_digest": staged_source_digest,
         "addons": addon_ids,
         "prefix": str(install_prefix.resolve()),
@@ -1085,7 +1465,18 @@ def _build_target(
     }
     _refresh_prefixes(record)
     _write_if_changed(record_path, _json_bytes(record))
+    dependencies.state["finished"] = True
+    dependencies.save()
     return installed
+
+
+def _record_build_dir(workspace: Path, target_name: str, fingerprint: str, entry: Any) -> Path:
+    if isinstance(entry, dict) and isinstance(entry.get("build_dir"), str):
+        directory = Path(entry["build_dir"])
+        if not directory.is_absolute() or not _inside(directory.resolve(), workspace.resolve()):
+            raise AddonBuildError(f"build record directory escapes workspace: {directory}")
+        return directory
+    return workspace / "build" / target_name / fingerprint
 
 
 def build(
@@ -1163,7 +1554,8 @@ def build(
             hasher, root, target_name, addon_ids, source, sdk, depends, workspace, source_root,
             runtime_sdk, archive_map,
         )
-        build_source_prefix = workspace / "build" / target_name / fingerprint / "source-prefix"
+        build_source_prefix = _record_build_dir(
+            workspace, target_name, fingerprint, record["targets"].get(target_name)) / "source-prefix"
         staged_source_digest = (
             hasher.tree_digest([build_source_prefix]) if build_source_prefix.is_dir() else None
         )
@@ -1268,9 +1660,8 @@ def validate_build(
             runtime_sdk,
             archive_map,
         )
-        build_source_prefix = (
-            workspace / "build" / target_name / fingerprint / "source-prefix"
-        )
+        build_source_prefix = _record_build_dir(
+            workspace, target_name, fingerprint, record["targets"].get(target_name)) / "source-prefix"
         staged_source_digest = (
             hasher.tree_digest([build_source_prefix])
             if build_source_prefix.is_dir()

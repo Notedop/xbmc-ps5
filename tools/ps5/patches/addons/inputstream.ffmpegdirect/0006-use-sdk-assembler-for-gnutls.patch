@@ -1,0 +1,19 @@
+Use the SDK compiler directly for GnuTLS assembly inputs.
+
+GnuTLS's x86 acceleration sources use CCAS, which otherwise inherits the
+native C compiler wrapper. That wrapper attempts to lower the assembled ELF
+object as LLVM bitcode. Assembly needs no C ABI lowering; use the SDK driver
+for CCAS while retaining CONFIG_SITE's native compiler for C code.
+
+Upstream: PS5-only; separates native C ABI lowering from assembly.
+
+--- a/depends/common/gnutls/CMakeLists.txt
++++ b/depends/common/gnutls/CMakeLists.txt
+@@ -5,6 +5,7 @@
+ list(APPEND gnutls_conf "CC=${CMAKE_C_COMPILER}"
+                        "CXX=${CMAKE_CXX_COMPILER}"
++                       "CCAS=${CMAKE_C_COMPILER} -c"
+                        "CFLAGS=-DTARGET_POSIX -DTARGET_FREEBSD"
+                        "CXXFLAGS=-DTARGET_POSIX -DTARGET_FREEBSD"
+                        "CPPFLAGS=-I${CMAKE_INSTALL_PREFIX}/include $ENV{CPPFLAGS}"
+                        "LDFLAGS=-L${CMAKE_INSTALL_PREFIX}/lib ${CMAKE_EXE_LINKER_FLAGS} $ENV{LDFLAGS}"

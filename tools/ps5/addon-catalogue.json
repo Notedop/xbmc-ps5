@@ -10,9 +10,17 @@
       "url": "https://github.com/xbmc/inputstream.adaptive", "ref": "Piers",
       "addons": {"inputstream.adaptive": {"bundled": true, "channel": "testing", "revision": 2}}
     },
+    "inputstream.ffmpegdirect": {
+      "url": "https://github.com/xbmc/inputstream.ffmpegdirect", "ref": "Piers",
+      "addons": {"inputstream.ffmpegdirect": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
     "pvr.hts": {
       "url": "https://github.com/kodi-pvr/pvr.hts", "ref": "Piers",
       "addons": {"pvr.hts": {"bundled": false, "channel": "testing", "revision": 3}}
+    },
+    "pvr.nextpvr": {
+      "url": "https://github.com/kodi-pvr/pvr.nextpvr", "ref": "Piers",
+      "addons": {"pvr.nextpvr": {"bundled": false, "channel": "testing", "revision": 1}}
     },
     "audiodecoder.2sf": {
       "url": "https://github.com/xbmc/audiodecoder.2sf", "ref": "Piers",

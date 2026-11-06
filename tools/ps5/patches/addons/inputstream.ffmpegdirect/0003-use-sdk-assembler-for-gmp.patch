@@ -1,0 +1,20 @@
+Use the SDK compiler directly for GMP assembly inputs.
+
+GMP probes assembler syntax even with --disable-assembly because its
+cycle-counter support uses assembly. CONFIG_SITE's native C compiler wrapper
+rejects the assembly-only conftest.s command with "native object compilation
+requires one compiler object output". Assembly needs no C ABI lowering;
+select the SDK assembler driver while retaining CONFIG_SITE for C code.
+
+Upstream: PS5-only; separates native C ABI lowering from assembly.
+
+--- a/depends/common/gmp/CMakeLists.txt
++++ b/depends/common/gmp/CMakeLists.txt
+@@ -48,6 +48,7 @@
+                       BUILD_IN_SOURCE TRUE)
+ else()
++  list(APPEND gmp_conf "CCAS=${CMAKE_C_COMPILER} -c")
+   if(CORE_SYSTEM_NAME MATCHES "linux" AND CPU MATCHES "i.86")
+       list(APPEND gmp_conf ABI=32)
+   endif()
+ 

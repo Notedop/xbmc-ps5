@@ -1,0 +1,35 @@
+Use the SDK assembler driver for Nettle assembly rules.
+
+Nettle uses COMPILE for both C and generated assembly. The native C ABI
+wrapper rejects aes-decrypt-internal.s instead of emitting an object.
+Replace only the assembly command, preserving flags, dependencies and PIC,
+while retaining the native compiler wrapper for C code. Kodi copies only
+the dependency CMakeLists.txt, so update the archive's Makefile.in there.
+
+Upstream: PS5-only; separates native C ABI lowering from assembly.
+
+--- a/depends/common/nettle/CMakeLists.txt
++++ b/depends/common/nettle/CMakeLists.txt
+@@ -17,6 +17,22 @@
+   list(APPEND nettle_conf --host=${HOST})
+ endif()
+ 
++set(nettle_asm_old "$(COMPILE) $(ASM_FLAGS) -c $*.s")
++set(nettle_asm_new
++    "${CMAKE_C_COMPILER} -fPIC $(PRE_CPPFLAGS) $(CPPFLAGS) $(DEFS) $(CFLAGS) $(EXTRA_CFLAGS) $(DEP_FLAGS) $(ASM_FLAGS) -c $*.s")
++file(READ "${CMAKE_SOURCE_DIR}/Makefile.in" nettle_makefile)
++string(FIND "${nettle_makefile}" "${nettle_asm_old}" nettle_asm_position)
++if(NOT nettle_asm_position EQUAL -1)
++  string(REPLACE "${nettle_asm_old}" "${nettle_asm_new}" nettle_makefile
++                 "${nettle_makefile}")
++  file(WRITE "${CMAKE_SOURCE_DIR}/Makefile.in" "${nettle_makefile}")
++else()
++  string(FIND "${nettle_makefile}" "${nettle_asm_new}" nettle_asm_position)
++  if(nettle_asm_position EQUAL -1)
++    message(FATAL_ERROR "Nettle assembly rule does not match the PS5 patch")
++  endif()
++endif()
++
+ include(ExternalProject)
+ externalproject_add(nettle
+                     SOURCE_DIR ${CMAKE_SOURCE_DIR}

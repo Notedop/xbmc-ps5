@@ -27,8 +27,16 @@ class RepositoryTests(unittest.TestCase):
         raw = json.loads(DEFAULT_CATALOGUE.read_text())
         self.assertNotIn("addons", raw)
         self.assertTrue(all(isinstance(t["addons"], dict) for t in raw["targets"].values()))
-        self.assertEqual(len(self.catalogue["addons"]), 35)
+        self.assertEqual(len(self.catalogue["addons"]), 37)
         self.assertIn("pvr.hts", self.catalogue["addons"])
+        self.assertEqual(self.catalogue["targets"]["pvr.nextpvr"]["ref"], "Piers")
+        self.assertEqual(self.catalogue["addons"]["pvr.nextpvr"],
+                         {"target": "pvr.nextpvr", "bundled": False,
+                          "channel": "testing", "revision": 1})
+        self.assertEqual(self.catalogue["targets"]["inputstream.ffmpegdirect"]["ref"], "Piers")
+        self.assertEqual(self.catalogue["addons"]["inputstream.ffmpegdirect"],
+                         {"target": "inputstream.ffmpegdirect", "bundled": False,
+                          "channel": "testing", "revision": 1})
         self.assertEqual([addon for addon, entry in self.catalogue["addons"].items()
                           if entry["bundled"]], ["peripheral.joystick", "inputstream.adaptive"])
         self.assertTrue(all(p["channel"] == "testing" for p in self.catalogue["addons"].values()))

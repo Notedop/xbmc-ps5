@@ -1,0 +1,403 @@
+Batch segment persistence into bounded 256 KiB writes without playback locks.
+Keep the existing wire format, retry short writes, retain failed history in
+memory, and finalize I/O before atomically linking/completing a rollover.
+
+Upstream: PS5-only.
+
+--- a/src/stream/TimeshiftBuffer.cpp
++++ b/src/stream/TimeshiftBuffer.cpp
+@@ -100,7 +100,7 @@
+ 
+ void TimeshiftBuffer::AddPacket(DEMUX_PACKET* packet)
+ {
+-  std::lock_guard<std::mutex> lock(m_mutex);
++  std::unique_lock<std::mutex> lock(m_mutex);
+ 
+   // Useful for debugging the initial set of packets in a stream
+   if (m_readingInitialPackets)
+@@ -125,32 +125,58 @@
+       m_readingInitialPackets = false;
+ 
+       std::shared_ptr<TimeshiftSegment> m_previousWriteSegment = m_writeSegment;
+-      m_previousWriteSegment->MarkAsComplete();
++      const int nextSegmentIndex = m_currentSegmentIndex;
++      lock.unlock();
++      const bool persisted = m_previousWriteSegment->FinishWrite();
++      auto nextSegment = std::make_shared<TimeshiftSegment>(
++          m_demuxPacketManager, m_streamId, nextSegmentIndex, m_timeshiftBufferPath);
++      lock.lock();
+ 
+       Log(LOGLEVEL_DEBUG, "%s - Writing new segment - seconds: %d, last seg seconds: %d, last seg packet count: %d, new seg index: %d, pts %.2f, dts: %.2f, pts sec: %.0f, dts sec: %.0f",
+                          __FUNCTION__, secondsSinceStart, m_lastSegmentSecondsSinceStart, m_previousWriteSegment->GetPacketCount(), m_currentSegmentIndex,
+                          packet->pts, packet->dts, packet->pts / STREAM_TIME_BASE, packet->dts / STREAM_TIME_BASE);
+ 
+-      if (m_segmentIndexFileHandle.IsOpen())
+-      {
+-        std::string line = StringUtils::Format("%9d,%9d,%9d\n", m_previousWriteSegment->GetSegmentId(), m_lastSegmentSecondsSinceStart, secondsSinceStart); // 30 characters per line
+-        m_segmentIndexFileHandle.Write(line.c_str(), line.length());
+-      }
++      const std::string indexLine = StringUtils::Format("%9d,%9d,%9d\n",
++          persisted ? m_previousWriteSegment->GetSegmentId() : -1,
++          m_lastSegmentSecondsSinceStart, secondsSinceStart);
+ 
+       if (m_segmentTimeIndexMap.size() > MAX_IN_MEMORY_SEGMENT_INDEXES)
+         RemoveOldestInMemoryAndOnDiskSegments();
+ 
+-      m_writeSegment = std::make_shared<TimeshiftSegment>(m_demuxPacketManager, m_streamId, m_currentSegmentIndex, m_timeshiftBufferPath);
++      m_writeSegment = nextSegment;
+       m_previousWriteSegment->SetNextSegment(m_writeSegment);
++      // The next segment must be linked before readers can observe completion.
++      m_previousWriteSegment->MarkAsComplete();
+       m_segmentTimeIndexMap[secondsSinceStart] = m_writeSegment;
+       m_currentSegmentIndex++;
+       m_segmentTotalCount++;
+       m_lastSegmentSecondsSinceStart = secondsSinceStart;
++
++      lock.unlock();
++      if (m_segmentIndexFileHandle.IsOpen())
++      {
++        size_t offset = 0;
++        while (offset < indexLine.size())
++        {
++          const ssize_t written = m_segmentIndexFileHandle.Write(
++              indexLine.data() + offset, indexLine.size() - offset);
++          if (written <= 0 || static_cast<size_t>(written) > indexLine.size() - offset)
++          {
++            Log(LOGLEVEL_ERROR, "%s - Segment index write failed; closing disk index", __FUNCTION__);
++            m_segmentIndexFileHandle.Close();
++            break;
++          }
++          offset += written;
++        }
++      }
++      lock.lock();
+     }
+   }
+   m_lastPacketSecondsSinceStart = secondsSinceStart;
+ 
+-  m_writeSegment->AddPacket(packet);
++  auto writeSegment = m_writeSegment;
++  lock.unlock();
++  writeSegment->AddPacket(packet);
+ }
+ 
+ void TimeshiftBuffer::RemoveOldestInMemoryAndOnDiskSegments()
+--- a/src/stream/TimeshiftBuffer.h
++++ b/src/stream/TimeshiftBuffer.h
+@@ -46,6 +46,11 @@
+   void SetPaused(bool paused);
+ 
+   bool Start(const std::string& streamId);
++  void FinishWrite()
++  {
++    if (m_writeSegment)
++      m_writeSegment->FinishWrite();
++  }
+ 
+   time_t GetStartTimeSecs() { return m_startTime; }
+ 
+--- a/src/stream/TimeshiftSegment.cpp
++++ b/src/stream/TimeshiftSegment.cpp
+@@ -18,6 +18,8 @@
+ 
+ #include <kodi/tools/StringUtils.h>
+ 
++#include <algorithm>
++
+ using namespace ffmpegdirect;
+ using namespace kodi::tools;
+ 
+@@ -38,8 +40,9 @@
+     // opening on SMB for write on android will fail.
+     if (m_fileHandle.OpenFileForWrite(m_timeshiftSegmentFilePath, true))
+     {
++      m_writeBuffer.reserve(WRITE_BUFFER_SIZE);
+       int32_t packetCountPlaceholder = 0;
+-      m_fileHandle.Write(&packetCountPlaceholder, sizeof(packetCountPlaceholder));
++      AppendWriteBuffer(&packetCountPlaceholder, sizeof(packetCountPlaceholder));
+     }
+     else
+     {
+@@ -72,34 +75,37 @@
+ 
+ void TimeshiftSegment::AddPacket(DEMUX_PACKET* packet)
+ {
++  std::lock_guard<std::mutex> writeLock(m_writeMutex);
+   std::shared_ptr<DEMUX_PACKET> newPacket = std::make_shared<DEMUX_PACKET>();
+ 
+   CopyPacket(packet, newPacket.get(), true);
+ 
+   m_demuxPacketManager->FreeDemuxPacketFromInputStreamAPI(packet);
+ 
+-  std::lock_guard<std::mutex> lock(m_mutex);
+-
+-  //Checksum
++  int32_t packetIndex;
++  {
++    std::lock_guard<std::mutex> lock(m_mutex);
++    packetIndex = m_currentPacketIndex;
++    m_packetBuffer.emplace_back(newPacket);
++
++    int secondsSinceStart = 0;
++    if (newPacket->pts != STREAM_NOPTS_VALUE && newPacket->pts > 0)
++      secondsSinceStart = newPacket->pts / STREAM_TIME_BASE;
++
++    if (secondsSinceStart != m_lastPacketSecondsSinceStart)
++    {
++      m_packetTimeIndexMap[secondsSinceStart] = m_currentPacketIndex;
++      m_lastPacketSecondsSinceStart = secondsSinceStart;
++    }
++    m_currentPacketIndex++;
++  }
++
++  // Completion waits for the writer, so readers cannot clear this packet during persistence.
+   if (m_persistSegments)
+   {
+-    m_fileHandle.Write(&m_currentPacketIndex, sizeof(m_currentPacketIndex));
++    AppendWriteBuffer(&packetIndex, sizeof(packetIndex));
+     WritePacket(newPacket);
+   }
+-
+-  m_packetBuffer.emplace_back(newPacket);
+-
+-  int secondsSinceStart = 0;
+-  if (newPacket->pts != STREAM_NOPTS_VALUE && newPacket->pts > 0)
+-    secondsSinceStart = newPacket->pts / STREAM_TIME_BASE;
+-
+-  if (secondsSinceStart != m_lastPacketSecondsSinceStart)
+-  {
+-    m_packetTimeIndexMap[secondsSinceStart] = m_currentPacketIndex;
+-    m_lastPacketSecondsSinceStart = secondsSinceStart;
+-  }
+-
+-  m_currentPacketIndex++;
+ }
+ 
+ void TimeshiftSegment::CopyPacket(DEMUX_PACKET* sourcePacket, DEMUX_PACKET* newPacket, bool allocateData)
+@@ -217,49 +223,93 @@
+   }
+ }
+ 
++bool TimeshiftSegment::WriteAll(const void* data, size_t size)
++{
++  const auto* bytes = static_cast<const uint8_t*>(data);
++  while (size > 0)
++  {
++    const ssize_t written = m_fileHandle.Write(bytes, size);
++    if (written <= 0 || static_cast<size_t>(written) > size)
++    {
++      Log(LOGLEVEL_ERROR, "%s - Segment write failed: %s, requested: %llu, returned: %lld; history retained in memory",
++          __FUNCTION__, CURL::GetRedacted(m_timeshiftSegmentFilePath).c_str(),
++          static_cast<unsigned long long>(size), static_cast<long long>(written));
++      m_persistSegments = false;
++      return false;
++    }
++    bytes += written;
++    size -= written;
++  }
++  return true;
++}
++
++bool TimeshiftSegment::FlushWriteBuffer()
++{
++  const bool result = m_persistSegments &&
++      WriteAll(m_writeBuffer.data(), m_writeBuffer.size());
++  m_writeBuffer.clear();
++  return result;
++}
++
++void TimeshiftSegment::AppendWriteBuffer(const void* data, size_t size)
++{
++  if (!m_persistSegments)
++    return;
++  const auto* bytes = static_cast<const uint8_t*>(data);
++  while (size > 0)
++  {
++    const size_t count = std::min(size, WRITE_BUFFER_SIZE - m_writeBuffer.size());
++    m_writeBuffer.insert(m_writeBuffer.end(), bytes, bytes + count);
++    bytes += count;
++    size -= count;
++    if (m_writeBuffer.size() == WRITE_BUFFER_SIZE && !FlushWriteBuffer())
++      return;
++  }
++}
++
+ void TimeshiftSegment::WritePacket(std::shared_ptr<DEMUX_PACKET>& packet)
+ {
+-  m_fileHandle.Write(&packet->iSize, sizeof(packet->iSize));
++  AppendWriteBuffer(&packet->iSize, sizeof(packet->iSize));
+   if (packet->iSize > 0)
+-    m_fileHandle.Write(packet->pData, packet->iSize);
+-
+-  m_fileHandle.Write(&packet->iStreamId, sizeof(packet->iStreamId));
+-  m_fileHandle.Write(&packet->demuxerId, sizeof(packet->demuxerId));
+-  m_fileHandle.Write(&packet->iGroupId, sizeof(packet->iGroupId));
+-
+-  m_fileHandle.Write(&packet->iSideDataElems, sizeof(packet->iSideDataElems));
++    AppendWriteBuffer(packet->pData, packet->iSize);
++
++  AppendWriteBuffer(&packet->iStreamId, sizeof(packet->iStreamId));
++  AppendWriteBuffer(&packet->demuxerId, sizeof(packet->demuxerId));
++  AppendWriteBuffer(&packet->iGroupId, sizeof(packet->iGroupId));
++
++  AppendWriteBuffer(&packet->iSideDataElems, sizeof(packet->iSideDataElems));
+ 
+   if (packet->iSideDataElems > 0)
+   {
+     AVPacketSideData* sideData = static_cast<AVPacketSideData*>(packet->pSideData);
+     for (int i = 0; i < packet->iSideDataElems; i++)
+     {
+-      m_fileHandle.Write(&sideData[i].type, sizeof(sideData[i].type));
+-      m_fileHandle.Write(&sideData[i].size, sizeof(sideData[i].size));
++      AppendWriteBuffer(&sideData[i].type, sizeof(sideData[i].type));
++      AppendWriteBuffer(&sideData[i].size, sizeof(sideData[i].size));
+       if (sideData[i].size > 0)
+-        m_fileHandle.Write(sideData[i].data, sideData[i].size);
+-    }
+-  }
+-
+-  m_fileHandle.Write(&packet->pts, sizeof(packet->pts));
+-  m_fileHandle.Write(&packet->dts, sizeof(packet->dts));
+-  m_fileHandle.Write(&packet->duration, sizeof(packet->duration));
+-  m_fileHandle.Write(&packet->recoveryPoint, sizeof(packet->recoveryPoint));
++        AppendWriteBuffer(sideData[i].data, sideData[i].size);
++    }
++  }
++
++  AppendWriteBuffer(&packet->pts, sizeof(packet->pts));
++  AppendWriteBuffer(&packet->dts, sizeof(packet->dts));
++  AppendWriteBuffer(&packet->duration, sizeof(packet->duration));
++  AppendWriteBuffer(&packet->recoveryPoint, sizeof(packet->recoveryPoint));
+ 
+   bool hasCryptoInfo = packet->cryptoInfo != nullptr;
+-  m_fileHandle.Write(&hasCryptoInfo, sizeof(hasCryptoInfo));
++  AppendWriteBuffer(&hasCryptoInfo, sizeof(hasCryptoInfo));
+   if (hasCryptoInfo)
+   {
+     int numSubSamples = packet->cryptoInfo->numSubSamples;
+-    m_fileHandle.Write(&numSubSamples, sizeof(numSubSamples));
+-    m_fileHandle.Write(&packet->cryptoInfo->flags, sizeof(packet->cryptoInfo->flags));
++    AppendWriteBuffer(&numSubSamples, sizeof(numSubSamples));
++    AppendWriteBuffer(&packet->cryptoInfo->flags, sizeof(packet->cryptoInfo->flags));
+     if (numSubSamples > 0)
+     {
+-      m_fileHandle.Write(packet->cryptoInfo->clearBytes, sizeof(uint16_t) * numSubSamples);
+-      m_fileHandle.Write(packet->cryptoInfo->cipherBytes, sizeof(uint32_t) * numSubSamples);
+-    }
+-    m_fileHandle.Write(packet->cryptoInfo->iv, sizeof(uint8_t) * 16);
+-    m_fileHandle.Write(packet->cryptoInfo->kid, sizeof(uint8_t) * 16);
++      AppendWriteBuffer(packet->cryptoInfo->clearBytes, sizeof(uint16_t) * numSubSamples);
++      AppendWriteBuffer(packet->cryptoInfo->cipherBytes, sizeof(uint32_t) * numSubSamples);
++    }
++    AppendWriteBuffer(packet->cryptoInfo->iv, sizeof(uint8_t) * 16);
++    AppendWriteBuffer(packet->cryptoInfo->kid, sizeof(uint8_t) * 16);
+   }
+ }
+ 
+@@ -371,24 +421,45 @@
+   return m_currentPacketIndex;
+ }
+ 
++bool TimeshiftSegment::FinishWrite()
++{
++  std::lock_guard<std::mutex> writeLock(m_writeMutex);
++  if (!m_fileHandle.IsOpen())
++  {
++    std::lock_guard<std::mutex> lock(m_mutex);
++    return m_persisted;
++  }
++
++  bool persisted = FlushWriteBuffer();
++  if (persisted && m_fileHandle.Seek(0) != 0)
++  {
++    Log(LOGLEVEL_ERROR, "%s - Cannot seek segment header: %s; history retained in memory",
++        __FUNCTION__, CURL::GetRedacted(m_timeshiftSegmentFilePath).c_str());
++    persisted = false;
++  }
++  if (persisted)
++    persisted = WriteAll(&m_currentPacketIndex, sizeof(m_currentPacketIndex));
++  m_fileHandle.Close();
++  std::vector<uint8_t>().swap(m_writeBuffer);
++
++  std::lock_guard<std::mutex> lock(m_mutex);
++  m_persisted = persisted;
++  return persisted;
++}
++
+ void TimeshiftSegment::MarkAsComplete()
+ {
+-  std::lock_guard<std::mutex> lock(m_mutex);
+-
+-  if (m_fileHandle.IsOpen())
+-  {
+-    m_fileHandle.Seek(0);
+-    m_fileHandle.Write(&m_currentPacketIndex, sizeof(m_currentPacketIndex));
+-  }
+-
++  FinishWrite();
++  std::lock_guard<std::mutex> lock(m_mutex);
+   m_completed = true;
+-  m_fileHandle.Close();
+-  m_persisted = true;
+ }
+ 
+ void TimeshiftSegment::ClearPackets()
+ {
+   std::lock_guard<std::mutex> lock(m_mutex);
++
++  if (!m_persisted)
++    return;
+ 
+   int m_readPacketIndex = 0;
+ 
+--- a/src/stream/TimeshiftSegment.h
++++ b/src/stream/TimeshiftSegment.h
+@@ -35,6 +35,7 @@
+   bool Seek(double timeMs);
+ 
+   int GetPacketCount();
++  bool FinishWrite();
+   void MarkAsComplete();
+   bool HasPacketAvailable();
+   bool ReadAllPackets();
+@@ -51,6 +52,11 @@
+   IManageDemuxPacket* m_demuxPacketManager;
+ 
+ private:
++  static constexpr size_t WRITE_BUFFER_SIZE = 256 * 1024;
++  void AppendWriteBuffer(const void* data, size_t size);
++  bool FlushWriteBuffer();
++  bool WriteAll(const void* data, size_t size);
++
+   void CopyPacket(DEMUX_PACKET* sourcePacket, DEMUX_PACKET* newPacket, bool allocateData);
+   void CopySideData(DEMUX_PACKET *sourcePacket, DEMUX_PACKET* newPacket);
+   void FreeSideData(std::shared_ptr<DEMUX_PACKET>& packet);
+@@ -77,6 +83,8 @@
+   std::string m_segmentFilename;
+ 
+   kodi::vfs::CFile m_fileHandle;
++  std::vector<uint8_t> m_writeBuffer;
++  std::mutex m_writeMutex;
+ 
+   std::string m_timeshiftSegmentFilePath;
+ 
+--- a/src/stream/TimeshiftStream.cpp
++++ b/src/stream/TimeshiftStream.cpp
+@@ -94,13 +94,15 @@
+   {
+     DEMUX_PACKET* pPacket = FFmpegStream::DemuxRead();
+     if (pPacket)
++      m_timeshiftBuffer.AddPacket(pPacket);
++
++    // Pair notification with the consumer's wait, without holding this lock during I/O.
+     {
+       std::lock_guard<std::mutex> lock(m_mutex);
+-      m_timeshiftBuffer.AddPacket(pPacket);
+     }
+-
+     m_condition.notify_one();
+   }
++  m_timeshiftBuffer.FinishWrite();
+   Log(LOGLEVEL_DEBUG, "%s - Timeshift: stopped", __FUNCTION__);
+   return;
+ }

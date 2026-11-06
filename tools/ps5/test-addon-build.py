@@ -11,6 +11,7 @@ import shlex
 import shutil
 import struct
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -92,6 +93,9 @@ class IncrementalBuildTests(unittest.TestCase):
         self.multi_output = False
         self.invalid_primary = False
         self.invalid_helper = False
+        self.dependencies: dict[str, list[str]] = {}
+        self.dependency_builds: dict[str, int] = {}
+        self.failing_dependency: str | None = None
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -174,17 +178,40 @@ class IncrementalBuildTests(unittest.TestCase):
             self.configure_dirs[str(build_dir)] = install_prefix
             requested = next(arg.split("=", 1)[1] for arg in command if arg.startswith("-DADDONS_TO_BUILD="))
             self.configure_targets[str(build_dir)] = requested.split()
+            plan = []
+            for name, dependencies in self.dependencies.items():
+                prefix = build_dir / "build" / name
+                prefix.mkdir(parents=True, exist_ok=True)
+                recipe = build_dir / "source-prefix" / requested / "depends/common" / name
+                plan.append(f"{name}\t{recipe}\t{';'.join(dependencies)}\t{prefix}\t{'f' * 64}\tTRUE\n")
+            (build_dir / "dependency-plan.tsv").write_text("".join(plan))
         else:
             build_dir = Path(command[command.index("--build") + 1])
+            target = command[command.index("--target") + 1]
+            if target in self.dependencies:
+                self.dependency_builds[target] = self.dependency_builds.get(target, 0) + 1
+                prefix = build_dir / "build" / target
+                (prefix / "resume-marker").write_text(target)
+                output = build_dir / "build/depends/lib"
+                output.mkdir(parents=True, exist_ok=True)
+                if self.failing_dependency == target:
+                    self.failing_dependency = None
+                    (output / "partial.a").write_text("partial install")
+                    raise subprocess.CalledProcessError(1, command, stderr="dependency fixture failure")
+                (output / f"lib{target}.a").write_text(target)
+                stamp = prefix / "src" / f"{target}-stamp"
+                stamp.mkdir(parents=True, exist_ok=True)
+                (stamp / f"{target}-done").touch()
+                return mock.Mock(stdout="", stderr="", returncode=0)
             install_prefix = self.configure_dirs[str(build_dir)]
             addon_ids = self.configure_targets[str(build_dir)]
             if addon_ids == ["screensavers.rsxs"] and self.multi_output:
                 addon_ids = ["screensaver.one", "screensaver.two"]
             for addon_id in addon_ids:
                 addon_dir = install_prefix / "share/kodi/addons" / addon_id
-                addon_dir.mkdir(parents=True)
+                addon_dir.mkdir(parents=True, exist_ok=True)
                 lib_dir = install_prefix / "lib/kodi/addons" / addon_id
-                lib_dir.mkdir(parents=True)
+                lib_dir.mkdir(parents=True, exist_ok=True)
                 (addon_dir / "addon.xml").write_text(
                     f"<addon id='{addon_id}'><extension "
                     f"library_freebsd='{addon_id}.sprx'/>"
@@ -661,6 +688,82 @@ class IncrementalBuildTests(unittest.TestCase):
             self.assertEqual(contents["targets"], {})
             self.assertEqual(contents["prefixes"], [])
 
+    def _enable_dependencies(self) -> Path:
+        self.dependencies = {"gmp": [], "nettle": ["gmp"], "gnutls": ["nettle"], "ffmpeg": ["gnutls"]}
+        source = self._fake_fetch(self.workspace, "addon.bundle",
+                                  self.catalogue["targets"]["addon.bundle"]["url"], self.sha)
+        for name in self.dependencies:
+            recipe = source / "depends/common" / name
+            recipe.mkdir(parents=True)
+            (recipe / "CMakeLists.txt").write_text(f"project({name})\n")
+        return source
+
+    def test_failed_dependency_resumes_without_rebuilding_completed_dependencies(self) -> None:
+        self._enable_dependencies()
+        self.failing_dependency = "gnutls"
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.build()
+        state = json.loads((self.workspace / "build-state/addon.bundle.json").read_text())
+        self.assertEqual(set(state["dependencies"]), {"gmp", "nettle"})
+        prefix = Path(state["build_dir"]) / "build/gnutls"
+        marker = prefix / "resume-marker"
+        timestamp = marker.stat().st_mtime_ns
+        original = self.run_mock.side_effect
+
+        def check_resume(command, **kwargs):
+            if "--build" in command and command[command.index("--target") + 1] == "gnutls":
+                self.assertEqual(marker.stat().st_mtime_ns, timestamp)
+            return original(command, **kwargs)
+
+        self.run_mock.side_effect = check_resume
+        self.build()
+        self.assertEqual(self.dependency_builds, {"gmp": 1, "nettle": 1, "gnutls": 2, "ffmpeg": 1})
+        self.assertFalse((Path(state["build_dir"]) / "build/depends/lib/partial.a").exists())
+
+    def test_dependency_recipe_change_invalidates_only_affected_consumers(self) -> None:
+        source = self._enable_dependencies()
+        first = self.build()
+        (source / "depends/common/gnutls/CMakeLists.txt").write_text("new assembler selection\n")
+        self.assertEqual(self.build(), first)
+        self.assertEqual(self.dependency_builds, {"gmp": 1, "nettle": 1, "gnutls": 2, "ffmpeg": 2})
+        addon_build.validate_build(self.root, self.catalogue, self.workspace, self.sdk, self.depends)
+
+    def test_addon_only_change_reuses_all_private_dependencies(self) -> None:
+        source = self._enable_dependencies()
+        self.build()
+        (source / "addon.xml").write_text("<addon id='addon.bundle' version='2'/>")
+        self.build()
+        self.assertEqual(self.dependency_builds, dict.fromkeys(self.dependencies, 1))
+
+    def test_corrupt_dependency_outputs_and_snapshots_rebuild_consumers(self) -> None:
+        source = self._enable_dependencies()
+        self.build()
+        state_path = self.workspace / "build-state/addon.bundle.json"
+        for cached in (False, True):
+            with self.subTest(cached=cached):
+                state = json.loads(state_path.read_text())
+                if cached:
+                    directory = Path(state["dependencies"]["nettle"]["snapshot"]["directory"])
+                else:
+                    directory = Path(state["build_dir"]) / "build/depends"
+                (directory / "lib/libnettle.a").write_text("corrupted")
+                (source / "addon.xml").write_text(f"<addon id='addon.bundle' cached='{cached}'/>")
+                self.build()
+        self.assertEqual(self.dependency_builds, {"gmp": 1, "nettle": 3, "gnutls": 3, "ffmpeg": 3})
+
+    def test_dependency_sdk_change_invalidates_all_private_dependencies(self) -> None:
+        self._enable_dependencies()
+        self.build()
+        (self.sdk / "target/include/ps5.h").write_text("new ABI")
+        self.build()
+        self.assertEqual(self.dependency_builds, dict.fromkeys(self.dependencies, 2))
+
+    def test_dependency_plan_rejects_cycles(self) -> None:
+        self._enable_dependencies()
+        self.dependencies["gmp"] = ["ffmpeg"]
+        with self.assertRaisesRegex(addon_build.AddonBuildError, "cyclic or unknown"):
+            self.build()
+
     def test_record_schema_and_standalone_validation(self) -> None:
         self.build()
         record = json.loads((self.workspace / "build-record.json").read_text(encoding="utf-8"))
@@ -904,6 +1007,451 @@ class PeripheralJoystickConfigureTests(unittest.TestCase):
                               extension.get("provides_buttonmaps")), ("false", "true"))
             self.assertIn("PS5_BUTTONMAP_PROVIDER", (binary / "definitions.txt").read_text())
             self.assertNotIn("src/log/LogSyslog.cpp", (binary / "sources.txt").read_text())
+
+
+class DependencySuperbuildTests(unittest.TestCase):
+    def test_real_externalprojects_resume_and_invalidate_recipes(self) -> None:
+        if not all(shutil.which(tool) for tool in ("cmake", "ninja")):
+            self.skipTest("CMake and Ninja required")
+        root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            hasher = addon_build._InputHasher(workspace)
+            context = {"schema": 1, "shared_inputs": "fixture", "native_site": "", "environment": {}}
+            build = addon_build._DependencyBuild(workspace, "fixture", "a" * 64, context, hasher)
+            source = build.build_dir / "source-prefix/fixture"
+            source.mkdir(parents=True)
+            for name in ("base", "consumer"):
+                recipe = source / "depends/common" / name
+                recipe.mkdir(parents=True)
+                archive = workspace / f"{name}.tar"
+                with tarfile.open(archive, "w") as stream:
+                    data = b"placeholder\n"
+                    info = tarfile.TarInfo("source/CMakeLists.txt")
+                    info.size = len(data)
+                    stream.addfile(info, io.BytesIO(data))
+                (recipe / f"{name}.txt").write_text(f"{name} {archive.as_uri()}\n")
+                (recipe / f"{name}.sha256").write_text(addon_build.hashlib.sha256(archive.read_bytes()).hexdigest())
+                (recipe / "CMakeLists.txt").write_text(
+                    "cmake_minimum_required(VERSION 3.12)\n"
+                    f"project({name} NONE)\n"
+                    f'file(WRITE "${{CMAKE_BINARY_DIR}}/lib{name}.a" "{name}")\n'
+                    f'install(FILES "${{CMAKE_BINARY_DIR}}/lib{name}.a" DESTINATION lib)\n')
+            (source / "depends/common/consumer/deps.txt").write_text("base\n")
+            (source / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.12)\nproject(fixture NONE)\ninclude(ExternalProject)\n"
+                f'set(CORE_SOURCE_DIR "{root}")\n'
+                "set(CORE_SYSTEM_NAME freebsd)\nset(CORE_PLATFORM_NAME ps5)\n"
+                'set(BUILD_DIR "${CMAKE_BINARY_DIR}/build")\n'
+                'set(ADDON_DEPENDS_PATH "${BUILD_DIR}/depends")\n'
+                'file(WRITE "${PS5_ADDON_DEPENDENCY_PLAN}" "")\n'
+                f'include("{root}/cmake/scripts/common/HandleDepends.cmake")\n'
+                'add_addon_depends(fixture "${CMAKE_SOURCE_DIR}/depends")\n')
+
+            def configure(manager):
+                addon_build._run(["cmake", "-S", str(source), "-B", str(manager.build_dir),
+                                  "-G", "Ninja", f"-DPS5_ADDON_DEPENDENCY_PLAN={manager.plan_path}"])
+                if manager.prepare():
+                    addon_build._run(["cmake", "-S", str(source), "-B", str(manager.build_dir),
+                                      f"-DPS5_ADDON_DEPENDENCY_PLAN={manager.plan_path}"])
+                manager.configured()
+
+            configure(build)
+            self.assertEqual(build.order, ["base", "consumer"])
+            self.assertTrue(all(node["pinned"] for node in build.plan.values()))
+            original = addon_build._run
+
+            def fail_consumer(command, **kwargs):
+                if "--target" in command and command[command.index("--target") + 1] == "consumer":
+                    raise subprocess.CalledProcessError(1, command)
+                return original(command, **kwargs)
+
+            with mock.patch.object(addon_build, "_run", side_effect=fail_consumer):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    build.build(os.environ.copy(), 2)
+            base_digest = build.state["dependencies"]["base"]["work_digest"]
+            resumed = addon_build._DependencyBuild(workspace, "fixture", "a" * 64, context, hasher)
+            configure(resumed)
+            self.assertIn("base", resumed.state["dependencies"])
+            resumed.build(os.environ.copy(), 2)
+            self.assertEqual(resumed.work_digest(Path(resumed.plan["base"]["prefix"])), base_digest)
+            updated = addon_build._DependencyBuild(workspace, "fixture", "b" * 64, context, hasher)
+            recipe = source / "depends/common/consumer/CMakeLists.txt"
+            recipe.write_text(recipe.read_text().replace('"consumer"', '"updated"'))
+            configure(updated)
+            self.assertEqual(set(updated.state["dependencies"]), {"base"})
+            updated.build(os.environ.copy(), 2)
+            self.assertEqual((updated.prefix / "lib/libconsumer.a").read_text(), "updated")
+            self.assertEqual(updated.work_digest(Path(updated.plan["base"]["prefix"])), base_digest)
+
+
+class FFmpegDirectConfigureTests(unittest.TestCase):
+    def test_timeshift_batched_writes_and_playback_locking(self):
+        root = Path(__file__).resolve().parents[2]
+        work = root / "build/ps5-addon-repository/work"
+        lock = work / "source-lock.json"
+        if not all(shutil.which(tool) for tool in ("c++", "patch")) or not lock.is_file():
+            self.skipTest("host C++ compiler, patch and locked source cache required")
+        entry = json.loads(lock.read_text())["targets"].get("inputstream.ffmpegdirect")
+        if entry is None:
+            self.skipTest("locked FFmpeg Direct source cache required")
+        cached = work / "sources/inputstream.ffmpegdirect" / entry["sha"]
+        if not cached.is_dir():
+            self.skipTest("locked FFmpeg Direct source cache required")
+        with tempfile.TemporaryDirectory(prefix="test-timeshift-writes-",
+                                         dir=root / "build") as temporary:
+            directory = Path(temporary)
+            source = directory / "source"
+            shutil.copytree(cached / "src", source / "src")
+            series = root / "tools/ps5/patches/addons/inputstream.ffmpegdirect"
+            original = (cached / "src/stream/TimeshiftSegment.cpp").read_text()
+
+            def section(text, start, end):
+                return text[text.index(start):text.index(end)]
+
+            result = subprocess.run(
+                ["patch", "--batch", "--fuzz=0", "-p1", "-i",
+                 str(series / "0014-batch-timeshift-segment-writes.patch")],
+                cwd=source, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            segment = (source / "src/stream/TimeshiftSegment.cpp").read_text()
+            buffer = (source / "src/stream/TimeshiftBuffer.cpp").read_text()
+            stream = (source / "src/stream/TimeshiftStream.cpp").read_text()
+            self.assertIn("lock.unlock();\n  writeSegment->AddPacket(packet);", buffer)
+            self.assertLess(buffer.index("lock.unlock();\n      const bool persisted"),
+                            buffer.index("m_previousWriteSegment->FinishWrite();"))
+            self.assertLess(buffer.index("m_previousWriteSegment->SetNextSegment"),
+                            buffer.index("m_previousWriteSegment->MarkAsComplete"))
+            producer = section(stream, "void TimeshiftStream::DoReadWrite()",
+                               "void TimeshiftStream::GetCapabilities(")
+            self.assertLess(producer.index("m_timeshiftBuffer.AddPacket"),
+                            producer.index("std::lock_guard<std::mutex>"))
+            self.assertIn("m_timeshiftBuffer.FinishWrite();", producer)
+            self.assertIn("std::chrono::milliseconds(10)", stream)
+            segment_header = (source / "src/stream/TimeshiftSegment.h").read_text()
+            buffer_header = (source / "src/stream/TimeshiftBuffer.h").read_text()
+            self.assertNotIn("TimeshiftDiagnostics",
+                             segment + buffer + stream + segment_header + buffer_header)
+            segment_class = section(segment_header, "class TimeshiftSegment",
+                                    "} //namespace").replace("private:", "public:")
+            segment_class = segment_class.replace(
+                "  void WritePacket(", "  void BaselineWritePacket(std::shared_ptr<DEMUX_PACKET>&);\n"
+                "  void WritePacket(")
+            buffer_class = section(buffer_header, "struct SegmentIndexOnDiskEntry",
+                                   "} //namespace").replace("private:", "public:")
+            definitions = (
+                section(segment, "TimeshiftSegment::TimeshiftSegment(", "\n\nnamespace\n{")
+                + section(segment, "bool TimeshiftSegment::WriteAll(",
+                          "void TimeshiftSegment::ForceLoadSegment()")
+                + section(segment, "int TimeshiftSegment::GetPacketCount()", "/* For reference */")
+                + section(buffer, "bool TimeshiftBuffer::Start(",
+                          "void TimeshiftBuffer::RemoveOldestInMemoryAndOnDiskSegments()")
+                + section(buffer, "DEMUX_PACKET* TimeshiftBuffer::ReadPacket()",
+                          "void TimeshiftBuffer::SetPaused(")
+                + section(original, "void TimeshiftSegment::WritePacket(",
+                          "void TimeshiftSegment::ForceLoadSegment()").replace(
+                              "::WritePacket(", "::BaselineWritePacket("))
+            harness = directory / "timeshift-writes.cpp"
+            fixture = (root / "tools/ps5/test-timeshift-writes.cpp").read_text()
+            harness.write_text(fixture.replace(
+                "// INSERT_ACTUAL_CLASSES", "namespace ffmpegdirect {\n" +
+                segment_class + buffer_class + "\n}\nusing namespace ffmpegdirect;").replace(
+                    "// INSERT_ACTUAL_METHODS", definitions))
+            binary = directory / "timeshift-writes"
+            result = subprocess.run(
+                ["c++", "-std=c++14", "-Wall", "-Wextra", "-Werror",
+                 "-Wno-reorder", "-Wno-error=unused-variable",
+                 "-Wno-error=sign-compare", "-pthread",
+                 "-I" + str(source / "src/stream"),
+                 "-I" + str(root / "xbmc/addons/kodi-dev-kit/include"),
+                 str(harness), "-o", str(binary)], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(binary)], text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_autoconf_dependencies_do_not_duplicate_quoted_abi_flags(self):
+        root = Path(__file__).resolve().parents[2]
+        work = root / "build/ps5-addon-repository/work"
+        lock = work / "source-lock.json"
+        if not all(shutil.which(tool) for tool in ("cmake", "cc", "c++", "patch")):
+            self.skipTest("CMake, host C/C++ compilers and patch required")
+        if not lock.is_file():
+            self.skipTest("locked FFmpeg Direct source cache required")
+        entry = json.loads(lock.read_text())["targets"].get("inputstream.ffmpegdirect")
+        if entry is None:
+            self.skipTest("locked FFmpeg Direct source cache required")
+        cached = work / "sources/inputstream.ffmpegdirect" / entry["sha"]
+        if not cached.is_dir():
+            self.skipTest("locked FFmpeg Direct source cache required")
+
+        with tempfile.TemporaryDirectory(prefix="test-ffmpegdirect-configure-",
+                                         dir=root / "build") as temporary:
+            directory = Path(temporary)
+            source = directory / "source"
+            shutil.copytree(cached, source)
+            tools = directory / "host-tools"
+            tools.mkdir()
+            autoreconf = tools / "autoreconf"
+            autoreconf.write_text("#!/bin/sh\nexit 0\n")
+            autoreconf.chmod(0o755)
+            environment = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
+                               CONFIG_SITE=str(directory / "native-config.site"))
+            Path(environment["CONFIG_SITE"]).write_text("# native compiler fixture\n")
+
+            def run(*command):
+                result = subprocess.run(list(map(str, command)), env=environment,
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            run("cmake", "-DSOURCE_DIR=" + str(source),
+                "-DSERIES_DIR=" + str(root / "tools/ps5/patches/addons/inputstream.ffmpegdirect"),
+                "-P", root / "tools/ps5/apply-patch-series.cmake")
+            stream = (source / "src/stream/FFmpegStream.cpp").read_text()
+            self.assertEqual(stream.count("m_pFormatContext->io_open = OpenWithKodiTrust;"), 2)
+            self.assertEqual(stream.count("m_pFormatContext->opaque = this;"), 2)
+            self.assertIn("m_defaultIOOpen = m_pFormatContext->io_open;", stream)
+            callback = stream[stream.index("int FFmpegStream::OpenWithKodiTrust("):
+                              stream.index("bool FFmpegStream::OpenWithFFmpeg(")]
+            trust_test = directory / "trust-test.cpp"
+            trust_test.write_text(r'''
+#include <cassert>
+#include <map>
+#include <string>
+struct AVIOContext {};
+using AVDictionary = std::map<std::string, std::string>;
+struct AVFormatContext
+{
+  void* opaque;
+  int (*io_open)(AVFormatContext*, AVIOContext**, const char*, int, AVDictionary**);
+};
+struct FFmpegStream
+{
+  decltype(AVFormatContext::io_open) m_defaultIOOpen;
+  static int OpenWithKodiTrust(AVFormatContext*, AVIOContext**, const char*, int, AVDictionary**);
+};
+namespace kodi { namespace vfs {
+std::string TranslateSpecialProtocol(const std::string& path)
+{
+  assert(path == "special://xbmc/system/certs/cacert.pem");
+  return "/app with spaces/share/kodi/system/certs/cacert.pem";
+}
+}}
+int failAt = 0, sets = 0, calls = 0;
+int av_dict_set(AVDictionary** options, const char* key, const char* value, int flags)
+{
+  assert(flags == 0);
+  if (++sets == failAt)
+    return -12;
+  (**options)[key] = value;
+  return 0;
+}
+AVFormatContext* expectedContext;
+const char* expectedURL;
+int defaultOpen(AVFormatContext* context, AVIOContext**, const char* url,
+                int flags, AVDictionary** options)
+{
+  assert(context == expectedContext && url == expectedURL && flags == 1);
+  assert((**options)["ca_file"] == "/app with spaces/share/kodi/system/certs/cacert.pem");
+  assert((**options)["tls_verify"] == "1");
+  assert((**options)["headers"] == "preserved");
+  ++calls;
+  return -5;
+}
+''' + callback + r'''
+int main()
+{
+  FFmpegStream stream{defaultOpen};
+  AVFormatContext context{&stream, FFmpegStream::OpenWithKodiTrust};
+  expectedContext = &context;
+  AVIOContext* io = nullptr;
+  for (const char* url : {"https://host/master.m3u8", "https://host/variant.m3u8",
+                          "https://host/segment.ts", "https://host/key",
+                          "http://host/master.m3u8", "file:///local.ts"})
+  {
+    expectedURL = url;
+    AVDictionary options{{"headers", "preserved"}, {"tls_verify", "0"}, {"ca_file", "old"}};
+    AVDictionary* ptr = &options;
+    sets = 0;
+    assert(context.io_open(&context, &io, url, 1, &ptr) == -5);
+  }
+  assert(calls == 6);
+  for (failAt = 1; failAt <= 2; ++failAt)
+  {
+    AVDictionary options;
+    AVDictionary* ptr = &options;
+    sets = 0;
+    assert(context.io_open(&context, &io, expectedURL, 1, &ptr) == -12);
+    assert(calls == 6);
+  }
+}
+''')
+            trust_binary = directory / "trust-test"
+            run("c++", "-std=c++14", "-Wall", "-Wextra", "-Werror",
+                trust_test, "-o", trust_binary)
+            run(trust_binary)
+            header = directory / "abi.h"
+            header.write_text("\n")
+            for target in ("libzvbi", "nettle", "gnutls", "gmp", "ffmpeg"):
+                with self.subTest(target=target):
+                    dependency = source / "depends/common" / target
+                    if target == "ffmpeg":
+                        (dependency / "RELEASE").write_text("9.0.2\n")
+                    if target == "nettle":
+                        (dependency / "Makefile.in").write_text(
+                            "\t$(COMPILE) $(ASM_FLAGS) -c $*.s\n"
+                            "\t$(COMPILE) -c $<\n")
+                    if target == "gnutls":
+                        for name in ("gl", "src/gl"):
+                            gnulib = dependency / name
+                            gnulib.mkdir(parents=True)
+                            (gnulib / "Makefile.in").write_text(
+                                "@GL_COND_OBJ_FSETERR_TRUE@am__append_10 = fseterr.c\n"
+                                "@GL_COND_OBJ_FSETERR_TRUE@am__objects_10 = libgnu_la-fseterr.lo\n"
+                                "other_sources = ferror.c\n")
+                    configure = dependency / "configure"
+                    configure.write_text(
+                        "#!" + sys.executable + "\n"
+                        "import json, os, sys\nfrom pathlib import Path\n"
+                        "flags = dict(arg.split('=', 1) for arg in sys.argv[1:] "
+                        "if '=' in arg and not arg.startswith('--'))\n"
+                        "flags['CONFIG_SITE'] = os.environ.get('CONFIG_SITE')\n"
+                        "flags['arguments'] = sys.argv[1:]\n"
+                        "Path(__file__).with_name('configure-flags.json').write_text("
+                        "json.dumps(flags))\n")
+                    configure.chmod(0o755)
+                    cmake = dependency / "CMakeLists.txt"
+                    cmake.write_text(cmake.read_text() +
+                                     f"\nExternalProject_Add_StepTargets({target} configure)\n")
+                    binary = directory / target
+                    run("cmake", "-S", dependency, "-B", binary,
+                        "-DCMAKE_INSTALL_PREFIX=" + str(directory / "private-prefix"),
+                        "-DCMAKE_C_COMPILER=" + shutil.which("cc"),
+                        "-DCMAKE_CXX_COMPILER=" + shutil.which("c++"),
+                        '-DCMAKE_C_FLAGS=-include "' + str(header) + '"',
+                        '-DCMAKE_CXX_FLAGS=-include "' + str(header) + '"')
+                    run("cmake", "--build", binary, "--target", target + "-configure")
+                    if target == "nettle":
+                        makefile = (dependency / "Makefile.in").read_text()
+                        self.assertIn(shutil.which("cc") + " -fPIC ", makefile)
+                        self.assertNotIn("$(COMPILE) $(ASM_FLAGS)", makefile)
+                        self.assertIn("$(COMPILE) -c $<", makefile)
+                        run("cmake", "-S", dependency, "-B", binary)
+                    if target == "gnutls":
+                        for name in ("gl", "src/gl"):
+                            makefile = (dependency / name / "Makefile.in").read_text()
+                            self.assertNotIn("fseterr.c", makefile)
+                            self.assertNotIn("libgnu_la-fseterr.lo", makefile)
+                            self.assertIn("other_sources = ferror.c", makefile)
+                        commands = (binary / "CMakeFiles/gnutls.dir/build.make").read_text()
+                        self.assertIn("gnutls-build/gl", commands)
+                        self.assertIn("gnutls-build/lib install", commands)
+                        self.assertNotIn("gnutls-build/src/gl", commands)
+                        run("cmake", "-S", dependency, "-B", binary)
+                    flags = json.loads((dependency / "configure-flags.json").read_text())
+                    if target == "nettle":
+                        self.assertIn("--disable-assembler", flags["arguments"])
+                    if target == "gnutls":
+                        self.assertIn("--disable-hardware-acceleration", flags["arguments"])
+                        self.assertNotIn("--disable-assembler", flags["arguments"])
+                    if target in ("gmp", "gnutls"):
+                        self.assertEqual(flags["CCAS"], shutil.which("cc") + " -c")
+                    if target == "gmp":
+                        self.assertNotIn("CFLAGS", flags)
+                        self.assertNotIn("CXXFLAGS", flags)
+                    elif target == "ffmpeg":
+                        arguments = flags["arguments"]
+                        self.assertNotIn("--disable-asm", arguments)
+                        self.assertNotIn("--disable-hardware-acceleration", arguments)
+                        self.assertIn("--target-os=freebsd", arguments)
+                        self.assertIn("--arch=x86_64", arguments)
+                        self.assertIn("--as=" + shutil.which("cc"), arguments)
+                        self.assertIn("--cc=" + str(binary / "ps5-ffmpeg-cc"), arguments)
+                        self.assertIn("--cxx=" + str(binary / "ps5-ffmpeg-cxx"), arguments)
+                        self.assertNotIn("-include", " ".join(arguments))
+                        site = Path(environment["CONFIG_SITE"])
+                        compiler = binary / "capture compiler.py"
+                        compiler.write_text("import json,sys\nprint(json.dumps(sys.argv[1:]))\n")
+                        site.write_text(
+                            "CC=" + shlex.quote(shlex.join([sys.executable, str(compiler), "C"])) + "\n"
+                            "CXX=" + shlex.quote(shlex.join([sys.executable, str(compiler), "CXX"])) + "\n")
+                        archive = directory / "private-prefix/lib/libprivate.a"
+                        archive.parent.mkdir(parents=True)
+                        archive.write_bytes(b"fixture")
+                        for language, label in (("cc", "C"), ("cxx", "CXX")):
+                            result = subprocess.run(
+                                [str(binary / ("ps5-ffmpeg-" + language)), "argument with spaces",
+                                 "-lprivate", "-lsystem"],
+                                env=environment, check=True, capture_output=True, text=True)
+                            self.assertEqual(json.loads(result.stdout),
+                                             [label, "argument with spaces", str(archive), "-lsystem"])
+                    else:
+                        for key in ("CFLAGS", "CXXFLAGS"):
+                            self.assertEqual(flags[key], "-DTARGET_POSIX -DTARGET_FREEBSD")
+                    self.assertEqual(flags["CONFIG_SITE"], environment["CONFIG_SITE"])
+
+            prefix = directory / "private-prefix"
+            metadata = prefix / "lib/pkgconfig"
+            metadata.mkdir(parents=True)
+            packages = {"avcodec": "63.1.102", "avfilter": "12.1.102",
+                        "avformat": "63.1.102", "avutil": "61.1.102",
+                        "swscale": "10.1.102", "swresample": "7.1.102"}
+            for name, version in packages.items():
+                (prefix / ("lib/lib" + name + ".a")).write_bytes(b"fixture")
+                (metadata / ("lib" + name + ".pc")).write_text(
+                    f"prefix={prefix}\nName: lib{name}\nDescription: fixture\nVersion: {version}\n"
+                    f"Libs: -L${{prefix}}/lib -l{name}\n"
+                    "Libs.private: -lprivate -lm\nCflags: -I${prefix}/include\n")
+            discovery = directory / "discovery"
+            discovery.mkdir()
+            (discovery / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.12)\nproject(discovery NONE)\n"
+                f'list(PREPEND CMAKE_MODULE_PATH "{source}")\n'
+                "find_package(FFMPEG REQUIRED)\n"
+                'file(WRITE "${CMAKE_BINARY_DIR}/libraries.txt" "${FFMPEG_LIBRARIES}")\n'
+                'file(WRITE "${CMAKE_BINARY_DIR}/flags.txt" "${FFMPEG_LDFLAGS}")\n')
+            binary = directory / "discovery-build"
+            run("cmake", "-S", discovery, "-B", binary,
+                "-DPS5_NATIVE_SHARED_ADDONS=ON", "-DADDON_DEPENDS_PATH=" + str(prefix))
+            libraries = (binary / "libraries.txt").read_text().split(";")
+            for name in (*packages, "private"):
+                self.assertIn(str(prefix / ("lib/lib" + name + ".a")), libraries)
+                self.assertNotIn("-l" + name, libraries)
+            self.assertIn("-lm", libraries)
+            self.assertEqual((binary / "flags.txt").read_text(), "-Wl,-Bsymbolic")
+            if shutil.which("clang") and shutil.which("ld.lld"):
+                adapters = directory / "adapters"
+                adapters.mkdir()
+                (adapters / "stdlib.h").write_text(
+                    "extern int __mb_cur_max;\nint ___mb_cur_max(void);\n")
+                optional = ("thrd_exit", "ZSTD_trace_compress_begin", "ZSTD_trace_compress_end",
+                            "ZSTD_trace_decompress_begin", "ZSTD_trace_decompress_end")
+                (adapters / "probe.c").write_text(
+                    '#include <stdlib.h>\nint __mb_cur_max = 1;\n' +
+                    "".join(f"extern void {name}(void) __attribute__((weak));\n"
+                            for name in optional) +
+                    "int optional_present(void) { return " +
+                    " || ".join(f"{name} != 0" for name in optional) + "; }\n"
+                    "int multibyte_limit(void) { return ___mb_cur_max(); }\n")
+                fragment = (source / "CMakeLists.txt").read_text().split(
+                    "build_addon(inputstream.ffmpegdirect FFMPEGDIRECT DEPLIBS)", 1)[1]
+                fragment = fragment.split('if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")', 1)[0]
+                (adapters / "CMakeLists.txt").write_text(
+                    "cmake_minimum_required(VERSION 3.13)\nproject(adapters C)\n"
+                    "set(PS5_NATIVE_SHARED_ADDONS ON)\n"
+                    "add_library(inputstream.ffmpegdirect SHARED probe.c)\n"
+                    'target_include_directories(inputstream.ffmpegdirect PRIVATE "${CMAKE_SOURCE_DIR}")\n'
+                    'target_link_options(inputstream.ffmpegdirect PRIVATE "-fuse-ld=lld" "-Wl,-Bsymbolic")\n'
+                    + fragment)
+                binary = directory / "adapters-build"
+                run("cmake", "-S", adapters, "-B", binary,
+                    "-DCMAKE_C_COMPILER=" + shutil.which("clang"))
+                run("cmake", "--build", binary)
+                run(sys.executable, "-c",
+                    "import ctypes,sys; lib=ctypes.CDLL(sys.argv[1]); "
+                    "assert lib.optional_present()==0; assert lib.multibyte_limit()==1; "
+                    "ctypes.c_int.in_dll(lib,'__mb_cur_max').value=6; "
+                    "assert lib.multibyte_limit()==6",
+                    binary / "libinputstream.ffmpegdirect.so")
 
 
 if __name__ == "__main__":

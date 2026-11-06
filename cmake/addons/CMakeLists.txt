@@ -24,6 +24,10 @@ endif()
 
 include(ExternalProject)
 
+if(CORE_PLATFORM_NAME STREQUAL ps5 AND PS5_ADDON_DEPENDENCY_PLAN)
+  file(WRITE "${PS5_ADDON_DEPENDENCY_PLAN}" "")
+endif()
+
 ### setup all the necessary paths
 if(APP_ROOT)
   set(CORE_SOURCE_DIR ${APP_ROOT})

@@ -102,6 +102,25 @@ def validate_binary(binary, sdk=None):
     return receipt
 
 
+def binary_extensions(root, directory):
+    metadata = directory / "addon.xml"
+    extensions = []
+    for extension in root.findall("extension"):
+        libraries = [key for key in extension.attrib if key.startswith("library")]
+        if extension.get("point") == "xbmc.service" and libraries == ["library"]:
+            script = extension.get("library", "")
+            relative = Path(script)
+            require(script and not relative.is_absolute() and "\\" not in script and
+                    ".." not in relative.parts and relative.suffix == ".py",
+                    f"invalid companion Python service: {metadata}")
+            path = directory / relative
+            contained(path, directory)
+            require(path.is_file(), f"missing companion Python service: {path}")
+        elif libraries:
+            extensions.append(extension)
+    return extensions
+
+
 def installed(directory, prefix, sdk=None):
     metadata = directory / "addon.xml"
     contained(directory, prefix)
@@ -109,8 +128,7 @@ def installed(directory, prefix, sdk=None):
     require(metadata.is_file(), f"missing installed native metadata: {metadata}")
     root = ET.parse(metadata).getroot()
     addon = root.get("id")
-    extensions = [ext for ext in root.findall("extension")
-                  if any(key.startswith("library") for key in ext.attrib)]
+    extensions = binary_extensions(root, directory)
     require(root.tag == "addon" and addon == directory.name and len(extensions) == 1,
             f"invalid installed native add-on metadata: {metadata}")
     require(root.findtext("./extension[@point='xbmc.addon.metadata']/platform") == "ps5",

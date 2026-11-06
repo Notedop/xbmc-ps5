@@ -1,0 +1,49 @@
+Use the native CONFIG_SITE ABI flags for Autoconf dependencies.
+
+libzvbi configure fails with an empty include filename when shell-quoted
+CMake flags reach Clang literally. Nettle and GnuTLS use the same flag
+construction. The native CONFIG_SITE compiler commands already provide the
+launcher, forced ABI header and stdio overlay; keep the platform defines
+without duplicating those options in Autoconf flag strings.
+
+Upstream: PS5-only; requires the native catalogue's shared CONFIG_SITE.
+
+--- a/depends/common/libzvbi/CMakeLists.txt
++++ b/depends/common/libzvbi/CMakeLists.txt
+@@ -4,8 +4,8 @@
+ # Keep the target architecture, SDK and deployment flags supplied by Kodi.
+ list(APPEND zvbi_conf "CC=${CMAKE_C_COMPILER}"
+                       "CXX=${CMAKE_CXX_COMPILER}"
+-                      "CFLAGS=${CMAKE_C_FLAGS}"
+-                      "CXXFLAGS=${CMAKE_CXX_FLAGS}"
++                      "CFLAGS=-DTARGET_POSIX -DTARGET_FREEBSD"
++                      "CXXFLAGS=-DTARGET_POSIX -DTARGET_FREEBSD"
+                       "CPPFLAGS=-I${CMAKE_INSTALL_PREFIX}/include $ENV{CPPFLAGS}"
+                       "LDFLAGS=-L${CMAKE_INSTALL_PREFIX}/lib ${CMAKE_EXE_LINKER_FLAGS} $ENV{LDFLAGS}")
+ if(HOST)
+--- a/depends/common/nettle/CMakeLists.txt
++++ b/depends/common/nettle/CMakeLists.txt
+@@ -4,8 +4,8 @@
+ # Preserve the target architecture, SDK and deployment flags supplied by Kodi.
+ list(APPEND nettle_conf "CC=${CMAKE_C_COMPILER}"
+                        "CXX=${CMAKE_CXX_COMPILER}"
+-                       "CFLAGS=${CMAKE_C_FLAGS}"
+-                       "CXXFLAGS=${CMAKE_CXX_FLAGS}"
++                       "CFLAGS=-DTARGET_POSIX -DTARGET_FREEBSD"
++                       "CXXFLAGS=-DTARGET_POSIX -DTARGET_FREEBSD"
+                        "CPPFLAGS=-I${CMAKE_INSTALL_PREFIX}/include $ENV{CPPFLAGS}"
+                        "LDFLAGS=-L${CMAKE_INSTALL_PREFIX}/lib ${CMAKE_EXE_LINKER_FLAGS} $ENV{LDFLAGS}"
+                        "PKG_CONFIG_PATH=${CMAKE_INSTALL_PREFIX}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+--- a/depends/common/gnutls/CMakeLists.txt
++++ b/depends/common/gnutls/CMakeLists.txt
+@@ -4,8 +4,8 @@
+ # Preserve the target architecture, SDK and deployment flags supplied by Kodi.
+ list(APPEND gnutls_conf "CC=${CMAKE_C_COMPILER}"
+                        "CXX=${CMAKE_CXX_COMPILER}"
+-                       "CFLAGS=${CMAKE_C_FLAGS}"
+-                       "CXXFLAGS=${CMAKE_CXX_FLAGS}"
++                       "CFLAGS=-DTARGET_POSIX -DTARGET_FREEBSD"
++                       "CXXFLAGS=-DTARGET_POSIX -DTARGET_FREEBSD"
+                        "CPPFLAGS=-I${CMAKE_INSTALL_PREFIX}/include $ENV{CPPFLAGS}"
+                        "LDFLAGS=-L${CMAKE_INSTALL_PREFIX}/lib ${CMAKE_EXE_LINKER_FLAGS} $ENV{LDFLAGS}"
+                        "PKG_CONFIG_PATH=${CMAKE_INSTALL_PREFIX}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")

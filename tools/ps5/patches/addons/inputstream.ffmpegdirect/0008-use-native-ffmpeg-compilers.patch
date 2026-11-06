@@ -1,0 +1,47 @@
+Use CONFIG_SITE's native compiler commands for FFmpeg's custom build.
+
+FFmpeg does not read CONFIG_SITE and its configure script ignores CMake
+compiler launchers. Small compiler drivers reuse the existing native C/C++
+commands, including ABI lowering and the opaque stdio overlay. Do not pass
+the same shell-quoted CMake ABI flags again. Assembly uses the SDK driver
+directly, and configure explicitly selects the cross-compiled x86-64 target.
+Resolve private static libraries to full paths so the SDK driver's earlier
+homebrew search directory cannot substitute an unrelated SDK archive.
+
+Upstream: PS5-only; preserves the same native ABI as the add-on and dependencies.
+
+--- a/depends/common/ffmpeg/CMakeLists.txt
++++ b/depends/common/ffmpeg/CMakeLists.txt
+@@ -9,6 +9,32 @@
+ set(EXTRA_CFLAGS "")
+ set(EXTRA_LDFLAGS "")
+ 
++if(NOT DEFINED ENV{CONFIG_SITE} OR NOT EXISTS "$ENV{CONFIG_SITE}")
++  message(FATAL_ERROR "FFmpeg requires the native CONFIG_SITE compiler commands")
++endif()
++foreach(language IN ITEMS cc cxx)
++  if(language STREQUAL cc)
++    set(compiler_variable CC)
++  else()
++    set(compiler_variable CXX)
++  endif()
++  set(driver "${CMAKE_BINARY_DIR}/ps5-ffmpeg-${language}")
++  file(WRITE "${driver}" "#!/bin/sh\nset -eu\n. \"$CONFIG_SITE\"\nfor argument do\n  case \"$argument\" in\n    -l*)\n      archive=\"${CMAKE_INSTALL_PREFIX}/lib/lib\${argument#-l}.a\"\n      if [ -f \"$archive\" ]; then argument=\"$archive\"; fi\n      ;;\n  esac\n  shift\n  set -- \"$@\" \"$argument\"\ndone\neval \"exec $${compiler_variable} \\\"\\$@\\\"\"\n")
++  execute_process(COMMAND chmod +x "${driver}" RESULT_VARIABLE chmod_result)
++  if(NOT chmod_result EQUAL 0)
++    message(FATAL_ERROR "Could not make the native FFmpeg compiler driver executable")
++  endif()
++endforeach()
++set(ffmpeg_sdk_assembler "${CMAKE_C_COMPILER}")
++set(CMAKE_C_COMPILER "${CMAKE_BINARY_DIR}/ps5-ffmpeg-cc")
++set(CMAKE_CXX_COMPILER "${CMAKE_BINARY_DIR}/ps5-ffmpeg-cxx")
++set(CPU x86_64)
++set(CMAKE_C_FLAGS "-DTARGET_POSIX -DTARGET_FREEBSD -I${CMAKE_INSTALL_PREFIX}/include")
++set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS}")
++list(APPEND EXTRA_CONF --enable-cross-compile --arch=x86_64
++                       --target-os=freebsd "--as=${ffmpeg_sdk_assembler}")
++string(APPEND CMAKE_EXE_LINKER_FLAGS " -L${CMAKE_INSTALL_PREFIX}/lib")
++
+ # Read version for ffmpeg to define on extra version
+ file(STRINGS "${CMAKE_SOURCE_DIR}/RELEASE" FFMPEG_VER)
+ 

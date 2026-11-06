@@ -74,8 +74,23 @@ shipped or committed. Ordinary SDK import libraries are linker inputs, not
 runtime binaries.
 
 Source refs are pinned in `work/source-lock.json`; unchanged targets reuse
-validated fingerprint-specific installs. SDK/provider/ABI/builder changes
-invalidate affected targets, including their private dependencies. A channel,
+validated installs qualified by their complete input fingerprint. Failed builds
+retain their working directories and resume matching incomplete steps.
+`work/build-state/` records dependency recipes, generated commands, graph edges,
+and intermediate integrity; `work/dependency-cache/` holds isolated, verified
+install snapshots. Dependency-specific patches invalidate the changed dependency
+and affected consumers, while add-on-only changes reuse unchanged dependencies.
+Build paths remain stable across compatible retries so generated Makefiles and
+pkg-config files do not require relocation. SDK/provider/ABI/tool or command
+changes invalidate affected work. Dependencies with unpinned sources cannot
+satisfy completed dependency-cache reuse.
+
+Keep these state files and snapshots with the workspace. Corrupted or missing
+outputs are rebuilt, and invalidated working directories are retained as
+`*-invalid-*` diagnostics. Builds predating dependency receipts are not adopted
+without explicit original-input qualification; their qualified completed outputs
+form a baseline group that is invalidated together if any member changes.
+Final native receipt/provider/ABI validation remains mandatory. A channel,
 bundling or package-revision change alone does not recompile sources. Legacy SO
 build records cannot satisfy native cache validation.
 
@@ -87,6 +102,40 @@ python3 tools/ps5/addon-repository.py build --only inputstream.adaptive --jobs 4
 python3 tools/ps5/addon-repository.py build \
   --only inputstream.adaptive --refresh-sources --jobs 4
 ```
+
+NextPVR and its optional `inputstream.ffmpegdirect` dependency are testing-only,
+non-bundled targets. Build either independently with `build --only pvr.nextpvr`
+or `build --only inputstream.ffmpegdirect`. NextPVR requires a separate backend;
+FFmpeg Direct provides its optional timeshifted transcoded streaming mode.
+Building these targets does not deploy them or establish console acceptance.
+The native FFmpeg Direct build uses its private FFmpeg archives and static
+dependency metadata rather than Kodi's or the payload SDK's FFmpeg. Internal
+references bind locally with `-Bsymbolic`; its companion Python service remains
+part of the installed resources and is validated separately from the SPRX.
+Its PS5-only dependency recipes disable Nettle assembly and GnuTLS hardware
+acceleration: their assembly reads constants from execute-only code and faults
+on the console. Portable crypto retains TLS and certificate verification;
+FFmpeg codec optimizations and hardware video decoding are unaffected.
+Its native FFmpeg I/O uses Kodi's bundled `system/certs/cacert.pem`, translated
+through Kodi's filesystem API, rather than relying on a console GnuTLS system
+trust store. Certificate and hostname verification remain enabled for the
+initial request and nested HLS playlists, segments and encryption keys.
+
+FFmpeg Direct patch `0014-batch-timeshift-segment-writes.patch` keeps the existing
+segment wire format but batches writes in a bounded 256 KiB buffer. Packets are
+published to memory before persistence, and normal segment writes do not hold
+the stream, buffer or packet-reader mutex. Segment rollover finalizes disk I/O
+outside the buffer lock, then links the next segment before publishing completion.
+The producer flushes the final partial batch and packet-count header before
+exiting. Short writes are retried; failed persistence is logged and affected
+packets remain in memory under the existing retention policy. Failed segments
+receive an invalid disk-index ID rather than advertising corrupt disk history.
+
+The host regression in `test-addon-build.py` compiles the patched timeshift
+classes with `test-timeshift-writes.cpp` to check byte-identical serialization,
+bounded writes, short-write/error handling, and responsive playback/seek while
+persistence is blocked. The production patch contains no temporary timing
+instrumentation.
 
 A multi-output target builds once for all its catalogued outputs. Source-target
 and output-specific patch series both participate in the target fingerprint.

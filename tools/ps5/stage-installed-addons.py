@@ -9,7 +9,7 @@ import shutil
 import sys
 import xml.etree.ElementTree as ET
 
-from native_addon import installed as native_installed
+from native_addon import binary_extensions, installed as native_installed
 
 BASENAME = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+-]{0,127}")
 ADDON_ID = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+-]*")
@@ -47,8 +47,7 @@ def discover(prefixes, exclusions, audio_ids=None, include=(), catalogue=None, s
             addon = root.get("id", "")
             if root.tag != "addon" or not ADDON_ID.fullmatch(addon):
                 raise ValueError(f"invalid add-on ID/manifest: {manifest}")
-            extensions = [ext for ext in root.findall("extension")
-                          if any(key.startswith("library") for key in ext.attrib)]
+            extensions = binary_extensions(root, data)
             lib = lib_root / data.name
             if (not extensions and not lib.exists()
                     and (catalogue is None or addon not in catalogue["addons"])):

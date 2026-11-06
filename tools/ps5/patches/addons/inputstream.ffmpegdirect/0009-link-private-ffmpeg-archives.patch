@@ -1,0 +1,65 @@
+Select the add-on's native FFmpeg and its private static dependencies.
+
+The shared Kodi dependency prefix precedes the add-on prefix in pkg-config
+discovery, and the SDK compiler inserts its homebrew library path before
+user -L flags. Query the private metadata first and resolve private archives
+to full paths. Keep -Bsymbolic so internal FFmpeg references bind locally.
+
+Upstream: PS5 native add-on build only.
+
+--- a/FindFFMPEG.cmake
++++ b/FindFFMPEG.cmake
+@@ -44,6 +44,53 @@
+ set(_swresample_ver ">=7.1.102")
+ set(_swscale_ver ">=10.1.102")
+ 
++if(PS5_NATIVE_SHARED_ADDONS)
++  find_package(PkgConfig REQUIRED)
++  set(_saved_pkg_config_path "$ENV{PKG_CONFIG_PATH}")
++  set(ENV{PKG_CONFIG_PATH} "${ADDON_DEPENDS_PATH}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
++  pkg_check_modules(PS5_FFMPEG REQUIRED
++    libavcodec${_avcodec_ver} libavfilter${_avfilter_ver}
++    libavformat${_avformat_ver} libavutil${_avutil_ver}
++    libswscale${_swscale_ver} libswresample${_swresample_ver})
++  execute_process(
++    COMMAND "${PKG_CONFIG_EXECUTABLE}" --static --libs
++      libavcodec libavfilter libavformat libavutil libswscale libswresample
++    RESULT_VARIABLE _ffmpeg_result OUTPUT_VARIABLE _ffmpeg_flags
++    ERROR_VARIABLE _ffmpeg_error OUTPUT_STRIP_TRAILING_WHITESPACE)
++  set(ENV{PKG_CONFIG_PATH} "${_saved_pkg_config_path}")
++  if(NOT _ffmpeg_result EQUAL 0)
++    message(FATAL_ERROR "Private FFmpeg static link query failed: ${_ffmpeg_error}")
++  endif()
++  if(NOT PS5_FFMPEG_libavcodec_PREFIX STREQUAL ADDON_DEPENDS_PATH)
++    message(FATAL_ERROR "FFmpeg must come from the add-on's private dependency prefix")
++  endif()
++  separate_arguments(_ffmpeg_flags UNIX_COMMAND "${_ffmpeg_flags}")
++  set(FFMPEG_LIBRARIES "")
++  foreach(_flag IN LISTS _ffmpeg_flags)
++    if(_flag MATCHES "^-l(.+)$")
++      set(_archive "${ADDON_DEPENDS_PATH}/lib/lib${CMAKE_MATCH_1}.a")
++      if(EXISTS "${_archive}")
++        set(_flag "${_archive}")
++      endif()
++    endif()
++    list(APPEND FFMPEG_LIBRARIES "${_flag}")
++  endforeach()
++  set(FFMPEG_INCLUDE_DIRS "${ADDON_DEPENDS_PATH}/include" ${PS5_FFMPEG_INCLUDE_DIRS})
++  set(FFMPEG_VERSION "${REQUIRED_FFMPEG_VERSION}")
++  set(FFMPEG_DEFINITIONS "-DFFMPEG_VER_SHA=\"${FFMPEG_VERSION}\"")
++  set(FFMPEG_LDFLAGS "-Wl,-Bsymbolic")
++  include(FindPackageHandleStandardArgs)
++  find_package_handle_standard_args(FFMPEG
++    REQUIRED_VARS FFMPEG_LIBRARIES FFMPEG_INCLUDE_DIRS VERSION_VAR FFMPEG_VERSION)
++  if(NOT TARGET ffmpeg)
++    add_library(ffmpeg INTERFACE IMPORTED)
++    set_target_properties(ffmpeg PROPERTIES
++      INTERFACE_LINK_LIBRARIES "${FFMPEG_LIBRARIES}"
++      INTERFACE_INCLUDE_DIRECTORIES "${FFMPEG_INCLUDE_DIRS}")
++  endif()
++  return()
++endif()
++
+ # Allows building with external ffmpeg not found in system paths,
+ # without library version checks
+ if(WITH_FFMPEG)

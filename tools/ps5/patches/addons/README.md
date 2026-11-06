@@ -26,6 +26,20 @@ Other platforms never see these patches.
 |---|---|---|---|
 | peripheral.joystick | 0001-native-buttonmap-provider | retain upstream mapping/storage while Kodi's native bus owns PS5 enumeration, events and rumble; omit Linux driver settings | PS5-only |
 | peripheral.joystick | 0002-use-kodi-logging | omit the unused syslog sink whose `closelog` symbol is unavailable in native imports; retain Kodi and console logging | PS5-only |
+| inputstream.ffmpegdirect | 0001-build-iconv-library-only | build/install the required libiconv library and header without unused gnulib utilities | PS5-only |
+| inputstream.ffmpegdirect | 0002-use-native-config-site-flags | use native ABI compiler commands without literal CMake quotes in libzvbi, Nettle and GnuTLS Autoconf flags | PS5-only |
+| inputstream.ffmpegdirect | 0003-use-sdk-assembler-for-gmp | assemble GMP probes directly with the SDK driver while retaining native C ABI lowering | PS5-only |
+| inputstream.ffmpegdirect | 0004-use-sdk-assembler-for-nettle | use the SDK driver for Nettle assembly rules without bypassing native C ABI lowering | PS5-only |
+| inputstream.ffmpegdirect | 0005-omit-unused-gnutls-fseterr | omit MinGW-only callers' unused gnulib helper without exposing private native FILE internals | PS5-only |
+| inputstream.ffmpegdirect | 0006-use-sdk-assembler-for-gnutls | use the SDK driver for GnuTLS assembly without lowering assembled objects as C bitcode | PS5-only |
+| inputstream.ffmpegdirect | 0007-build-gnutls-library-only | build/install TLS libraries, headers and pkg-config metadata without unused command-line support code | PS5-only |
+| inputstream.ffmpegdirect | 0008-use-native-ffmpeg-compilers | reuse CONFIG_SITE compiler drivers for FFmpeg's non-CMake build, with direct SDK assembly and explicit cross-target selection | PS5-only |
+| inputstream.ffmpegdirect | 0009-link-private-ffmpeg-archives | select private FFmpeg metadata and absolute static archives, retaining local symbol binding instead of linking SDK/Kodi copies | PS5-only |
+| inputstream.ffmpegdirect | 0010-adapt-native-multibyte-limit | implement libiconv's FreeBSD locale accessor using native libc's exported multibyte limit | PS5-only |
+| inputstream.ffmpegdirect | 0011-bind-absent-c11-thread-probe | bind optional weak C11-thread detection and Zstd tracing to null without adding unsupported SPRX imports | PS5-only |
+| inputstream.ffmpegdirect | 0012-disable-execute-only-unsafe-crypto-assembly | use portable Nettle/GnuTLS crypto to avoid constant reads from execute-only code; retain TLS verification and FFmpeg codec optimizations | PS5-only |
+| inputstream.ffmpegdirect | 0013-use-kodi-ca-bundle | trust Kodi's bundled CA certificates for initial and nested FFmpeg/HLS requests while retaining TLS verification and native I/O handling | PS5-only |
+| inputstream.ffmpegdirect | 0014-batch-timeshift-segment-writes | batch segment persistence in bounded 256 KiB chunks, publish packets before I/O, finalize rollover outside playback locks and retain failed history in memory | PS5-only |
 | asap | 0001-readtag-free-player-on-load-failure | free the player when a tag read is rejected | yes |
 | dumb | 0001-include-stdint | `dumb.h` needs `<stdint.h>` with the SDK libc | yes |
 | dumb | 0002-fix-double-free-on-open-failure | buffer was freed twice when DUMB rejects a file | yes |

@@ -1,0 +1,34 @@
+Resolve optional C11-thread detection and Zstd tracing as unavailable.
+
+Gnulib tests the address of weak thrd_exit; no native provider exports it.
+SPRX imports require a declared provider even for weak symbols. Bind this
+optional probe and Zstd's four optional tracing callbacks to absolute zero
+with LLVM's linker and keep them out of the dynamic symbol table. POSIX
+thread implementations and Zstd compression remain unchanged.
+
+Upstream: PS5 native module import adaptation only.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -119,6 +119,21 @@
+   target_sources(inputstream.ffmpegdirect PRIVATE "${_multibyte_adapter}")
+ endif()
+ 
++if(PS5_NATIVE_SHARED_ADDONS)
++  set(_optional_imports thrd_exit
++    ZSTD_trace_compress_begin ZSTD_trace_compress_end
++    ZSTD_trace_decompress_begin ZSTD_trace_decompress_end)
++  set(_optional_map "{ local:\n")
++  foreach(_symbol IN LISTS _optional_imports)
++    target_link_options(inputstream.ffmpegdirect PRIVATE "-Wl,--defsym=${_symbol}=0")
++    string(APPEND _optional_map "  ${_symbol};\n")
++  endforeach()
++  string(APPEND _optional_map "};\n")
++  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ps5-optional-imports.map" "${_optional_map}")
++  target_link_options(inputstream.ffmpegdirect PRIVATE
++    "-Wl,--version-script=${CMAKE_CURRENT_BINARY_DIR}/ps5-optional-imports.map")
++endif()
++
+ if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+   # Due to a bug in CMake and frameworks on OSX we strip them from FFMPEG_LDFLAGS
+   string(REGEX REPLACE "-framework;([A-Za-z0-9_]+);?" "" FFMPEG_LDFLAGS "${FFMPEG_LDFLAGS}")

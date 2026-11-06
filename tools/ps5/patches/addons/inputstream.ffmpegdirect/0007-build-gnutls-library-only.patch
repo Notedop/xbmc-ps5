@@ -1,0 +1,33 @@
+Build and install the GnuTLS library without command-line support code.
+
+--disable-tools still builds src/gl's GPL gnulib library, whose error.c
+uses an unavailable printf attribute macro on PS5. FFmpeg consumes only
+libgnutls. Build its gl convenience library and lib targets explicitly;
+lib's install target supplies the archive, public headers and pkg-config
+metadata without compiling unused tool, documentation or test code.
+
+Upstream: PS5-only; retains TLS functionality and native ABI lowering.
+
+--- a/depends/common/gnutls/CMakeLists.txt
++++ b/depends/common/gnutls/CMakeLists.txt
+@@ -35,6 +35,11 @@
+ endforeach()
+ 
++find_program(MAKE_EXECUTABLE NAMES gmake make)
++if(NOT MAKE_EXECUTABLE)
++  message(FATAL_ERROR "GNU make is required to build the GnuTLS library")
++endif()
++
+ include(ExternalProject)
+ externalproject_add(gnutls
+                     SOURCE_DIR ${CMAKE_SOURCE_DIR}
+                     CONFIGURE_COMMAND <SOURCE_DIR>/configure
+@@ -61,4 +66,7 @@
+                       --with-pic
+-                      ${gnutls_conf})
++                      ${gnutls_conf}
++                    BUILD_COMMAND ${MAKE_EXECUTABLE} -C <BINARY_DIR>/gl
++                      COMMAND ${MAKE_EXECUTABLE} -C <BINARY_DIR>/lib
++                    INSTALL_COMMAND ${MAKE_EXECUTABLE} -C <BINARY_DIR>/lib install)
+ 
+ install(CODE "Message(Done)")

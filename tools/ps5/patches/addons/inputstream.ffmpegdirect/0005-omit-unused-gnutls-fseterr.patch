@@ -1,0 +1,34 @@
+Omit the unused gnulib fseterr object from PS5 GnuTLS builds.
+
+gnulib fseterr accesses private FILE internals and cannot compile with the
+native opaque-stdio ABI. GnuTLS's only callers are in MinGW-specific
+stdio-consolesafe code. Exclude the unused object from both gnulib build
+lists without providing a fake implementation or claiming __fseterr exists.
+Any future active caller must still fail the final native link.
+
+Upstream: PS5-only; preserves the native opaque FILE contract.
+
+--- a/depends/common/gnutls/CMakeLists.txt
++++ b/depends/common/gnutls/CMakeLists.txt
+@@ -19,6 +19,21 @@
+   list(APPEND gnutls_conf ac_cv_func_vfork_works=no ac_cv_func_fork=no)
+ endif()
+ 
++foreach(gnulib_dir IN ITEMS gl src/gl)
++  set(gnulib_makefile "${CMAKE_SOURCE_DIR}/${gnulib_dir}/Makefile.in")
++  file(READ "${gnulib_makefile}" gnulib_rules)
++  set(fseterr_rule "@GL_COND_OBJ_FSETERR_TRUE@am__(append|objects)_[0-9]+ = [^\r\n]*")
++  string(REGEX MATCHALL "${fseterr_rule}" fseterr_rules "${gnulib_rules}")
++  list(LENGTH fseterr_rules fseterr_rule_count)
++  if(NOT fseterr_rule_count EQUAL 2)
++    message(FATAL_ERROR "GnuTLS fseterr build rules do not match the PS5 patch")
++  endif()
++  string(REGEX REPLACE
++         "(@GL_COND_OBJ_FSETERR_TRUE@am__(append|objects)_[0-9]+ = )[^\r\n]*"
++         "\\1" gnulib_rules "${gnulib_rules}")
++  file(WRITE "${gnulib_makefile}" "${gnulib_rules}")
++endforeach()
++
+ include(ExternalProject)
+ externalproject_add(gnutls
+                     SOURCE_DIR ${CMAKE_SOURCE_DIR}

@@ -39,10 +39,21 @@ class RepositoryTests(unittest.TestCase):
                           "channel": "testing", "revision": 1})
         self.assertEqual([addon for addon, entry in self.catalogue["addons"].items()
                           if entry["bundled"]], ["peripheral.joystick", "inputstream.adaptive"])
-        self.assertTrue(all(p["channel"] == "testing" for p in self.catalogue["addons"].values()))
+        testing = {addon for addon, policy in self.catalogue["addons"].items()
+                   if policy["channel"] == "testing"}
+        self.assertEqual(testing, {"peripheral.joystick", "pvr.nextpvr",
+                                  "inputstream.ffmpegdirect"})
+        stable = [policy for policy in self.catalogue["addons"].values()
+                  if policy["channel"] == "stable"]
+        self.assertEqual(len(stable), 34)
+        for policy in stable:
+            self.assertRegex(policy["accepted_sha256"], r"^[0-9a-f]{64}$")
+            self.assertIn("release 22.000.000", policy["acceptance"])
         invalid = json.loads(DEFAULT_CATALOGUE.read_text())
         policy = invalid["targets"]["inputstream.adaptive"]["addons"]["inputstream.adaptive"]
         policy["channel"] = "stable"
+        policy.pop("accepted_sha256")
+        policy.pop("acceptance")
         path = self.base / "catalogue.json"
         path.write_text(json.dumps(invalid))
         with self.assertRaisesRegex(ValueError, "needs an accepted"):
@@ -120,6 +131,10 @@ class RepositoryTests(unittest.TestCase):
                                 catalogue["targets"]["inputstream.adaptive"]}
         catalogue["addons"] = {"inputstream.adaptive":
                                catalogue["addons"]["inputstream.adaptive"]}
+        policy = catalogue["addons"]["inputstream.adaptive"]
+        policy["channel"] = "testing"
+        policy.pop("accepted_sha256")
+        policy.pop("acceptance")
         fixture_root = self.base / "root"
         for channel, repo in repository.REPOSITORIES.items():
             folder = fixture_root / "addons" / repo

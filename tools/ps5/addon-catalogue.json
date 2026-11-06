@@ -8,7 +8,9 @@
     },
     "inputstream.adaptive": {
       "url": "https://github.com/xbmc/inputstream.adaptive", "ref": "Piers",
-      "addons": {"inputstream.adaptive": {"bundled": true, "channel": "testing", "revision": 2}}
+      "addons": {"inputstream.adaptive": {"bundled": true, "channel": "stable", "revision": 2,
+        "accepted_sha256": "c47109c878319d1ff4050715f65e326b8310ce96aeeda0848170823a78e14e3b",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "inputstream.ffmpegdirect": {
       "url": "https://github.com/xbmc/inputstream.ffmpegdirect", "ref": "Piers",
@@ -16,7 +18,9 @@
     },
     "pvr.hts": {
       "url": "https://github.com/kodi-pvr/pvr.hts", "ref": "Piers",
-      "addons": {"pvr.hts": {"bundled": false, "channel": "testing", "revision": 3}}
+      "addons": {"pvr.hts": {"bundled": false, "channel": "stable", "revision": 3,
+        "accepted_sha256": "4edbd2d12da9f2a5d2c04ec77dcdf093dc7da0123ff7af35538f514a6344034d",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "pvr.nextpvr": {
       "url": "https://github.com/kodi-pvr/pvr.nextpvr", "ref": "Piers",
@@ -24,111 +28,175 @@
     },
     "audiodecoder.2sf": {
       "url": "https://github.com/xbmc/audiodecoder.2sf", "ref": "Piers",
-      "addons": {"audiodecoder.2sf": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.2sf": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "b62785b5b6a45d2c0736c4dd8cbd4e14005b2273553c830cfb678210d8d7b1a7",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.asap": {
       "url": "https://github.com/xbmc/audiodecoder.asap", "ref": "Piers",
-      "addons": {"audiodecoder.asap": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.asap": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "aeadfbeb93cb57f7be46e96b19d1537c208cc0c0c29b01e65ba2af5a0fab1f45",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.gme": {
       "url": "https://github.com/xbmc/audiodecoder.gme", "ref": "Piers",
-      "addons": {"audiodecoder.gme": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.gme": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "e842cf79d1f856d4853a404fb016d6df78e48d1322be6eb591333e750b6d483e",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.gsf": {
       "url": "https://github.com/xbmc/audiodecoder.gsf", "ref": "Piers",
-      "addons": {"audiodecoder.gsf": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.gsf": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "63f8015d0e338aab8cd71f49cf6b92edd396d5279062b0910bad99a8704f8319",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.hvl": {
       "url": "https://github.com/xbmc/audiodecoder.hvl", "ref": "Piers",
-      "addons": {"audiodecoder.hvl": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.hvl": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "6efeca09149f6d6705014d0c4709c895f14f295eb7928d330e51a9c25f5bda91",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.ncsf": {
       "url": "https://github.com/xbmc/audiodecoder.ncsf", "ref": "Piers",
-      "addons": {"audiodecoder.ncsf": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.ncsf": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "f91199909389c8bcd6975b91888e31656d62bd376369c8b91e5af5a06ddd5ec2",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.nosefart": {
       "url": "https://github.com/xbmc/audiodecoder.nosefart", "ref": "Piers",
-      "addons": {"audiodecoder.nosefart": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.nosefart": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "c34719612b877e5a2b6874e786cb8dcf1388ce6fda9067975aed1a634a2bbab2",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.openmpt": {
       "url": "https://github.com/xbmc/audiodecoder.openmpt", "ref": "Piers",
-      "addons": {"audiodecoder.openmpt": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.openmpt": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "76d77f78541bb352f14b50a8c42b0fa7c0772e7557c6aa196791485c03073024",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.organya": {
       "url": "https://github.com/xbmc/audiodecoder.organya", "ref": "Piers",
-      "addons": {"audiodecoder.organya": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.organya": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "ca431139a1eb2aa5d71bb5fed2f05292b60b31f6bfc2c4d3b3af75767213dec4",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.qsf": {
       "url": "https://github.com/xbmc/audiodecoder.qsf", "ref": "Piers",
-      "addons": {"audiodecoder.qsf": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.qsf": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "8637899cac021b54ed099cfe542a107f5ede4f978de42e7f3b6f9c397f0ee784",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.sidplay": {
       "url": "https://github.com/xbmc/audiodecoder.sidplay", "ref": "Piers",
-      "addons": {"audiodecoder.sidplay": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.sidplay": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "23726a799fba870f973c9ab4dee50f5454148d58b74072462745ccb40c06a120",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.snesapu": {
       "url": "https://github.com/xbmc/audiodecoder.snesapu", "ref": "Piers",
-      "addons": {"audiodecoder.snesapu": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.snesapu": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "829c14b6949bc98db0e7ed2e56455f4fd6e0b6145ae3db74417ba0922344ef8d",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.ssf": {
       "url": "https://github.com/xbmc/audiodecoder.ssf", "ref": "Piers",
-      "addons": {"audiodecoder.ssf": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.ssf": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "ec8cc07fe8ed913afa81e07313b8df19badb590982445c8a604c88a2ce4fb4cd",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.stsound": {
       "url": "https://github.com/xbmc/audiodecoder.stsound", "ref": "Piers",
-      "addons": {"audiodecoder.stsound": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.stsound": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "1dd5074081f05ee547e5e7821d345743a49ccbd41bca6def9e454d3ac42cc68d",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.usf": {
       "url": "https://github.com/xbmc/audiodecoder.usf", "ref": "Piers",
-      "addons": {"audiodecoder.usf": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.usf": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "1e7e4aa1c09ed511a39016b8f44aa2ee83991694556d22299879420271daed5d",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "audiodecoder.wsr": {
       "url": "https://github.com/xbmc/audiodecoder.wsr", "ref": "Piers",
-      "addons": {"audiodecoder.wsr": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"audiodecoder.wsr": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "300011257db6eebee3a4927a5ad005be464d0a99206e0f7328a4f3d83e22f455",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "screensaver.asteroids": {
       "url": "https://github.com/xbmc/screensaver.asteroids", "ref": "Piers",
-      "addons": {"screensaver.asteroids": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"screensaver.asteroids": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "b2313f207dcead26e567d4f136f120c242cf6433eb5a9c364a6623e1d6de2880",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "screensaver.asterwave": {
       "url": "https://github.com/xbmc/screensaver.asterwave", "ref": "Piers",
-      "addons": {"screensaver.asterwave": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"screensaver.asterwave": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "0fb5e0c02e1b5f3f7dd29f962c3bf7f31039e4ce8329bc73725b05ee51fbfb82",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "screensaver.biogenesis": {
       "url": "https://github.com/xbmc/screensaver.biogenesis", "ref": "Piers",
-      "addons": {"screensaver.biogenesis": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"screensaver.biogenesis": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "f4e24d047b4b755b4c0de06b6431b857ae5ce8fe1fa1833dde0be44440b137ce",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "screensaver.greynetic": {
       "url": "https://github.com/xbmc/screensaver.greynetic", "ref": "Piers",
-      "addons": {"screensaver.greynetic": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"screensaver.greynetic": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "906ddaa7873a1db81ee83acf599e091126947fd2001236c79fd6d8c6c8623a9d",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "screensaver.matrixtrails": {
       "url": "https://github.com/xbmc/screensaver.matrixtrails", "ref": "Piers",
-      "addons": {"screensaver.matrixtrails": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"screensaver.matrixtrails": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "8f369e4ebe9666c551fa45ac0001ea0a9283342ff2bdc4d2ed04e6a464a1ba9e",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "screensaver.pyro": {
       "url": "https://github.com/xbmc/screensaver.pyro", "ref": "Piers",
-      "addons": {"screensaver.pyro": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"screensaver.pyro": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "9f69656c95596285b348f4dcc9924f50bc97d802d69e3879102ff124812c3514",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "screensaver.shadertoy": {
       "url": "https://github.com/xbmc/screensaver.shadertoy", "ref": "Piers",
-      "addons": {"screensaver.shadertoy": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"screensaver.shadertoy": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "cede2070d93ac913b2c44fcde3eb65f0f56310b4dc39fe9ddc8b7eb9da6aab5f",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "screensaver.stars": {
       "url": "https://github.com/xbmc/screensaver.stars", "ref": "Piers",
-      "addons": {"screensaver.stars": {"bundled": false, "channel": "testing", "revision": 2}}
+      "addons": {"screensaver.stars": {"bundled": false, "channel": "stable", "revision": 2,
+        "accepted_sha256": "c7bc8a4e9dfa5c718213ac8eb2dec571573a0e8c8cae24b3d92c6930b9840449",
+        "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}}
     },
     "screensavers.rsxs": {
       "url": "https://github.com/xbmc/screensavers.rsxs", "ref": "Piers",
       "addons": {
-        "screensaver.rsxs.drempels": {"bundled": false, "channel": "testing", "revision": 2},
-        "screensaver.rsxs.feedback": {"bundled": false, "channel": "testing", "revision": 2},
-        "screensaver.rsxs.fieldlines": {"bundled": false, "channel": "testing", "revision": 2},
-        "screensaver.rsxs.flux": {"bundled": false, "channel": "testing", "revision": 2},
-        "screensaver.rsxs.helios": {"bundled": false, "channel": "testing", "revision": 2},
-        "screensaver.rsxs.lorenz": {"bundled": false, "channel": "testing", "revision": 2},
-        "screensaver.microcosm.biof": {"bundled": false, "channel": "testing", "revision": 2},
-        "screensaver.rsxs.plasma": {"bundled": false, "channel": "testing", "revision": 2}
+        "screensaver.rsxs.drempels": {"bundled": false, "channel": "stable", "revision": 2,
+          "accepted_sha256": "81c2f3f8a0ad09d0093e9701c64863fc77392465e016e7caf86c372db5592942",
+          "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."},
+        "screensaver.rsxs.feedback": {"bundled": false, "channel": "stable", "revision": 2,
+          "accepted_sha256": "f2ed0b55d9b2135cdb5f93108e29e13f7e656b95d1b7dee1e482e5c2ac20f390",
+          "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."},
+        "screensaver.rsxs.fieldlines": {"bundled": false, "channel": "stable", "revision": 2,
+          "accepted_sha256": "b3aaee28d2841dec1541fa07ecaeb1119579cb0bc6a1f714ff5eae323691613a",
+          "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."},
+        "screensaver.rsxs.flux": {"bundled": false, "channel": "stable", "revision": 2,
+          "accepted_sha256": "d747061421b518b5933b58c493cb62b9e2e9474628c60a9b581f8920ec3fd17b",
+          "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."},
+        "screensaver.rsxs.helios": {"bundled": false, "channel": "stable", "revision": 2,
+          "accepted_sha256": "836a4a9e0e7904ebdc101c98f27e576c5636ff871b1d0e236a174e6852eab627",
+          "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."},
+        "screensaver.rsxs.lorenz": {"bundled": false, "channel": "stable", "revision": 2,
+          "accepted_sha256": "84a4a85082582ccc6952426504a4e1779e2f712768982644414aa50bbfe37626",
+          "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."},
+        "screensaver.microcosm.biof": {"bundled": false, "channel": "stable", "revision": 2,
+          "accepted_sha256": "e6670c05b45aab3a61e34f6e83532cd6e26a969f24bd18499ddef7d6a2fa04b0",
+          "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."},
+        "screensaver.rsxs.plasma": {"bundled": false, "channel": "stable", "revision": 2,
+          "accepted_sha256": "610c82be01829e48d1c3eab1e267caac1eb3b76847d5e84bc2c1b6a69af01d75",
+          "acceptance": "User-approved unchanged-package promotion from release 22.000.000 (2026-11-06)."}
       }
     }
   }

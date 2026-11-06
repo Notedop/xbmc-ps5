@@ -308,6 +308,7 @@ void CRPRenderManager::AddFrame(const uint8_t* data,
   for (auto renderBuffer : m_renderBuffers)
     renderBuffer->Release();
   m_renderBuffers = std::move(renderBuffers);
+  ++m_framesGiven;
 
   // Apply video properties to render buffers
   for (auto renderBuffer : m_renderBuffers)
@@ -580,6 +581,7 @@ void CRPRenderManager::RenderFrame(unsigned int width,
   for (IRenderBuffer* renderBuffer : m_renderBuffers)
     renderBuffer->Release();
   m_renderBuffers = {publishBuffer};
+  ++m_framesGiven;
 }
 
 void CRPRenderManager::SetSpeed(double speed)
@@ -622,6 +624,15 @@ void CRPRenderManager::FlushRendered()
     pool->FlushRendered();
 }
 
+void CRPRenderManager::ReleaseUnusedTextures()
+{
+  for (const auto& renderer : m_renderers)
+  {
+    if (renderer->IsUnused())
+      renderer->ReleaseTextures();
+  }
+}
+
 void CRPRenderManager::CheckFlush()
 {
   if (m_bFlush)
@@ -658,12 +669,18 @@ void CRPRenderManager::RenderWindow(bool bClear, const RESOLUTION_INFO& coordsRe
   {
     std::unique_lock<std::mutex> lock{m_oldRenderersMutex};
     m_oldRenderers.clear();
+    ReleaseUnusedTextures();
   }
 
   // Get a renderer for the fullscreen window
   std::shared_ptr<CRPBaseRenderer> renderer = GetRendererForSettings(nullptr);
   if (!renderer)
     return;
+
+  const uint64_t framesGiven = m_framesGiven.load();
+  m_processInfo.GetDisplayPacing().OnFrameTaken(CDisplayPacing::Clock::now(),
+                                                framesGiven != m_lastFrameTaken);
+  m_lastFrameTaken = framesGiven;
 
   // Get a render buffer for the renderer
   IRenderBuffer* renderBuffer = GetRenderBuffer(renderer->GetBufferPool());
@@ -688,6 +705,7 @@ void CRPRenderManager::RenderControl(bool bClear,
   {
     std::unique_lock<std::mutex> lock{m_oldRenderersMutex};
     m_oldRenderers.clear();
+    ReleaseUnusedTextures();
   }
 
   // Get a renderer for the control
@@ -893,6 +911,9 @@ std::shared_ptr<CRPBaseRenderer> CRPRenderManager::GetRendererForPool(
     if (!renderer && !shaderPreset.empty())
       m_failedShaderPresets.insert(shaderPreset);
   }
+
+  if (renderer)
+    renderer->SetUsed();
 
   return renderer;
 }

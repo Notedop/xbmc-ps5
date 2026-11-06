@@ -597,10 +597,10 @@ KODI_HANDLE CInputStreamAddon::cb_get_stream_transfer(KODI_HANDLE handle,
   return demuxStream;
 }
 
-void CInputStreamAddon::EnableStream(int streamId, bool enable)
+bool CInputStreamAddon::EnableStream(int streamId, bool enable)
 {
   if (!m_ifc.inputstream->toAddon->enable_stream)
-    return;
+    return false;
 
 #if defined(TARGET_PS5)
   const char* enabled = std::getenv("KODI_PS5_ADDON_DEBUG");
@@ -610,11 +610,13 @@ void CInputStreamAddon::EnableStream(int streamId, bool enable)
               streamId, enable);
 #endif
   m_ifc.inputstream->toAddon->enable_stream(m_ifc.inputstream, streamId, enable);
+
 #if defined(TARGET_PS5)
   if (debug)
     CLog::Log(LOGINFO, "PS5AddonDebug: phase=enable-stream-exit stream={} enable={}",
               streamId, enable);
 #endif
+    return true;
 }
 
 bool CInputStreamAddon::OpenStream(int streamId)

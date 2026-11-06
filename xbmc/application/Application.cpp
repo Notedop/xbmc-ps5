@@ -847,7 +847,7 @@ namespace
 {
 // capture tap: serve pending requests from the finished frame before it is
 // presented.
-void ServiceCaptureTaps()
+void ServiceCaptureTaps(CApplicationPlayer& player)
 {
   using namespace KODI::RENDERING::CAPTURE;
 
@@ -884,6 +884,12 @@ void ServiceCaptureTaps()
   result.format = surface->GetFormat();
   result.color = GetOutputColorMetadata(*winSystem);
   result.content = CaptureContent::COMPOSITE; // this tap is the composite half
+
+  if (!player.CompositeVideoCapture(result))
+  {
+    captureService->Fail(request);
+    return;
+  }
 
   captureService->Complete(request, result);
 }
@@ -955,7 +961,7 @@ void CApplication::Render()
   // could be served, so FrameComplete would kill live requests.
   if (hasRendered)
   {
-    ServiceCaptureTaps();
+    ServiceCaptureTaps(*appPlayer);
     if (const auto captureService = CServiceBroker::GetCaptureService())
       captureService->FrameComplete();
   }
@@ -1901,6 +1907,8 @@ bool CApplication::Stop(int exitCode)
     m_ExitCode = exitCode;
     CLog::Log(LOGINFO, "Stopping all");
 
+    CScriptInvocationManager::GetInstance().NotifyAllScriptsAborting();
+
     // Stop scanning before the job manager is cancelled below
     // otherwise scans underway are not stopped
     CMusicLibraryQueue::GetInstance().CancelAllJobs();
@@ -1928,8 +1936,6 @@ bool CApplication::Stop(int exitCode)
 #if defined(TARGET_POSIX) && defined(HAS_FILESYSTEM_SMB)
     smb.Deinit();
 #endif
-
-    CScriptInvocationManager::GetInstance().NotifyAllScriptsAborting();
 
     // Stop services before unloading Python
     CServiceBroker::GetServiceAddons().Stop();

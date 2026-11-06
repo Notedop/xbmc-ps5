@@ -20,11 +20,14 @@
 #include "imagefiles/ImageFileURL.h"
 #include "imagefiles/SpecialImageLoaderFactory.h"
 #include "pictures/Picture.h"
+#include "settings/AdvancedSettings.h"
+#include "settings/SettingsComponent.h"
 #include "utils/Mime.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/log.h"
 
+#include <algorithm>
 #ifdef TARGET_PS5
 #include "platform/ps5/CacheDiagnostics.h"
 #endif
@@ -129,7 +132,14 @@ bool CTextureCacheJob::CacheTexture()
     }
   }
 
-  std::unique_ptr<CTexture> texture = LoadImage(imageURL);
+  // CPicture::CacheTexture() will not write out more than imageres/fanartres, so decoding or
+  // holding anything above that ceiling is memory spent on pixels that are discarded
+  const auto advancedSettings = CServiceBroker::GetSettingsComponent()->GetAdvancedSettings();
+  const unsigned int maxHeight =
+      std::max(advancedSettings->m_imageRes, advancedSettings->m_fanartRes);
+  const unsigned int maxWidth = maxHeight * 16 / 9;
+
+  std::unique_ptr<CTexture> texture = LoadImage(imageURL, maxWidth, maxHeight);
   if (texture)
   {
     if (texture->HasAlpha())
@@ -169,7 +179,7 @@ bool CTextureCacheJob::ResizeTexture(const std::string& url,
   if (image.empty())
     return false;
 
-  std::unique_ptr<CTexture> texture = LoadImage(imageURL);
+  std::unique_ptr<CTexture> texture = LoadImage(imageURL, 0, 0);
   if (texture == NULL)
     return false;
 
@@ -185,7 +195,9 @@ bool CTextureCacheJob::MayBeAnImage(const std::string& mimeType)
          StringUtils::EqualsNoCase(mimeType, "application/octet-stream");
 }
 
-std::unique_ptr<CTexture> CTextureCacheJob::LoadImage(const IMAGE_FILES::CImageFileURL& imageURL)
+std::unique_ptr<CTexture> CTextureCacheJob::LoadImage(const IMAGE_FILES::CImageFileURL& imageURL,
+                                                      unsigned int maxWidth,
+                                                      unsigned int maxHeight)
 {
   if (imageURL.IsSpecialImage())
   {
@@ -210,8 +222,8 @@ std::unique_ptr<CTexture> CTextureCacheJob::LoadImage(const IMAGE_FILES::CImageF
     return {};
   }
 
-  auto texture = CTexture::LoadFromFile(imageURL.GetTargetFile(), 0, 0, CAspectRatio::CENTER,
-                                        file.GetMimeType());
+  auto texture = CTexture::LoadFromFile(imageURL.GetTargetFile(), maxWidth, maxHeight,
+                                        CAspectRatio::KEEP, file.GetMimeType());
   if (!texture && !namedType.empty())
   {
     // The extension named a type that couldn't be read, so the source may be serving another and
@@ -221,8 +233,8 @@ std::unique_ptr<CTexture> CTextureCacheJob::LoadImage(const IMAGE_FILES::CImageF
     file.FillInMimeType();
     if (MayBeAnImage(file.GetMimeType()))
     {
-      texture = CTexture::LoadFromFile(imageURL.GetTargetFile(), 0, 0, CAspectRatio::CENTER,
-                                       file.GetMimeType());
+      texture = CTexture::LoadFromFile(imageURL.GetTargetFile(), maxWidth, maxHeight,
+                                       CAspectRatio::KEEP, file.GetMimeType());
     }
   }
   if (!texture)

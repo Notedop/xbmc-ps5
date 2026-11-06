@@ -63,7 +63,9 @@ TEST_F(TestCPUInfo, CoreInfo)
 
 TEST_F(TestCPUInfo, GetCoresUsageString)
 {
-  EXPECT_STRNE("", CServiceBroker::GetCPUInfo()->GetCoresUsageString().c_str());
+  const auto cpuInfo = CServiceBroker::GetCPUInfo();
+  const auto usage = cpuInfo->GetCoresUsageString();
+  EXPECT_EQ(usage.empty(), !cpuInfo->SupportsCPUUsage());
 }
 
 TEST_F(TestCPUInfo, GetCPUFeatures)

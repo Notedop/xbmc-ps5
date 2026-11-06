@@ -1,67 +1,50 @@
-# PS5 build entrypoint (migration worktree)
+# Building Kodi for PS5
 
-This branch keeps PS5 integration in tracked Kodi source. Configure does **not**
-copy overlays or apply patch files. This document covers everything needed to
-go from a bare Linux (or WSL) machine to a running PS5 package.
+This guide covers repository setup, dependencies, configuration, building and
+packaging on Linux or WSL. Run commands from the Kodi source root unless noted.
+PS5 integration is tracked in the source tree; configuration does not copy
+overlays or apply Kodi patch files.
 
-For binary add-on compilation, title integration, testing/stable promotion and
-publication, follow the [PS5 binary add-on workflow](PS5-BINARY-ADDONS.md).
-The required shared-runtime architecture and its qualification boundary are
-documented in [PS5 native SPRX](PS5-NATIVE-SPRX.md#shared-runtime-title-profile).
+For binary add-on builds and publication, see
+[PS5 binary add-ons](PS5-BINARY-ADDONS.md). For the shared-runtime architecture,
+see [PS5 native SPRX](PS5-NATIVE-SPRX.md#shared-runtime-title-profile).
 
-## 0. Prerequisites
+## 1. Prerequisites
 
-### 0.1. Build location (WSL users especially)
+### Build location
 
-Keep the checkout and build directories on a native Linux filesystem (e.g.
-`/home/you/...`). Building under a Windows-mounted path (`/mnt/c/...`) from
-WSL causes DrvFs/9p clock-skew ("Clock skew detected" / "modification time in
-the future" warnings from `make`), which can silently corrupt incremental
-builds while still appearing to succeed. Editing the checkout from Windows
-(e.g. an IDE pointed at the `\\wsl.localhost\...` UNC path) is fine - only the
-actual build/compile must run against a native Linux path.
+Keep the checkout, dependencies and build output on a native Linux filesystem,
+such as `/home/you/kodi-fork/xbmc-ps5-fork`. Building under `/mnt/c` in WSL can
+cause clock-skew warnings and unreliable incremental builds. Editing through a
+Windows IDE using the `\\wsl.localhost\...` path is fine; run builds in Linux.
 
-### 0.2. One-command bootstrap
-
-Everything in 0.3 and 0.4 below - host packages, both external SDKs and the
-app template - is installed by a single idempotent script:
+### Bootstrap
 
 ```bash
 tools/ps5/bootstrap.sh
 ```
 
-Budget 1-3 hours on first run (pacbrew and Mesa are built from source); it
-asks for `sudo` once and keeps the credential alive for the whole run.
-Re-running it after a failure resumes rather than starting over, and a single
-step can be repeated on its own:
+The script installs host packages, prepares the payload SDK and required system
+import stubs, builds the patched OpenGL SDK, and prepares the native-app template.
+Budget 1-3 hours for the first run; it requests `sudo`. Re-running resumes an
+incomplete setup. To repeat one step:
 
 ```bash
-STEP=opengl tools/ps5/bootstrap.sh     # packages | sdk | stubs | opengl | template
+STEP=opengl tools/ps5/bootstrap.sh  # packages | sdk | stubs | opengl | template
 ```
 
-The external sources it checks out and builds (`ps5-opengl`, `pacbrew-repo`,
-the app boilerplate) go to `build/ps5-external/`, so they are covered by
-`.gitignore` and by `git clean -fdx -- build`. Set `WORK=` to put them
-somewhere else - e.g. to keep them across a full build wipe, since
-re-fetching and rebuilding Mesa costs 1-2 hours:
+External sources default to `build/ps5-external`. To keep these expensive builds
+outside a disposable build directory:
 
 ```bash
 WORK=~/ps5-external tools/ps5/bootstrap.sh
 ```
 
-`tools/ps5/package.sh` reads the same `WORK` variable to find its app
-template, so pass it there too if you override it.
+Pass the same `WORK` to `tools/ps5/package.sh` when overriding it.
 
-Read 0.3 and 0.4 if you want to know what it installs or need to do it by
-hand; otherwise skip straight to section 1.
+### Manual prerequisites and SDK paths
 
-### 0.3. Host OS packages
-
-The PS5 build cross-compiles almost everything itself (via `tools/depends`
-and the external PS5 SDK sysroot below), so it needs far fewer `-dev` library
-packages than a desktop Linux Kodi build - just the toolchain and build
-tooling used to build those dependencies and a couple of CMake/SWIG
-host-tool prerequisites:
+If not using bootstrap, install the host tools:
 
 ```bash
 sudo apt-get install -y \
@@ -71,488 +54,165 @@ sudo apt-get install -y \
   libcurl4-openssl-dev zip unzip rsync
 ```
 
-`libcurl4-openssl-dev` in particular is easy to miss: `tools/depends/native`'s
-own CMake-based recipes (e.g. `cmake` itself) probe for a host libcurl at
-configure time and fail with `CMAKE_USE_SYSTEM_CURL is ON but a curl is not
-found!` if only the runtime package (`libcurl4t64`) is installed.
+`libcurl4-openssl-dev` is required by the host-native CMake build; installing
+only the runtime libcurl package is insufficient.
 
-### 0.4. External PS5 SDK prerequisites
+The default SDK locations are:
 
-These are not part of the Kodi source tree. `tools/ps5/bootstrap.sh` installs
-and builds both (steps `sdk`, `stubs`, `opengl`, `template`); this section
-describes what they are and why, for anyone installing them by hand or
-debugging the bootstrap.
+| Input | Default location |
+|---|---|
+| Payload SDK and homebrew sysroot | `/opt/ps5-payload-sdk` |
+| Patched OpenGL/EGL SDK | `/opt/ps5-opengl-gl46` |
+| External sources | `build/ps5-external` |
+| Native-app template | `$WORK/ps5-opengl/build/native-app/PPSA99005` |
 
-- `/opt/ps5-payload-sdk` - the PS5 homebrew cross-toolchain (`prospero-clang`,
-  `prospero-pkg-config`, etc.) plus a prebuilt "homebrew" sysroot
-  (`$PS5_PAYLOAD_SDK/target/user/homebrew`). FFmpeg, dav1d and CPython 3.14
-  are now built from `tools/depends/target/{ffmpeg,dav1d,python3}` and linked
-  from there, not from this sysroot (see
-  `docs/ps5/phase4-dependency-qualification.md`). The sysroot is still used
-  for a handful of libraries this repo intentionally doesn't build itself -
-  fontconfig, freetype, harfbuzz, libass, fribidi, libpng, libfmt and the
-  PS5-specific `libSceImeDialog`/`libSceUserService` system libs. Because
-  fontconfig's `.pc` file declares a private dependency on `expat`,
-  `tools/ps5/configure.sh` patches copies of the SDK's `.pc` files (absolute
-  paths, no sysroot prefixing) and routes `pkg-config` lookups so that
-  fontconfig's expat requirement resolves to the same
-  `tools/depends/target/expat` build Python uses, instead of the SDK's own
-  (older, symbol-colliding) expat - avoiding duplicate-symbol link errors
-  from having two different expat static libraries in one final link.
-- `/opt/ps5-opengl-gl46` - the PS5 OpenGL/EGL shim prefix, plus an app
-  template under `build/ps5-external/ps5-opengl` used by
-  `tools/ps5/package.sh`.
-  Built from the revision pinned in
-  `tools/ps5/patches/ps5-opengl/PS5-OPENGL-COMMIT` with
-  `tools/ps5/patches/ps5-opengl/*.patch` applied, which add the
-  driver entry points Kodi needs (video out handle, HDR scanout format,
-  zero-copy EGL images). A stock upstream build does **not** export these, so
-  a release archive cannot be substituted as-is.
+Use the revisions and patches selected by bootstrap, including the system import
+stubs. A stock upstream OpenGL SDK is not a drop-in replacement. Bootstrap will
+not overwrite a differently pinned source checkout; use a fresh `WORK` directory
+for an SDK upgrade.
 
-  The current pin is SDK 1.0.2 preparation commit
-  `a519561626933257213d64a4a8bd5e02b55dceb2` from
-  `https://github.com/Notedop/ps5-opengl`, which preserves the original
-  upstream history. It is not known whether this was upstream's final revision.
-  Bootstrap refuses to reuse a different source revision rather than replacing
-  an existing patched checkout. For an upgrade, use a new `WORK` directory.
-  `PS5_OPENGL_PREFIX` may point to a user-writable directory to avoid changing
-  an existing system installation. Configure Kodi with both
-  `-DPS5_OPENGL_PREFIX=<prefix>` and
-  `-DPS5OpenGL_DIR=<prefix>/lib/cmake/PS5OpenGL`, and pass the same
-  `PS5_OPENGL_PREFIX` when packaging. If only the graphics SDK is rebuilt,
-  keep `APP_TEMPLATE` pointing to the existing native-app template; a fresh
-  `WORK` used for the SDK alone does not contain a built template.
-  The existing fixed scanout profile remains the default; runtime display-mode
-  selection is not enabled by this upgrade.
+For a custom graphics installation, pass `PS5_OPENGL_PREFIX` to bootstrap and
+packaging, and configure Kodi with `-DPS5_OPENGL_PREFIX=<prefix>` and
+`-DPS5OpenGL_DIR=<prefix>/lib/cmake/PS5OpenGL`. If only rebuilding the graphics
+SDK in a fresh `WORK`, keep `APP_TEMPLATE` pointing to an existing built template.
 
-  The SDK also receives two link stubs it does not ship
-  (`tools/ps5/bootstrap/sce-stubs.sh`): `libSceVideodec2` for the hardware
-  video decoder, and `sceVideoOutVrrUnpegFromFixedRate` added to the existing
-  `libSceVideoOut` stub (the original is kept as `libSceVideoOut.so.sdk`).
+## 2. Build dependencies
 
-  All of these local modifications are intended to be upstreamed; see
-  `docs/ps5/upstream-migration-tasks.md` for the plan and what it would let us
-  delete.
-
-## 1. Build the dependency toolchain (`tools/depends`)
-
-Kodi's native dependency build system builds both the PS5-target static
-libraries Kodi links against (libuuid, libsmb2, curl, brotli, zlib, tinyxml,
-etc.) and a small set of **host-native** tools used during the build itself
-(TexturePacker, SWIG, ...). Do this once (re-run only after a `git clean -fdx
--- tools/depends` or a dependency/recipe change):
+Build the host-native tools and PS5-target dependencies once. Repeat the
+affected recipes after dependency or recipe changes.
 
 ```bash
-cd /home/raoul/kodi-fork/xbmc-ps5-fork/tools/depends
+ROOT="$(pwd)"
+cd tools/depends
 ./bootstrap
 ./configure --host=x86_64-unknown-freebsd --with-platform=ps5 \
   --with-toolchain=/opt/ps5-payload-sdk \
-  --prefix=/home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-depends-test \
+  --prefix="$ROOT/build/ps5-depends-test" \
   --with-rendersystem=gl
 
-# Host-native build tools (TexturePacker, SWIG, autoconf, cmake, meson, ...)
 make -C native
 
-# PS5-target dependency recipes, in this order (curl needs brotli already
-# installed - its CMake configure hard-fails otherwise)
-for r in bzip2 expat gettext libffi libxml2 openssl sqlite3 xz zlib \
-         dav1d ffmpeg python3 brotli curl libiconv tinyxml tinyxml2 \
-         fstrcmp libuuid libprocstat libkodishim libsmb2; do
-  make -C "target/$r" || break
+# Preserve this order: curl requires brotli to be installed first.
+for recipe in bzip2 expat gettext libffi libxml2 openssl sqlite3 xz zlib \
+              dav1d ffmpeg python3 brotli curl libiconv tinyxml tinyxml2 \
+              fstrcmp libuuid libprocstat libkodishim libsmb2; do
+  make -C "target/$recipe" || break
 done
+
+cd "$ROOT"
 ```
 
-This step is idempotent: each recipe's `.installed-*` marker file lets `make`
-skip already-built recipes. If you suspect a stale/corrupted build (e.g.
-after bumping a dependency version), `git clean -fdx -- tools/depends` first
-to force every recipe to reconfigure from scratch - Make's dependency check
-only watches a few declared files (`Makefile`, `*-VERSION`, ...), not the
-extracted source tree, so it can silently keep reusing a build that would no
-longer succeed if actually rebuilt.
+Resolve any failed recipe before continuing. Installed-marker files skip
+completed recipes; changing extracted dependency sources alone may not
+invalidate those markers.
 
-## 2. Configure
-
-First prepare the native shared core, graphics, stdio-compatible dependency
-replacements and aggregate SDK. Preparation uses the installed payload/graphics
-SDKs, configured graphics sources and cached dependency source archives. Point
-`--homebrew-sources` at the pacbrew recipe/source cache when it is outside
-`build/ps5-external/pacbrew-repo`; use `--graphics-imports` if the installed
-graphics prefix does not carry its system import libraries.
+## 3. Prepare the native runtime and configure
 
 ```bash
-cd /home/raoul/kodi-fork/xbmc-ps5-fork
 python3 tools/ps5/prepare-native-runtime.py --jobs 4
 bash tools/ps5/configure.sh
 ```
 
-Preparation builds in fingerprinted isolated output directories; it does not
-overwrite SDK installations or baseline dependency archives. Only complete,
-validated results become `build/ps5-native/sdk` and
-`build/ps5-native/depends`. Failed attempts and existing title stages are retained.
-Firmware-analysis files are development-analysis-only: they are not preparation,
-build or validation inputs and must not be packaged or committed.
+Preparation uses the installed SDKs, graphics sources and cached dependency
+archives. If necessary, pass `--homebrew-sources` for a pacbrew source cache
+outside `build/ps5-external/pacbrew-repo`, or `--graphics-imports` when the graphics
+prefix lacks its system import libraries.
 
-Optional overrides:
+Validated outputs become `build/ps5-native/sdk` and `build/ps5-native/depends`;
+preparation does not overwrite the original SDK installations. Firmware dumps
+and analysis files are not build inputs and must not be packaged or committed.
 
-- `BUILD=/abs/path/to/build-dir`
-- `BUILD_TYPE=Debug|Release`
-- `NATIVE=/abs/path/to/native-tools-prefix` (default:
-  `build/ps5-depends-test/x86_64-linux-gnu-native`, i.e. step 1's
-  `make -C native` output - TexturePacker and SWIG are picked up from here;
-  JsonSchemaBuilder self-builds into `$NATIVE/bin` on first configure if not
-  already present)
-- `PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk`
-- `PS5_OPENGL_PREFIX=/opt/ps5-opengl-gl46`
-- `PS5_NATIVE_RUNTIME_SDK=/abs/path/to/prepared/native-sdk`
-- `PS5_NATIVE_DEPENDS_MAP=/abs/path/to/prepared/archive-map.json`
-- `PS5_DEPENDS_PREFIX=/abs/path/to/tools/depends/target/prefix` (preferred
-  dependency pkg-config root when present; default:
-  `build/ps5-depends-test/x86_64-unknown-freebsd-debug`, i.e. step 1's
-  `make -C target/...` output)
+Configuration overrides:
 
-## 3. Build
-
-```bash
-cmake --build /home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release -j$(nproc)
-```
-
-## 4. Package targets
-
-`ps5-title` creates the deployable title folder, and `ps5-package` additionally
-creates a zip artifact.
-
-The zip excludes the title-root build evidence (`ps5-addon-runtime.json`,
-`ps5-kodi-app-proof.json`, `ps5-loader-companion-proof.json`,
-`ps5-shared-runtime.json`, `ps5-shared-title-proof.json` and
-`sprx-addon-build.txt`). These remain in the local staged title for verification
-and repository tooling. Runtime files, including `sce_sys/param.json` and JSON
-under `share`, are retained. Direct FTP deployment still mirrors the staged
-title, including this evidence.
-
-```bash
-# Build a new title stage; the output path is printed by packaging.
-cmake --build /home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release --target ps5-title
-
-# Build a new title stage and its artifacts/PPSA99420.zip.
-cmake --build /home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release --target ps5-package
-```
-
-Both targets call `tools/ps5/package.sh`, which uses:
-
-- `BUILD` (default: `/home/raoul/kodi-fork/xbmc-ps5-fork/build/ps5-release`)
-- `STAGE` (default: a fresh `title-<UTC timestamp>-<pid>` under `BUILD`)
-- `APP_TEMPLATE` (default:
-  `build/ps5-external/ps5-opengl/build/native-app/PPSA99005`, i.e.
-  `$WORK/ps5-opengl/...` - see 0.2)
-
-An existing stage is never overwritten. For a known output location, set a fresh
-`STAGE` when invoking `package.sh`, or configure `PS5_PACKAGE_STAGE` for the
-CMake targets. Use the resulting `<stage>/app` with repository `--title-app`.
-The required SDK and dependency map must match the Kodi configuration.
-
-Title metadata is copied unchanged from `title/sce_sys/param.json` and checked
-against the packaged copy. Increment `contentVersion` manually in that file
-(for example `22.000.000` to `22.000.001`) before packaging. The title ID,
-master version, category, HDR flags and memory/save-data settings are also
-owned by that file; `TITLE_ID`, `KODI_CATEGORY` and `KODI_HDR_TITLE` environment
-overrides are rejected. The zip build manifest records the packaged content
-version, category and HDR capability.
-
-When `PS5_HOST` is set, successful packaging uploads the title over FTP using
-`lftp` to `/data/homebrew/<TITLE_ID>` and removes stale remote files. The FTP
-port defaults to 2121 (`PS5_FTP_PORT`), with eight parallel uploads by default
-(`PS5_DEPLOY_JOBS`, range 1..8). The launcher `eboot.bin` and every file under
-`sce_module` are always re-uploaded, regardless of remote timestamps or sizes.
-Without `PS5_HOST`, packaging does not contact the console. Restart
-ShadowMountPlus and launch Kodi manually after uploading.
-
-Packaging compiles `shims/native-app/libc_socket.c` directly into the title,
-ahead of the SDK's archived copy in `libkodishim.a`. Socket-shim-only changes
-therefore require re-packaging, not rebuilding Python. Changes to Python's
-`ps5_pysocket.h` redirection still require rebuilding the Python dependency.
-Run `bash tools/ps5/test-socket-shim.sh` for the socket regression tests and
-PS5 SDK compile check.
-
-Socket diagnostics use `[kodi-ps5] pysock`: creation logs include the socket ID,
-family, type and protocol; failed connects log the captured raw sceNet errno,
-then the socket type and numeric destination. IPv4 UDP connect to destination
-port zero is rejected by the FreeBSD-style stack with `EADDRNOTAVAIL` (49,
-`0x31`), not `EIO`. The shim preserves the rejection; a caught probe failure
-alone does not establish that the add-on's HTTP server failed to start.
-
-Both targets discover installed binary add-ons using the repository builder's
-`build/ps5-addon-repository/work/build-record.json` when present. They copy only
-catalogue-bundled outputs, including resources and signed native-module receipts.
-Add-ons import versioned shared providers, never candidate-derived title exports.
-Neither target compiles add-ons or publishes feeds.
-The stable repository is shipped and enabled; testing is shipped but disabled
-on first discovery. Compatibility exclusions remain authoritative.
-
-Use colon-separated `PS5_ADDON_PREFIXES` to override install roots; an explicitly
-empty value disables discovery. Missing
-explicit roots, duplicate IDs and invalid/unsafe installed files fail.
-Selection and exclusions are recorded in
-`<stage>/native-addons.json`. Follow the
-[binary add-on workflow](PS5-BINARY-ADDONS.md) for build order, release scenarios
-and publication commands. Legacy `PS5_ADAPTIVE_TEST`, `PS5_ADDON_ELFS` and
-audio-decoder staging overrides are not supported.
-
-### PS5 controllers
-
-Controller input uses `CPeripheralBusPS5` and `CPS5InputBackend`, not synthetic
-keyboard events. The backend opens the standard pad port at index zero for each
-of up to four logged-in users. Logical user/port identities survive login-list
-reordering; failed opens are retried, and disconnect/logout/shutdown neutralize
-input and cancel owned vibration. Native handle access is serialized, and Kodi
-callbacks run outside the native backend lock. The existing peripheral event
-scanner processes bounded batches of up to 64 reports in order.
-
-The title must bundle the native `peripheral.joystick` mapping provider.
-Staging rejects a title without it and registers it as a required system add-on.
-Build it through the binary add-on catalogue before packaging.
-The bundled `game.controller.dualsense` profile supplies a controller image
-and PlayStation button labels without replacing Kodi's default profile.
-PS, Create and Mute are console-reserved and are not advertised as inputs.
-
-An absent Kodi or DualSense button map is seeded and saved automatically:
-Cross/Circle/Square/Triangle map to `a/b/x/y`, Options to `start`, touchpad click
-to `back`, with both sticks, analog triggers, D-pad and shoulder/thumb buttons.
-Duplicate digital trigger primitives are ignored during configuration. Existing
-maps are loaded first and are not overwritten. No first-start mapping prompt is
-needed for these seeded profiles. Optional remapping remains under
-**Settings > System > Input > Configure attached controllers**; configure the
-Kodi profile to change media-center bindings. The DualSense profile can be
-selected as the device's appearance or configured separately for game use.
-
-PS5 installs the tracked `xbmc/platform/ps5/input/joystick.xml` instead of the
-stock controller keymap. It was derived once from the keyboard bridge's actions
-and is maintained as ordinary XML, with no build-time generator. This preserves
-the bridge's window-specific actions
-(including Triangle/context menu, Square/info, Options/play-pause,
-L1/R1/page navigation, L2/R2/rewind-fast-forward, L3/player debug and R3/menu)
-without hardcoding actions in the driver. User action keymaps still take
-precedence. Kodi now handles direction/hold timing and analog deadzones; the
-right stick is available and controls volume by default. During the native IME,
-input and rumble are suppressed and both sticks/triggers must return to neutral
-before Kodi accepts further input.
-
-Owned handles support conventional two-motor rumble when the native vibration
-mode succeeds. Motor zero is the large/low-frequency motor; motor one is the
-small/high-frequency motor. Borrowed handles are input-only and are never closed
-or have their output mode changed. Adaptive triggers and audio-driven haptics
-are not implemented.
-
-The exposed device is named **PS5 standard controller**: the native standard-port
-report contract is known, but no product ID/serial-number ABI is assumed.
-DualSense is its default appearance, not proof of physical device enumeration.
-Nonstandard ports, the Sony Media Remote, physical keyboard/mouse adapters and
-private HID ioctls are not enabled by this implementation.
-
-Run `python3 tools/ps5/test-controller-input.py` for focused host sanitizer
-regressions and controller data checks,
-then use the normal PS5 configure/build/package workflow. The controller PNGs
-are stored directly in the profile; there is no artwork generation step.
-Host tests and a signed package do not establish console report-queue semantics
-or hardware acceptance. Check startup/reconnection, optional remapping, IME
-closure and rumble on the console after user-controlled deployment.
-Set `PS5_CONTROLLER_PACKAGE` to a completed title ZIP when running the controller
-tests to also check its actual action keymap, required provider/profile and
-controller artwork.
-
-## 5. Runtime debugging
-
-Startup requires sandbox escape. Writable data lives under
-`/data/homebrew/kodi-psmc/.kodi`; the escape check creates the HOME directory
-if missing and requires that it can be opened. Startup retains `/app0` before
-escape, then finds its mounted path under `/mnt/sandbox/*/app0` by matching
-device and inode. Missing or ambiguous matches stop startup; no title ID,
-sandbox instance suffix or physical installation directory is assumed.
-Packaged resources, Python and system add-ons use `<resolved app0>/share/kodi`.
-The video decoder and native keyboard modules are preloaded before requesting
-sandbox escape; later initialization reuses the cached results, since loading
-modules after escape can fail with `0x80020063`.
-Startup supplies `HOME`,
-`KODI_HOME` and `KODI_BIN_HOME` from these separate locations; the shared POSIX
-settings initialization registers the special paths and creates user directories.
-Python's environment, temporary directory and CA bundle are configured separately.
-
-Marker files are read from `/data/homebrew/kodi-psmc` (the writable HOME root):
-`kodi-debug`,
-`kodi-video-debug` and `kodi-addon-debug` remain in place.
-`kodi-uninstall` removes that tree and exits.
-Reset/uninstall markers are removed only after successful deletion. Neither
-operation deletes the packaged title or its resources.
-Markers stay outside `.kodi`, so resetting data does not delete them prematurely.
-The application mount does not need to be writable.
-
-Optional empty marker files in the writable HOME root enable
-diagnostics at startup. Restart Kodi after adding or removing them.
-
-| Marker | Effect |
+| Variable | Default |
 |---|---|
-| `kodi-debug` | General Kodi debug logging. |
-| `kodi-video-debug` | Detailed video decoding, frame-content, presentation timing and HDR diagnostics, independently of `kodi-debug`. |
+| `BUILD` | `build/ps5-release` |
+| `BUILD_TYPE` | `Release` (use `Debug` for development) |
+| `NATIVE` | `build/ps5-depends-test/x86_64-linux-gnu-native` |
+| `PS5_PAYLOAD_SDK` | `/opt/ps5-payload-sdk` |
+| `PS5_OPENGL_PREFIX` | `/opt/ps5-opengl-gl46` |
+| `PS5_NATIVE_RUNTIME_SDK` | `build/ps5-native/sdk` |
+| `PS5_NATIVE_DEPENDS_MAP` | `build/ps5-native/depends/archive-map.json` |
+| `PS5_DEPENDS_PREFIX` | `build/ps5-depends-test/x86_64-unknown-freebsd-debug` |
 
-For example, create this empty file on the console over FTP:
+Use absolute paths for custom prefixes. The prepared SDK and dependency map used
+for packaging must match the configured Kodi build.
 
-```text
-/data/homebrew/kodi-psmc/kodi-video-debug
+## 4. Build
+
+```bash
+cmake --build build/ps5-release -j"$(nproc)"
 ```
 
-The application mount is resolved at runtime and logged as `app directory`,
-but is not used for markers. Diagnostic output goes to
-the kernel log alongside Kodi messages. Detailed video diagnostics add work
-to the playback path; leave these markers absent for normal playback. Remove
-debug markers from the HOME root when finished. Packaging and deployment do not
-create or remove these user-controlled markers.
+Use the configured `BUILD` directory if overridden.
 
-### Asynchronous logging
+## 5. Package
 
-On PS5, kernel output and Kodi's log file use separate background workers.
-Logging callers, including the GUI thread, never wait for those workers' writes
-or flushes. Each queue is limited to 1024 pending messages and 1 MiB of message
-data. If a queue fills, new messages are dropped until its backlog drains;
-an explicit overflow message reports the loss. File-queue overflow is reported
-both in the log file and through kernel output.
-File write/flush failures are reported directly through kernel output without
-recursing through the failed logger.
+Build required binary add-ons through the
+[catalogue workflow](PS5-BINARY-ADDONS.md) before packaging. In particular,
+`peripheral.joystick` is a required bundled provider; packaging rejects a title
+without it. The packaging targets discover installed catalogue outputs but do
+not compile add-ons or publish feeds.
 
-File output preserves the original timestamps, thread IDs, logger names, levels,
-message order and duplicate filtering. File flush requests are coalesced into
-one-second intervals, rather than flushing on every debug message. Normal log
-shutdown drains and flushes the file queue; an abrupt exit can lose pending or
-buffered messages. This does not change logging on other platforms.
+Title metadata is owned by `title/sce_sys/param.json`. Increment `contentVersion`
+there before packaging, for example from `22.000.000` to `22.000.001`.
+`TITLE_ID`, `KODI_CATEGORY` and `KODI_HDR_TITLE` environment overrides are rejected.
 
-Run the focused host checks with `bash tools/ps5/test-async-logging.sh`.
-`SPDLOG_INCLUDE_DIR` and `FMT_INCLUDE_DIR` can select existing dependency headers
-when they are not in the default PS5 build/SDK locations.
+**Leave `PS5_HOST` unset for build/package-only work.** The packaging script can
+upload over FTP when that variable is set; installation should be an explicit,
+separate user action.
 
-### Artwork cache timing
+```bash
+unset PS5_HOST
 
-On PS5 only, general debug logging (`kodi-debug` or Kodi's debug logging setting)
-enables aggregated `[kodi-ps5] Cache timing:` messages. No video-debug marker is
-needed. Each active stage reports its count, average and maximum milliseconds,
-and slow-operation count every five seconds while GUI frames are processed.
-Slow means at least 100 ms, except for GUI frame intervals, where it means 50 ms.
-Turning debug logging off stops collection and output.
+# Create a fresh deployable title stage.
+cmake --build build/ps5-release --target ps5-title
 
-Stages separate image encoding, thumbnail open/write calls (`write-open`) and
-close (`write-close`), texture-database read/write mutex waits, database reads/writes,
-per-image transactions and commits, cache-job work, completion/database update
-and queue handoff, dispatch to worker start, GUI frame intervals, and presentation
-(including pacing/swap or idle sleep). Dispatch starts when a cache job is handed
-to the job manager, not when it first enters the artwork backlog; it can include
-an intentional playback pause. Frame intervals include time outside rendering
-and can include intentional idle periods. Timings overlap where stages nest;
-do not add their averages together. A sample is counted when its operation ends,
-including failed operations, so an unfinished stall appears only after it returns.
-Summaries resume after a GUI stall; they are not a separate watchdog.
+# Create a fresh title stage and its ZIP artifact.
+cmake --build build/ps5-release --target ps5-package
+```
 
-Workers only update bounded in-memory counters. The GUI thread copies and resets
-the counters before enqueueing logs, without holding the timing collector's mutex.
-These diagnostics do not change cache concurrency, image sizes, database policy
-or scheduling, and shared-code hooks are compiled only with `TARGET_PS5`.
+Both targets call `tools/ps5/package.sh` and print their output paths. Each stage
+is a fresh `title-<UTC timestamp>-<pid>` directory under `BUILD`; existing stages
+are never overwritten. Set `STAGE` when calling the script directly, or configure
+`PS5_PACKAGE_STAGE` for the CMake targets, to choose a fresh output location.
+Use the resulting `<stage>/app` for add-on tooling's `--title-app` option.
 
-### Network streaming
+Packaging options:
 
-PS5 curl connections request a 1 MiB socket receive buffer before connecting;
-the console may clamp this (512 KiB was observed). The default 64 KiB buffer
-limited a high-bitrate HTTPS stream to roughly 45 Mbit/s; enlarging it allowed
-roughly 180 Mbit/s and sustained playback. This is separate from Kodi's media
-cache size. Buffer-setting failures are logged and leave the connection usable
-with its existing buffer. The callback applies to other curl transfers too,
-including artwork and add-on downloads, not Python's separate socket layer.
+| Variable | Purpose |
+|---|---|
+| `BUILD` | Configured Kodi build directory |
+| `WORK` | External source root used by bootstrap |
+| `APP_TEMPLATE` | Override the built native-app template |
+| `STAGE` | Fresh output directory when invoking `package.sh` directly |
+| `PS5_ADDON_PREFIXES` | Colon-separated installed add-on roots; empty disables discovery |
 
-After changing this policy, restart Kodi to avoid reusing existing connections.
-Check high-bitrate playback, forward/backward seeks, stop/reopen, concurrent
-artwork loading and add-on downloads. Repeatedly opening and closing streams
-should not exhaust socket resources.
+By default, installed add-ons come from
+`build/ps5-addon-repository/work/build-record.json`. Explicit missing roots,
+duplicate IDs and invalid files fail packaging. The stage records add-on
+selection in `native-addons.json`. Local build-proof files are retained in the
+stage but excluded from the distributable ZIP.
 
-### Thread stacks and decoder allocation failures
+After manually installing the title, restart ShadowMountPlus and launch Kodi.
 
-`shims/native-app/thread_stack.c` raises the native default to at least **4 MiB**
-only when `pthread_create()` receives a null attributes pointer. This covers
-title-linked callers such as `std::thread` without prescribing a size for every
-workload. Explicit caller attributes are passed through unchanged, including
-smaller stacks, guard sizes, scheduling options and caller-supplied stack memory.
-The caller remains responsible for choosing and allocating a sufficient stack.
-The built CPython FreeBSD implementation already explicitly requests 4 MiB by
-default; an add-on's `threading.stack_size()` override remains respected.
+## 6. Troubleshooting and rebuild scope
 
-4 MiB is the working application default observed on the console, not a firmware
-requirement or a proven maximum stack usage. A global 8 MiB policy increases
-per-thread resource demand; the previous automatic fallback could then run
-workers on 1 MiB stacks, a size that previously overflowed during software
-thumbnail decoding. There is no longer a smaller-stack retry. Attribute errors
-and thread-creation failures are returned to the caller without changing
-`errno`; a cleanup error after successful creation is logged, not reported as
-creation failure for a thread that already exists.
+- **Bootstrap or SDK failures:** check the configured prefixes and pinned source
+  revision. Repeat only the failed bootstrap step, using the same `WORK`.
+- **Missing host tools:** complete `make -C native` and ensure `NATIVE` points to
+  its installed prefix.
+- **Stale dependencies:** rebuild/install the affected recipe, then repeat native
+  runtime preparation, configuration, building and packaging as appropriate.
+  Do not assume an installed marker proves changed sources were rebuilt.
+- **Rebuild versus repackage:** Kodi C++ changes require a rebuild and packaging.
+  Native-app shim-only changes require packaging. Python dependency/header
+  changes require rebuilding Python first; dependency changes require rebuilding
+  the affected library.
 
-Failure-only kernel-log entries prefixed `[kodi-ps5] DIAGNOSTIC thread-create:`
-include the operation, native pthread return code, attempted stack size, explicit
-attribute flag, creating thread, entry point and available flexible memory.
-`stack_attr_rc` records stack-attribute inspection or setup errors;
-`flexible_memory_valid=0` means the memory query failed and its byte count must
-not be interpreted as available memory. These temporary diagnostics do not
-require a marker or change cache settings. Memory availability alone does not
-establish why thread creation failed.
-
-On PS5, software video filter graphs use a six-thread limit rather than an automatically
-sized worker pool. This includes software thumbnail and HDR-metadata extraction
-and software-playback filters. The scale filter inherits the graph's thread
-limit. Hardware decoding, decoder worker counts, concurrent Kodi jobs and stack
-sizes are unchanged. Debug logs report
-`[kodi-ps5] FFmpeg software filter graph: threads=6` when a graph is created.
-
-Temporary SMB debug diagnostics report the first 32 entries of each share/path
-listing with `[kodi-ps5] SMB entry:`. Each line includes the redacted parent URL
-(limited to 256 characters), entry name (160 characters), raw libsmb2 type,
-mapped directory flag, final Kodi item folder flag and size. Raw types are
-`0` (file), `1` (directory) and `2` (link/reparse point). A
-`[kodi-ps5] SMB listing:` summary includes total entries, directory and zero-size
-non-directory counts, and the number of omitted entry logs. Classification is
-based on the server's directory attribute: the local libsmb2 patch preserves
-`DIRECTORY` even when `REPARSE_POINT` is also set, consistently for listing, stat
-and fstat. Non-directory reparse points remain links/files, not folders. The
-patch changes no public libsmb2 layout or ABI. These diagnostics add no directory
-timings or traversal fallback.
-
-The Pictures dialog "Loading media information from files..." is a separate,
-sequential picture-tag lookup phase, not the video filter graph. Kodi's built-in
-metadata parser reads each uncached image into memory before parsing its tags,
-so remote image reads can delay the dialog even without video decoding.
-PS5 debug logs prefixed `[kodi-ps5] Picture metadata:` report phase begin/end and
-each actual tag lookup's `read_begin`/`read_end`, redacted path (256 characters),
-listed size, result and elapsed milliseconds. The listed size is not a measured
-transfer byte count; the timing includes both I/O and metadata parsing. A
-`read_begin` without its matching `read_end` identifies an in-progress lookup.
-Cached/skipped items do not produce read logs. These diagnostics do not change
-metadata loading, caching or cancellation.
-
-FFmpeg decoder-open failures log the returned error code and description.
-If reopening fails, picture retrieval reports a fatal decoder error instead
-of accessing the freed context; VideoPlayer aborts that playback through its
-existing `PLAYER_ABORT` path. A successful reopen waits for fresh input.
-TLS destructor registration also reports failures instead of claiming success
-after failed key creation, allocation or thread-specific storage.
-The shared core is the TLS storage/destructor owner in `shared_tls.c`.
-The thread trampoline always calls `ps5_tls_thread_exit`;
-there is no separate legacy registry or build-mode-specific cleanup API. The
-`exit` wrapper also drains calling-thread TLS before native global finalization.
-
-Run `bash tools/ps5/test-thread-stack.sh`, `bash tools/ps5/test-tls-dtors.sh`
-and `python3 tools/ps5/test.py test-shared-tls.py` for host regressions and SDK compile
-checks. Decoder lifecycle regressions are in `TestDVDVideoCodecFFmpeg`.
-The stack and TLS shims are copied into the native application during packaging;
-changing only those shims needs re-packaging. Native SMB diagnostics and
-decoder/player changes require a Kodi rebuild followed by packaging. Neither
-requires rebuilding Python.
-The reparse-directory fix additionally requires rebuilding/installing the
-`tools/depends/target/libsmb2` dependency before rebuilding Kodi and packaging.
-Run `bash tools/ps5/test-smb2-file-type.sh` against the patched dependency source
-for directory/reparse mapping regressions and an SDK compile check.
-Packaging resolves bare `-l` inputs using Kodi's actual linker search paths
-before SDK/OpenGL fallbacks, so the native title uses the rebuilt dependency
-rather than an older SDK archive. `vendor/kodi-deps.txt` in the staged native
-application records the selected archives. Run
-`python3 tools/ps5/test-kodi-link-inputs.py` for archive-selection regressions.
+Writable Kodi data is under `/data/homebrew/kodi-psmc/.kodi`; the file log is
+`/data/homebrew/kodi-psmc/.kodi/temp/kodi.log`.
+For startup troubleshooting, create an empty `kodi-debug` file in
+`/data/homebrew/kodi-psmc` and restart Kodi. `kodi-video-debug` enables detailed
+video diagnostics independently. Remove diagnostic markers and restart when
+finished; packaging does not create or remove them.

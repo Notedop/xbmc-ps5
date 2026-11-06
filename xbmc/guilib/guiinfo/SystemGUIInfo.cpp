@@ -82,6 +82,7 @@ std::string CSystemGUIInfo::GetSystemHeatInfo(int info) const
       text = StringUtils::Format("{}%", m_fanSpeed * 2);
       break;
     case SYSTEM_CPU_USAGE:
+      CServiceBroker::GetCPUInfo()->GetUsedPercentage();
       if (CServiceBroker::GetCPUInfo()->SupportsCPUUsage())
 #if defined(TARGET_DARWIN) || defined(TARGET_WINDOWS)
         text = StringUtils::Format("{}%", CServiceBroker::GetCPUInfo()->GetUsedPercentage());
@@ -322,10 +323,16 @@ bool CSystemGUIInfo::GetLabel(std::string& value,
       return true;
     }
     case SYSTEM_GET_CORE_USAGE:
-      value = StringUtils::Format(
-          "{:4.2f}",
-          CServiceBroker::GetCPUInfo()->GetCoreInfo(std::stoi(info.GetData3())).m_usagePercent);
+    {
+      const auto cpuInfo = CServiceBroker::GetCPUInfo();
+      cpuInfo->GetUsedPercentage();
+      const int coreId = std::stoi(info.GetData3());
+      if (cpuInfo->SupportsCPUUsage() && cpuInfo->HasCoreId(coreId))
+        value = StringUtils::Format("{:4.2f}", cpuInfo->GetCoreInfo(coreId).m_usagePercent);
+      else
+        value = CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(10005);
       return true;
+    }
     case SYSTEM_RENDER_VENDOR:
       value = CServiceBroker::GetRenderSystem()->GetRenderVendor();
       return true;
@@ -642,6 +649,7 @@ bool CSystemGUIInfo::GetBool(bool& value,
       return true;
     }
     case SYSTEM_HAS_CORE_ID:
+      CServiceBroker::GetCPUInfo()->GetUsedPercentage();
       value = CServiceBroker::GetCPUInfo()->HasCoreId(info.GetData1());
       return true;
     case SYSTEM_DATE:
@@ -685,6 +693,7 @@ bool CSystemGUIInfo::GetBool(bool& value,
       value = g_alarmClock.HasAlarm(info.GetData3());
       return true;
     case SYSTEM_SUPPORTS_CPU_USAGE:
+      CServiceBroker::GetCPUInfo()->GetUsedPercentage();
       value = CServiceBroker::GetCPUInfo()->SupportsCPUUsage();
       return true;
     case SYSTEM_GET_BOOL:

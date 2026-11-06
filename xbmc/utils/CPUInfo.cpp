@@ -38,10 +38,9 @@ std::string CCPUInfo::GetCoresUsageString()
 {
   std::string strCores;
 
+  GetUsedPercentage(); // refresh availability as well as percentages
   if (SupportsCPUUsage())
   {
-    GetUsedPercentage(); // must call it to recalculate pct values
-
     if (!m_cores.empty())
     {
       for (const auto& core : m_cores)

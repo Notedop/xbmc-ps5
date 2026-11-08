@@ -163,6 +163,10 @@ class SharedTitleTest(unittest.TestCase):
         self.assertEqual(record["wrap_symbols"], WRAPS)
         self.assertFalse(record["console_accepted"])
         self.assertEqual(record["symbol_libraries"], {
+            "libSceMbus": {
+                name: {"library": "libSceDeviceService", "library_version": 1}
+                for name in ("sceDeviceServiceInitialize", "sceDeviceServiceQueryDeviceInfo_")
+            },
             "libSceSystemService": {
                 "sceShellCoreUtilRequestEjectDevice": {
                     "library": "libSceShellCoreUtil", "library_version": 1}}})
@@ -172,7 +176,9 @@ class SharedTitleTest(unittest.TestCase):
     def test_system_imports_use_installed_sdk_not_stale_template_copy(self):
         installed = self.directory / "installed-sdk/target/lib"
         with patch.object(MODULE, "sdk_provider", return_value=Path("manifest.json")) as describe:
-            self.assertEqual(SDK_TITLE_PROVIDERS(self.app, installed), [Path("manifest.json")] * 3)
+            self.assertEqual(SDK_TITLE_PROVIDERS(self.app, installed),
+                             [Path("manifest.json")] * 4)
+        self.assertEqual(describe.call_count, 4)
         expected = (
             ("libSceUsbStorage", "libSceUsbStorageForShellUI", 0x100,
              ("sceUsbStorageInit", "sceUsbStorageTerm",
@@ -182,6 +188,9 @@ class SharedTitleTest(unittest.TestCase):
               "sceAppInstUtilAppGetAllAppSize")),
             ("libSceSaveData", "libSceSaveData", 0x101,
              ("sceSaveDataInitialize3", "sceSaveDataTerminate", "sceSaveDataGetAllSizeProspero")),
+            ("libSceMbus", "libSceMbus", 0x101,
+             ("sceMbusConvertToLocalDeviceId2",
+              "sceDeviceServiceInitialize", "sceDeviceServiceQueryDeviceInfo_")),
         )
         for call, identity in zip(describe.call_args_list, expected):
             self.assertEqual(call.args[0], installed / (identity[0] + ".so"))

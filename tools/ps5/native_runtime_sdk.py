@@ -33,7 +33,9 @@ from pathlib import Path
 import struct
 import subprocess
 
-from native_c_link import Elf, PHDR, SHDR, SYM, hash_table, module_identity, nid, require
+from native_c_link import (
+    Elf, PHDR, SHDR, SYM, hash_table, module_identity, nid, provider_nid, require,
+)
 
 
 DYNAMIC = struct.Struct("<QQ")
@@ -261,7 +263,12 @@ def prove_provider(linked_raw, native_raw, module, *, include_dependencies=False
         require(source[1] & 15 != 6, f"TLS import unsupported: {source_name}")
         require(source[1] & 15 in (0, 1, 2), f"unsupported import symbol type: {source_name}")
         parts = name.split("#")
-        require(len(parts) == 3 and parts[0] == nid(source_name),
+        identifier = nid(source_name)
+        if providers is not None and len(parts) == 3:
+            identity = decode_id(parts[2])
+            require(0 < identity <= len(providers), "undeclared native import module")
+            identifier = provider_nid(source_name, providers[identity - 1])
+        require(len(parts) == 3 and parts[0] == identifier,
                 f"native/source import index/NID mismatch at index {index}: {source_name}")
         library_id, module_id = decode_id(parts[1]), decode_id(parts[2])
         require(module_id != 0 and module_id in modules and library_id in libraries and
@@ -272,6 +279,7 @@ def prove_provider(linked_raw, native_raw, module, *, include_dependencies=False
             provider = providers[module_id - 1]
             export = next((s for s in provider["symbols"] if s["name"] == source_name), None)
             require(export is not None, f"undeclared provider import: {source_name}")
+            require(export["nid"] == identifier, f"provider import NID mismatch: {source_name}")
             import_library = export.get("import_library_identity", provider)
             require(library["name"] == import_library["library"] and
                     library["version"] == import_library["library_version"],

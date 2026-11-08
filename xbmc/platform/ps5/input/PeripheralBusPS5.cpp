@@ -36,10 +36,11 @@ CPeripheralBusPS5::~CPeripheralBusPS5()
   Clear();
 }
 
-std::string CPeripheralBusPS5::Location(int userId)
+std::string CPeripheralBusPS5::Location(int userId, int portType)
 {
   // This is a logical port identity, not a controller serial number.
-  return StringUtils::Format("ps5/user/{:08x}/port/0/index/0", static_cast<uint32_t>(userId));
+  return StringUtils::Format("ps5/user/{:08x}/port/{}/index/0", static_cast<uint32_t>(userId),
+                            portType);
 }
 
 bool CPeripheralBusPS5::ScanForDevices()
@@ -56,8 +57,10 @@ bool CPeripheralBusPS5::PerformDeviceScan(PeripheralScanResults& results)
   {
     PeripheralScanResult result(PERIPHERAL_BUS_PS5);
     result.m_type = result.m_mappedType = PERIPHERAL_JOYSTICK;
-    result.m_strLocation = Location(device.userId);
-    result.m_strDeviceName = "PS5 standard controller";
+    result.m_strLocation = Location(device.userId, device.portType);
+    result.m_strDeviceName = device.portType == PAD_PORT_TYPE_REMOTE_CONTROL
+                                ? "PS5 Media Remote"
+                                : "PS5 standard controller";
     result.m_iSequence = device.port;
     results.m_results.push_back(std::move(result));
   }
@@ -70,13 +73,14 @@ bool CPeripheralBusPS5::InitializeProperties(CPeripheral& peripheral)
     return false;
   for (const auto& device : m_backend.GetDevices())
   {
-    if (Location(device.userId) == peripheral.Location())
+    if (Location(device.userId, device.portType) == peripheral.Location())
     {
       auto& joystick = static_cast<CPeripheralJoystick&>(peripheral);
       joystick.SetProvider("ps5");
       joystick.SetRequestedPort(device.port);
-      joystick.SetButtonCount(PS5_BUTTON_COUNT);
-      joystick.SetAxisCount(PS5_AXIS_COUNT);
+      const bool remote = device.portType == PAD_PORT_TYPE_REMOTE_CONTROL;
+      joystick.SetButtonCount(remote ? PS5_REMOTE_BUTTON_COUNT : PS5_BUTTON_COUNT);
+      joystick.SetAxisCount(remote ? 0 : PS5_AXIS_COUNT);
       joystick.SetMotorCount(device.supportsRumble ? 2 : 0);
       return true;
     }
@@ -90,6 +94,36 @@ bool CPeripheralBusPS5::InitializeButtonMap(const CPeripheral& peripheral,
 {
   if (peripheral.Type() != PERIPHERAL_JOYSTICK)
     return false;
+  if (GetAppearance(peripheral) == PS5_REMOTE_ID)
+  {
+    const bool remoteProfile = buttonMap.ControllerID() == PS5_REMOTE_ID;
+    if (!remoteProfile && buttonMap.ControllerID() != GAME::DEFAULT_CONTROLLER_ID)
+      return false;
+    constexpr std::array<const char*, 7> features{
+        "select", "back", "options", "up", "right", "down", "left"};
+    constexpr std::array<const char*, 7> defaultFeatures{
+        "a", "b", "y", "up", "right", "down", "left"};
+    constexpr std::array<unsigned int, 7> buttons{14, 13, 3, 4, 5, 6, 7};
+    for (unsigned int i = 0; i < features.size(); ++i)
+      buttonMap.AddScalar(remoteProfile ? features[i] : defaultFeatures[i],
+                          {PRIMITIVE_TYPE::BUTTON, buttons[i]});
+    if (remoteProfile)
+    {
+      constexpr std::array<std::pair<const char*, unsigned int>, 3> mediaKeys{
+          std::pair{"playpause", 12}, std::pair{"rewind", 11}, std::pair{"fastforward", 10}};
+      for (const auto& [feature, button] : mediaKeys)
+        buttonMap.AddScalar(feature, {PRIMITIVE_TYPE::BUTTON, button});
+    }
+    buttonMap.SetIgnoredPrimitives({{PRIMITIVE_TYPE::BUTTON, 0}});
+    if (!buttonMap.SetAppearance(PS5_REMOTE_ID))
+    {
+      CLog::Log(LOGERROR, "PS5 input: unable to set Media Remote appearance for {}",
+                buttonMap.Location());
+      return false;
+    }
+    buttonMap.SaveButtonMap();
+    return true;
+  }
   if (buttonMap.ControllerID() != GAME::DEFAULT_CONTROLLER_ID &&
       buttonMap.ControllerID() != PS5_CONTROLLER_ID)
     return false;
@@ -133,19 +167,24 @@ bool CPeripheralBusPS5::InitializeButtonMap(const CPeripheral& peripheral,
 
 std::string CPeripheralBusPS5::GetAppearance(const CPeripheral& peripheral) const
 {
-  return peripheral.Type() == PERIPHERAL_JOYSTICK ? PS5_CONTROLLER_ID : "";
+  if (peripheral.Type() != PERIPHERAL_JOYSTICK)
+    return "";
+  return peripheral.Location() == Location(USER_ID_SYSTEM, PAD_PORT_TYPE_REMOTE_CONTROL)
+             ? PS5_REMOTE_ID
+             : PS5_CONTROLLER_ID;
 }
 
 void CPeripheralBusPS5::Dispatch(CPeripheralJoystick& joystick, const PS5InputState& state)
 {
   auto& previous = m_states[joystick.Location()];
-  for (unsigned int i = 0; i < PS5_BUTTON_COUNT; ++i)
+  const bool remote = GetAppearance(joystick) == PS5_REMOTE_ID;
+  for (unsigned int i = 0; i < joystick.ButtonCount(); ++i)
   {
-    const uint32_t bit = PS5_BUTTONS[i];
+    const uint32_t bit = remote ? uint32_t{1} << i : PS5_BUTTONS[i];
     if ((previous.buttons ^ state.buttons) & bit)
       joystick.OnButtonMotion(i, (state.buttons & bit) != 0);
   }
-  for (unsigned int i = 0; i < PS5_AXIS_COUNT; ++i)
+  for (unsigned int i = 0; i < joystick.AxisCount(); ++i)
     joystick.OnAxisMotion(i, state.axes[i]);
   previous = state;
   joystick.OnInputFrame();
@@ -159,7 +198,7 @@ void CPeripheralBusPS5::ProcessEvents()
   {
     if (frame.imeActivity)
       CPS5ImeDialog::NotifyInputActivity();
-    auto device = GetPeripheral(Location(frame.userId));
+    auto device = GetPeripheral(Location(frame.userId, frame.portType));
     if (frame.connected != static_cast<bool>(device))
       rescan = true;
     if (device && device->Type() == PERIPHERAL_JOYSTICK)
@@ -194,7 +233,8 @@ bool CPeripheralBusPS5::SetMotorState(const std::string& location,
   if (CPS5ImeDialog::IsActive())
     return false;
   for (const auto& device : m_backend.GetDevices())
-    if (Location(device.userId) == location)
+    if (Location(device.userId, device.portType) == location &&
+        device.portType == PAD_PORT_TYPE_STANDARD)
       return m_backend.SetMotorState(device.userId, motorIndex, magnitude);
   return false;
 }

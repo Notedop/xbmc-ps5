@@ -3,6 +3,21 @@
 <!-- Installed in place of the stock joystick.xml on PS5 only. -->
 <keymap>
   <global>
+    <joystick profile="game.controller.ps5.mediaremote">
+      <select>Select</select>
+      <back>Back</back>
+      <options>ContextMenu</options>
+      <up>Up</up>
+      <right>Right</right>
+      <down>Down</down>
+      <left>Left</left>
+      <playpause>PlayPause</playpause>
+      <rewind>Rewind</rewind>
+      <fastforward>FastForward</fastforward>
+      <volumeup>VolumeUp</volumeup>
+      <volumedown>VolumeDown</volumedown>
+      <mute>Mute</mute>
+    </joystick>
     <joystick profile="game.controller.default">
       <righttrigger>FastForward</righttrigger>
       <lefttrigger>Rewind</lefttrigger>
@@ -86,6 +101,15 @@
     </joystick>
   </FileManager>
   <FullscreenVideo>
+    <joystick profile="game.controller.ps5.mediaremote">
+      <select>OSD</select>
+      <back>Fullscreen</back>
+      <options>OSD</options>
+      <left>StepBack</left>
+      <right>StepForward</right>
+      <up>ChapterOrBigStepForward</up>
+      <down>ChapterOrBigStepBack</down>
+    </joystick>
     <joystick profile="game.controller.default">
       <righttrigger>FastForward</righttrigger>
       <lefttrigger>Rewind</lefttrigger>
@@ -138,6 +162,15 @@
     </joystick>
   </FullscreenInfo>
   <Visualisation>
+    <joystick profile="game.controller.ps5.mediaremote">
+      <select>OSD</select>
+      <back>Fullscreen</back>
+      <options>OSD</options>
+      <left>StepBack</left>
+      <right>StepForward</right>
+      <up>SkipNext</up>
+      <down>SkipPrevious</down>
+    </joystick>
     <joystick profile="game.controller.default">
       <righttrigger>FastForward</righttrigger>
       <lefttrigger>Rewind</lefttrigger>

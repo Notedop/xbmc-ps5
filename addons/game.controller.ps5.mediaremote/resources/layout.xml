@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<layout label="30000" image="layout.png">
+  <category name="face" label="30020">
+    <button name="select" type="digital" label="30001"/>
+    <button name="back" type="digital" label="30002"/>
+    <button name="options" type="digital" label="30003"/>
+    <button name="up" type="digital" label="30004"/>
+    <button name="right" type="digital" label="30005"/>
+    <button name="down" type="digital" label="30006"/>
+    <button name="left" type="digital" label="30007"/>
+  </category>
+  <category name="face" label="30021">
+    <button name="playpause" type="digital" label="30008"/>
+    <button name="rewind" type="digital" label="30009"/>
+    <button name="fastforward" type="digital" label="30010"/>
+  </category>
+  <category name="face" label="30022">
+    <button name="volumeup" type="digital" label="30011"/>
+    <button name="volumedown" type="digital" label="30012"/>
+    <button name="mute" type="digital" label="30013"/>
+  </category>
+</layout>

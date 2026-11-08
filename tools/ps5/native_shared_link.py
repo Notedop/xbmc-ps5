@@ -22,7 +22,7 @@ import struct
 
 from native_c_link import (
     Elf, NOTE_HEADER, PAGE, PHDR, RELA, SYM, align, cstring, hash_table,
-    module_identity, nid, require,
+    module_identity, nid, provider_nid, require,
 )
 from native_runtime_sdk import eligible_symbols, validate_stub
 
@@ -53,7 +53,7 @@ def dynamic_entries(image):
     raise ValueError("unterminated ELF dynamic table")
 
 
-def sdk_provider(source, output, module, library, module_version, required):
+def sdk_provider(source, output, module, library, module_version, required, *, symbol_nids=None):
     """Record selected imports while preserving the installed SDK stub unchanged."""
     source, output = Path(source), Path(output)
     require(source.is_file(), f"missing SDK stub: {source}; see SDK-IMPORTS.md")
@@ -81,6 +81,10 @@ def sdk_provider(source, output, module, library, module_version, required):
                          other=catalogue[name][2], size=catalogue[name][5],
                          value=catalogue[name][4]) for name in sorted(required)],
     }
+    if symbol_nids is not None:
+        manifest["symbol_nids"] = dict(symbol_nids)
+        for symbol in manifest["symbols"]:
+            symbol["nid"] = provider_nid(symbol["name"], manifest)
     path = output / "manifest.json"
     content = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     if not path.is_file() or path.read_text() != content:
@@ -113,8 +117,12 @@ def load_provider(path):
     symbols = provider["symbols"]
     require(symbols and len({s["name"] for s in symbols}) == len(symbols),
             f"empty/duplicate provider symbols: {path}")
+    provider_nid(symbols[0]["name"], provider)
+    require(set(provider.get("symbol_nids", {})) <= {s["name"] for s in symbols},
+            "native NID alias references an undeclared symbol")
     for symbol in symbols:
-        require(symbol["nid"] == nid(symbol["name"]), f"provider NID mismatch: {symbol['name']}")
+        require(symbol["nid"] == provider_nid(symbol["name"], provider),
+                f"provider NID mismatch: {symbol['name']}")
     expected = {s["name"]: (0, s["info"], s["other"], 1, 0, s["size"]) for s in symbols}
     if provider.get("sdk_library_unmodified") is True:
         require(provider.get("source_import_library_sha256") ==
@@ -280,8 +288,7 @@ def convert(source, module, providers=(), *, process_lifetime=False):
     for name, s in symbols[1:]:
         require(name and name not in seen, f"empty/duplicate dynamic symbol: {name}")
         seen.add(name)
-        require(nid(name) not in seen_nids, f"colliding dynamic symbol NID: {name}")
-        seen_nids.add(nid(name))
+        identifier = nid(name)
         require(s[1] >> 4 in (1, 2) and s[1] & 15 in (0, 1, 2) and s[2] in (0, 3),
                 f"unsupported symbol type/binding/visibility: {name}")
         if s[3]:
@@ -298,6 +305,8 @@ def convert(source, module, providers=(), *, process_lifetime=False):
             match = next((entry for entry in matches if entry[2] is not None), None)
             require(match is not None, f"no declared provider exports {name}")
             i, provider, export = match
+            identifier = provider_nid(name, provider)
+            require(export["nid"] == identifier, f"provider NID mismatch: {name}")
             require(not thread_destructor or
                     provider["module"] == provider["library"] == "libkodi-runtime",
                     "process-lifetime TLS destructors must use the shared core")
@@ -320,9 +329,11 @@ def convert(source, module, providers=(), *, process_lifetime=False):
                     (0x61000019, library_id << 48 | 9),
                 ))
             binding = encode_id(library_ids[key]) + "#" + encode_id(i)
-        encoded.extend(SYM.pack(string(nid(name) + "#" + binding), s[1], s[2],
+        require(identifier not in seen_nids, f"colliding dynamic symbol NID: {name}")
+        seen_nids.add(identifier)
+        encoded.extend(SYM.pack(string(identifier + "#" + binding), s[1], s[2],
                                 1 if s[3] else 0, s[4], s[5]))
-        canonical.append(nid(name) + "#" + library_identity + "#" + identity)
+        canonical.append(identifier + "#" + library_identity + "#" + identity)
     require(any(s[3] for _, s in symbols[1:]), "shared provider has no public exports")
     relocations = []
     for name, h in allocated:

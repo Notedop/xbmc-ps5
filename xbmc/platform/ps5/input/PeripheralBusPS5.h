@@ -44,7 +44,7 @@ protected:
   void UnregisterRemovedDevices(const PeripheralScanResults& results) override;
 
 private:
-  static std::string Location(int userId);
+  static std::string Location(int userId, int portType);
   void Dispatch(CPeripheralJoystick& joystick, const KODI::PLATFORM::PS5::PS5InputState& state);
 
   KODI::PLATFORM::PS5::CPS5InputBackend m_backend;

@@ -4,6 +4,7 @@ addons/game.controller.default/*
 addons/game.controller.dualsense/*
 addons/game.controller.keyboard/*
 addons/game.controller.mouse/*
+addons/game.controller.ps5.mediaremote/*
 addons/game.controller.snes/*
 addons/kodi.audiodecoder/*
 addons/kodi.game/*

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="game.controller.ps5.mediaremote" name="PS5 Media Remote" version="1.0.0" provider-name="Team Kodi">
+  <extension point="kodi.game.controller" library="resources/layout.xml"/>
+  <extension point="xbmc.addon.metadata">
+    <platform>all</platform>
+    <license>GPL-2.0-or-later</license>
+    <assets>
+      <icon>resources/layout.png</icon>
+    </assets>
+    <summary lang="en_GB">PlayStation 5 Media Remote</summary>
+    <description lang="en_GB">Separate button mapping for the PS5 Media Remote. Navigation has default bindings; playback and volume controls can be mapped when exposed by the console. System and dedicated app-launch buttons are not intercepted.</description>
+  </extension>
+</addon>

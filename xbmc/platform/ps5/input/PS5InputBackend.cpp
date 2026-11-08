@@ -8,11 +8,14 @@
 
 #include "PS5InputBackend.h"
 
+#include "platform/ps5/sce/SceDeviceService.h"
+#include "platform/ps5/sce/SceMbus.h"
 #include "platform/ps5/sce/SceUserService.h"
 #include "utils/log.h"
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 using namespace KODI::PLATFORM::PS5;
 using namespace std::chrono_literals;
@@ -21,6 +24,7 @@ namespace
 {
 constexpr auto RETRY_INTERVAL = 1s;
 constexpr int REPORT_BATCH_SIZE = 64;
+constexpr auto LOTUS_LOOKBACK = 100ms;
 
 float StickAxis(uint8_t value)
 {
@@ -32,9 +36,28 @@ float StickAxis(uint8_t value)
 }
 } // namespace
 
-PS5InputState PS5InputState::Translate(const PadData& data)
+PS5InputState PS5InputState::Translate(const PadData& data, int portType, uint32_t lotusButtons)
 {
   PS5InputState state;
+  if (portType == PAD_PORT_TYPE_REMOTE_CONTROL)
+  {
+    state.buttons = data.buttons & ~PS5_REMOTE_SYSTEM_BUTTONS;
+    state.buttons |= lotusButtons & PS5_REMOTE_LOTUS_BUTTONS;
+    // Payload keys reuse the existing driver indices so saved button maps remain valid.
+    if (data.deviceUniqueDataLen == 1)
+    {
+      switch (data.deviceUniqueData[0])
+      {
+        case 0x0d:
+          state.buttons |= PAD_BUTTON_CROSS;
+          break;
+        case 0x0f:
+          state.buttons |= PAD_BUTTON_CIRCLE;
+          break;
+      }
+    }
+    return state;
+  }
   for (uint32_t bit : PS5_BUTTONS)
     state.buttons |= data.buttons & bit;
   state.axes = {StickAxis(data.leftStick.x), StickAxis(data.leftStick.y),
@@ -76,6 +99,97 @@ bool CPS5InputBackend::Initialize()
   return true;
 }
 
+bool CPS5InputBackend::InitializeDeviceService()
+{
+  if (m_deviceServiceInitialized)
+    return true;
+  if (m_lotusImportsUnavailable)
+    return false;
+  // Native title imports can remain null when their export library does not match.
+  auto* volatile initialize = &sceDeviceServiceInitialize;
+  auto* volatile query = &sceDeviceServiceQueryDeviceInfo_;
+  auto* volatile convert = &sceMbusConvertToLocalDeviceId2;
+  auto* volatile buttons = &scePadLastLotusButtonData;
+  if (!initialize || !query || !convert || !buttons)
+  {
+    CLog::Log(LOGERROR, "PS5 input: media remote Lotus imports are not bound; "
+                       "playback buttons unavailable");
+    m_lotusImportsUnavailable = true;
+    return false;
+  }
+  const int result = initialize(DEVICE_SERVICE_VERSION, nullptr);
+  if (result != 0 && result != DEVICE_SERVICE_ERROR_ALREADY_INITIALIZED)
+  {
+    CLog::Log(LOGERROR, "PS5 input: device service initialization failed: {:#x}",
+              static_cast<uint32_t>(result));
+    return false;
+  }
+  m_deviceServiceInitialized = true;
+  return true;
+}
+
+void CPS5InputBackend::ResolveLotus(Pad& pad)
+{
+  std::array<DeviceServiceRecord, 16> records{};
+  int count = -1;
+  int extra = -1;
+  int result = sceDeviceServiceQueryDeviceInfo_(DEVICE_SERVICE_TYPE_MEDIA_REMOTE, nullptr, 0,
+                                                records.data(), static_cast<int>(records.size()),
+                                                &count, &extra, DEVICE_SERVICE_RECORD_SIZE);
+  if (result < 0 || count <= 0 || count > static_cast<int>(records.size()))
+  {
+    if (!pad.lotusError)
+      CLog::Log(LOGWARNING, "PS5 input: media remote device query failed: {:#x} count={}",
+                static_cast<uint32_t>(result), count);
+    pad.lotusError = result;
+    pad.lotusRetryAt = std::chrono::steady_clock::now() + RETRY_INTERVAL;
+    return;
+  }
+  uint64_t localId = 0;
+  for (int i = 0; i < count; ++i)
+  {
+    result = sceMbusConvertToLocalDeviceId2(records[i].deviceId, 0, &localId);
+    if (result == 0 && localId <= INT32_MAX)
+    {
+      pad.lotusId = static_cast<int>(localId);
+      pad.lotusError.reset();
+      CLog::Log(LOGINFO, "PS5 input: media remote Lotus id {:#x}",
+                static_cast<uint32_t>(pad.lotusId));
+      return;
+    }
+  }
+  if (!pad.lotusError)
+    CLog::Log(LOGWARNING, "PS5 input: media remote Lotus id conversion failed: {:#x}",
+              static_cast<uint32_t>(result));
+  pad.lotusError = result;
+  pad.lotusRetryAt = std::chrono::steady_clock::now() + RETRY_INTERVAL;
+}
+
+void CPS5InputBackend::PollLotus(Pad& pad)
+{
+  if (pad.lotusId < 0)
+  {
+    pad.lotusButtons = 0;
+    return;
+  }
+  uint32_t mask = 0;
+  const int result = scePadLastLotusButtonData(pad.lotusId,
+                                               std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                   LOTUS_LOOKBACK)
+                                                   .count(),
+                                               &mask);
+  if (result < 0)
+  {
+    CLog::Log(LOGWARNING, "PS5 input: media remote Lotus query failed: {:#x}",
+              static_cast<uint32_t>(result));
+    pad.lotusId = -1;
+    pad.lotusButtons = 0;
+    pad.lotusRetryAt = std::chrono::steady_clock::now() + RETRY_INTERVAL;
+    return;
+  }
+  pad.lotusButtons = mask & PS5_REMOTE_LOTUS_BUTTONS;
+}
+
 bool CPS5InputBackend::Scan()
 {
   std::unique_lock lock(m_mutex);
@@ -97,7 +211,8 @@ bool CPS5InputBackend::Scan()
 
   for (auto it = m_pads.begin(); it != m_pads.end();)
   {
-    if (std::find(users.begin(), users.end(), it->first) == users.end())
+    if (it->first.second != PAD_PORT_TYPE_REMOTE_CONTROL &&
+        std::find(users.begin(), users.end(), it->first.first) == users.end())
     {
       ClosePad(it->second);
       it = m_pads.erase(it);
@@ -109,15 +224,34 @@ bool CPS5InputBackend::Scan()
   {
     if (user == -1)
       continue;
-    auto [it, added] = m_pads.try_emplace(user);
-    Pad& pad = it->second;
-    if (added)
+    ScanPad(user, PAD_PORT_TYPE_STANDARD);
+  }
+  // The remote port is system-owned, regardless of its Bluetooth user binding.
+  ScanPad(USER_ID_SYSTEM, PAD_PORT_TYPE_REMOTE_CONTROL);
+  const auto remote = m_pads.find({USER_ID_SYSTEM, PAD_PORT_TYPE_REMOTE_CONTROL});
+  if (remote != m_pads.end() && remote->second.handle > 0 && remote->second.connected &&
+      remote->second.lotusId < 0 && std::chrono::steady_clock::now() >= remote->second.lotusRetryAt &&
+      InitializeDeviceService())
+    ResolveLotus(remote->second);
+  return true;
+}
+
+void CPS5InputBackend::ScanPad(int userId, int portType)
+{
+  const auto key = std::make_pair(userId, portType);
+  auto [it, added] = m_pads.try_emplace(key);
+  Pad& pad = it->second;
+  if (added)
+  {
+    if (portType == PAD_PORT_TYPE_REMOTE_CONTROL)
+      pad.port = USER_SERVICE_MAX_USERS;
+    else
     {
       for (unsigned int port = 0; port < USER_SERVICE_MAX_USERS; ++port)
       {
         const bool used = std::any_of(m_pads.begin(), m_pads.end(),
-                                      [user, port](const auto& entry)
-                                      { return entry.first != user && entry.second.port == port; });
+                                      [key, port](const auto& entry)
+                                      { return entry.first != key && entry.second.port == port; });
         if (!used)
         {
           pad.port = port;
@@ -125,30 +259,32 @@ bool CPS5InputBackend::Scan()
         }
       }
     }
-    if (pad.handle <= 0 && std::chrono::steady_clock::now() >= pad.retryAt)
-      OpenPad(user, pad);
   }
-  return true;
+  if (pad.handle <= 0 && std::chrono::steady_clock::now() >= pad.retryAt)
+    OpenPad(userId, portType, pad);
 }
 
-void CPS5InputBackend::OpenPad(int userId, Pad& pad)
+void CPS5InputBackend::OpenPad(int userId, int portType, Pad& pad)
 {
   pad.retryAt = std::chrono::steady_clock::now() + RETRY_INTERVAL;
-  int handle = scePadOpen(userId, PAD_PORT_TYPE_STANDARD, 0, nullptr);
+  int handle = scePadOpen(userId, portType, 0, nullptr);
   const bool owned = static_cast<uint32_t>(handle) != PAD_ERROR_ALREADY_OPENED;
   if (!owned)
-    handle = scePadGetHandle(userId, PAD_PORT_TYPE_STANDARD, 0);
+    handle = scePadGetHandle(userId, portType, 0);
   if (handle <= 0)
   {
-    CLog::Log(LOGWARNING, "PS5 input: opening standard pad for user {:#x} failed: {:#x}",
-              static_cast<uint32_t>(userId), static_cast<uint32_t>(handle));
+    if (pad.openError != handle)
+      CLog::Log(LOGWARNING, "PS5 input: opening pad port {} for user {:#x} failed: {:#x}",
+                portType, static_cast<uint32_t>(userId), static_cast<uint32_t>(handle));
+    pad.openError = handle;
     return;
   }
+  pad.openError.reset();
   pad.handle = handle;
   pad.owned = owned;
   pad.waitForNeutral = true;
   // Borrowed handles are input-only: don't mutate another owner's vibration mode.
-  if (owned)
+  if (owned && portType == PAD_PORT_TYPE_STANDARD)
   {
     const int result = scePadSetVibrationMode(handle, 2);
     pad.supportsRumble = result == 0;
@@ -156,8 +292,10 @@ void CPS5InputBackend::OpenPad(int userId, Pad& pad)
       CLog::Log(LOGWARNING, "PS5 input: vibration mode unavailable for user {:#x}: {:#x}",
                 static_cast<uint32_t>(userId), static_cast<uint32_t>(result));
   }
-  CLog::Log(LOGINFO, "PS5 input: {} standard pad for user {:#x}",
-            owned ? "opened" : "borrowing", static_cast<uint32_t>(userId));
+  CLog::Log(LOGINFO, "PS5 input: {} {} for user {:#x}",
+            owned ? "opened" : "borrowing",
+            portType == PAD_PORT_TYPE_REMOTE_CONTROL ? "media remote port" : "standard pad",
+            static_cast<uint32_t>(userId));
 }
 
 void CPS5InputBackend::StopRumble(Pad& pad)
@@ -198,24 +336,64 @@ std::vector<PS5InputDevice> CPS5InputBackend::GetDevices() const
 {
   std::unique_lock lock(m_mutex);
   std::vector<PS5InputDevice> devices;
-  for (const auto& [user, pad] : m_pads)
+  for (const auto& [key, pad] : m_pads)
     if (pad.connected)
-      devices.push_back({user, pad.port, pad.supportsRumble});
+      devices.push_back({key.first, pad.port, pad.supportsRumble, key.second});
   return devices;
 }
 
-PS5InputFrame CPS5InputBackend::MakeFrame(int userId, Pad& pad, bool imeActive)
+PS5InputFrame CPS5InputBackend::MakeFrame(int userId, int portType, Pad& pad, bool imeActive)
 {
   PS5InputFrame frame;
   frame.userId = userId;
+  frame.portType = portType;
   frame.connected = pad.connected;
   if (!pad.connected)
   {
     pad.waitForNeutral = true;
+    pad.hasLoggedRemoteReport = false;
+    pad.lotusButtons = 0;
+    if (portType == PAD_PORT_TYPE_REMOTE_CONTROL)
+    {
+      if (pad.lotusId >= 0)
+        CLog::Log(LOGINFO, "PS5 input: media remote disconnected; invalidating Lotus id {:#x}",
+                  static_cast<uint32_t>(pad.lotusId));
+      pad.lotusId = -1;
+      pad.lotusError.reset();
+      pad.lotusRetryAt = {};
+    }
     StopRumble(pad);
     return frame;
   }
-  const auto state = PS5InputState::Translate(pad.data);
+  const auto state = PS5InputState::Translate(pad.data, portType, pad.lotusButtons);
+  if (portType == PAD_PORT_TYPE_REMOTE_CONTROL)
+  {
+    std::array<uint8_t, 12> payload{};
+    const size_t payloadSize = std::min<size_t>(pad.data.deviceUniqueDataLen, payload.size());
+    std::copy_n(pad.data.deviceUniqueData, payloadSize, payload.begin());
+    if (!pad.hasLoggedRemoteReport || pad.loggedButtons != pad.data.buttons ||
+        pad.loggedPayloadLength != pad.data.deviceUniqueDataLen || pad.loggedPayload != payload)
+    {
+      std::string hexPayload;
+      constexpr char HEX_DIGITS[] = "0123456789abcdef";
+      for (size_t i = 0; i < payloadSize; ++i)
+      {
+        hexPayload += HEX_DIGITS[payload[i] >> 4];
+        hexPayload += HEX_DIGITS[payload[i] & 0xf];
+      }
+      if (pad.data.deviceUniqueDataLen > payload.size())
+        CLog::Log(LOGWARNING, "PS5 input: invalid media remote payload length {}; captured {} bytes",
+                  pad.data.deviceUniqueDataLen, payloadSize);
+      CLog::Log(LOGDEBUG,
+                "PS5 input: media remote buttons={:#010x} payload_length={} payload={}",
+                pad.data.buttons, pad.data.deviceUniqueDataLen,
+                hexPayload.empty() ? "-" : hexPayload);
+      pad.loggedButtons = pad.data.buttons;
+      pad.loggedPayloadLength = pad.data.deviceUniqueDataLen;
+      pad.loggedPayload = payload;
+      pad.hasLoggedRemoteReport = true;
+    }
+  }
   if (imeActive || pad.waitForNeutral)
   {
     pad.waitForNeutral = imeActive || !state.IsNeutral();
@@ -239,18 +417,21 @@ std::vector<PS5InputFrame> CPS5InputBackend::Poll(bool imeActive)
 {
   std::unique_lock lock(m_mutex);
   std::vector<PS5InputFrame> frames;
-  for (auto& [user, pad] : m_pads)
+  for (auto& [key, pad] : m_pads)
   {
+    const auto [user, portType] = key;
     if (pad.handle <= 0)
       continue;
+    if (portType == PAD_PORT_TYPE_REMOTE_CONTROL && pad.connected)
+      PollLotus(pad);
     std::array<PadData, REPORT_BATCH_SIZE> reports{};
     const int count = scePadRead(pad.handle, reports.data(), REPORT_BATCH_SIZE);
     if (count < 0 || count > REPORT_BATCH_SIZE)
     {
-      CLog::Log(LOGWARNING, "PS5 input: reading pad for user {:#x} failed: {:#x}",
-                static_cast<uint32_t>(user), static_cast<uint32_t>(count));
+      CLog::Log(LOGWARNING, "PS5 input: reading pad port {} for user {:#x} failed: {:#x}",
+                portType, static_cast<uint32_t>(user), static_cast<uint32_t>(count));
       ClosePad(pad);
-      frames.push_back(MakeFrame(user, pad, imeActive));
+      frames.push_back(MakeFrame(user, portType, pad, imeActive));
       continue;
     }
     if (count == 0)
@@ -269,13 +450,13 @@ std::vector<PS5InputFrame> CPS5InputBackend::Poll(bool imeActive)
         pad.data = data;
         pad.connected = data.connected != 0;
       }
-      frames.push_back(MakeFrame(user, pad, imeActive));
+      frames.push_back(MakeFrame(user, portType, pad, imeActive));
     }
     for (int i = 0; i < count; ++i)
     {
       pad.data = reports[i];
       pad.connected = pad.data.connected != 0;
-      frames.push_back(MakeFrame(user, pad, imeActive));
+      frames.push_back(MakeFrame(user, portType, pad, imeActive));
     }
   }
   return frames;
@@ -284,7 +465,7 @@ std::vector<PS5InputFrame> CPS5InputBackend::Poll(bool imeActive)
 bool CPS5InputBackend::SetMotorState(int userId, unsigned int motorIndex, float magnitude)
 {
   std::unique_lock lock(m_mutex);
-  auto it = m_pads.find(userId);
+  auto it = m_pads.find({userId, PAD_PORT_TYPE_STANDARD});
   if (it == m_pads.end() || !it->second.connected || !it->second.supportsRumble ||
       it->second.waitForNeutral)
     return false;
@@ -313,7 +494,7 @@ bool CPS5InputBackend::SetMotorState(int userId, unsigned int motorIndex, float 
 void CPS5InputBackend::Close()
 {
   std::unique_lock lock(m_mutex);
-  for (auto& [user, pad] : m_pads)
+  for (auto& [key, pad] : m_pads)
     ClosePad(pad);
   m_pads.clear();
 }

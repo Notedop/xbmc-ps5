@@ -233,7 +233,13 @@ def sdk_title_providers(app, system_imports):
             system_imports / "libSceSaveData.so",
             app / "vendor/system-imports/libSceSaveData",
             "libSceSaveData", "libSceSaveData", 0x101,
-            ("sceSaveDataInitialize3", "sceSaveDataTerminate", "sceSaveDataGetAllSizeProspero"))]
+            ("sceSaveDataInitialize3", "sceSaveDataTerminate", "sceSaveDataGetAllSizeProspero")),
+        sdk_provider(
+            system_imports / "libSceMbus.so",
+            app / "vendor/system-imports/libSceMbus",
+            "libSceMbus", "libSceMbus", 0x101,
+            ("sceMbusConvertToLocalDeviceId2",
+             "sceDeviceServiceInitialize", "sceDeviceServiceQueryDeviceInfo_"))]
 
 
 def prepare(sdk, app, manifests=(), native_tool=None, system_imports=Path("/opt/ps5-payload-sdk/target/lib")):
@@ -319,6 +325,10 @@ def prepare(sdk, app, manifests=(), native_tool=None, system_imports=Path("/opt/
         "providers": identities,
         "additional_provider_manifests": manifest_receipts,
         "symbol_libraries": {
+            "libSceMbus": {
+                name: {"library": "libSceDeviceService", "library_version": 1}
+                for name in ("sceDeviceServiceInitialize", "sceDeviceServiceQueryDeviceInfo_")
+            },
             "libSceSystemService": {
                 "sceShellCoreUtilRequestEjectDevice": {
                     "library": "libSceShellCoreUtil", "library_version": 1,

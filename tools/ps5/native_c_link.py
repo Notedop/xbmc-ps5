@@ -46,6 +46,13 @@ def nid(name):
     return base64.b64encode(digest).decode().rstrip("=").replace("/", "-")
 
 
+def provider_nid(name, provider):
+    aliases = provider.get("symbol_nids", {})
+    require(isinstance(aliases, dict), "invalid native import NID aliases")
+    require(not aliases, "unsupported native import NID alias")
+    return aliases.get(name, nid(name))
+
+
 def hash_table(names):
     count = len(names)
     buckets, chains = [0] * count, [0] * count

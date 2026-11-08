@@ -5,6 +5,7 @@
   <addon>game.controller.dualsense</addon>
   <addon>game.controller.keyboard</addon>
   <addon>game.controller.mouse</addon>
+  <addon>game.controller.ps5.mediaremote</addon>
   <addon>game.controller.snes</addon>
   <addon>kodi.binary.global.audioengine</addon>
   <addon>kodi.binary.global.filesystem</addon>

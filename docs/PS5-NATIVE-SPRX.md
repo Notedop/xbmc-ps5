@@ -35,6 +35,23 @@ before constructors execute. Loading providers after executable startup did not
 retroactively rebind the executable's zero-valued imports; that path is not used.
 The launcher performs no symbol lookup.
 
+Media Remote playback uses the normal Pad/Mbus input backend, without media
+registration. `sceDeviceServiceInitialize` and `sceDeviceServiceQueryDeviceInfo_`
+are imports from library `libSceDeviceService` version 1 in module `libSceMbus`
+version `0x101`; the Mbus ID conversion remains in library `libSceMbus`.
+`prepare-shared-title.py` records these per-symbol library identities for native
+conversion and verification. The backend checks the optional Lotus imports
+before initialization and logs unavailable playback support without disabling
+remote navigation or controller input.
+
+On a remote disconnect, the backend invalidates the Lotus ID and clears cached
+playback state and discovery backoff. Reconnection triggers fresh discovery;
+transient absence remains retryable without disabling navigation or controllers.
+
+The obsolete in-title Media Remote Probe and its startup switches have been
+removed. Existing `kodi-media-probe` marker files and `KODI_PS5_MEDIA_PROBE`
+environment variables no longer alter Kodi startup.
+
 `title_native_startup.h` defines a synchronous, versioned private handoff:
 the application validates request size/version/output address before constructors,
 then publishes run/finalize callbacks. Both records are 16 bytes on x86-64.

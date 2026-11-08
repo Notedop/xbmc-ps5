@@ -108,8 +108,22 @@ endif()
 # libiconv_open, so Kodi's calls resolve in libiconv.a instead of binding to
 # the console libc's Unicode-only iconv at run time. -liconv is added by the
 # Iconv::Iconv target Kodi links; it need not be repeated here.
-set(SYSTEM_LDFLAGS -lSceNotification -lSceAudioOut -lScePad -lSceUserService -lSceImeDialog -lSceRegMgr -lSceNetCtl -lSceSysmodule
-                   -lSceVideodec2 -lprocstat -lsmb2 -lSceUsbStorage -lSceAppInstUtil -lSceSaveData)
+set(SYSTEM_LDFLAGS -lSceNotification
+        -lSceAudioOut
+        -lScePad
+        -lSceMbus
+        -lSceUserService
+        -lSceImeDialog
+        -lSceRegMgr
+        -lSceNetCtl
+        -lSceSysmodule
+        -lSceVideodec2
+        -lprocstat
+        -lsmb2
+        -lSceUsbStorage
+        -lSceAppInstUtil
+        -lSceSaveData
+        -lSceSystemService)
 if(PS5_NATIVE_RUNTIME_SDK)
   list(APPEND ARCH_DEFINES -DHAS_PS5_NATIVE_SHARED_RUNTIME=1)
   if(PS5_NATIVE_DEPENDS_MAP)

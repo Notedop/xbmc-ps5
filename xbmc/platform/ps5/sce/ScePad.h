@@ -25,6 +25,8 @@ extern "C"
   int scePadOpen(int userId, int type, int index, const void* param);
   int scePadGetHandle(int userId, int type, int index);
   int scePadClose(int handle);
+  int scePadGetDeviceId(int handle, int* deviceId);
+  int scePadLastLotusButtonData(int deviceId, uint32_t lookbackMs, uint32_t* buttons);
   int scePadReadState(int handle, void* data);
   int scePadRead(int handle, void* data, int count);
   int scePadSetLightBar(int handle, const void* color);
@@ -118,9 +120,13 @@ struct PadData
   uint64_t timestamp;
   uint8_t ext[16];
   uint8_t count;
-  uint8_t unknown[15];
+  uint8_t reserved[2];
+  uint8_t deviceUniqueDataLen;
+  uint8_t deviceUniqueData[12];
 };
 
 static_assert(sizeof(PadData) == 0x78, "PadData must match the 120-byte ScePadData layout");
+static_assert(offsetof(PadData, deviceUniqueDataLen) == 0x6b);
+static_assert(offsetof(PadData, deviceUniqueData) == 0x6c);
 
 } // namespace KODI::PLATFORM::PS5

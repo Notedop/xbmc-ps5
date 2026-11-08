@@ -222,6 +222,136 @@ class SharedLinkTest(unittest.TestCase):
         self.assertEqual([p[0] for p in image.phdrs][-4:],
                          [2, 0x6FFFFF00, 0x6FFFFF01, 4])
 
+    @unittest.skipUnless(shutil.which("cmake") and
+                         Path("/opt/ps5-payload-sdk/target/lib/libSceSystemService.so").is_file() and
+                         Path("/opt/ps5-payload-sdk/target/lib/libScePad.so").is_file() and
+                         Path("/opt/ps5-payload-sdk/target/lib/libSceMbus.so").is_file(),
+                         "CMake and installed SDK Pad/Mbus/SystemService stubs required")
+    def test_kodi_cmake_links_installed_remote_query_stub_from_platform_archive(self):
+        project = self.root / "kodi-link"
+        project.mkdir()
+        (project / "media.c").write_text("""
+            extern int scePadInit(void);
+            extern int scePadOpen(int, int, int, const void *);
+            extern int scePadGetHandle(int, int, int);
+            extern int scePadReadState(int, void *);
+            struct DeviceInfo {
+                unsigned long long device_id;
+                unsigned char reserved[104];
+            };
+            extern int sceDeviceServiceInitialize(unsigned, const void *);
+            extern int sceDeviceServiceQueryDeviceInfo_(
+                unsigned, const void *, unsigned, void *, int, int *, int *, unsigned);
+            extern int sceMbusConvertToLocalDeviceId2(
+                unsigned long long, unsigned, unsigned long long *);
+            extern int scePadLastLotusButtonData(int, unsigned, unsigned *);
+            extern int scePadClose(int);
+            extern int sceSystemServiceLoadExec(const char *, const char *[]);
+            int read_remote(void) {
+                int result = scePadInit();
+                int handle = scePadOpen(255, 16, 0, 0);
+                if (handle < 0) handle = scePadGetHandle(255, 16, 0);
+                int device = -1;
+                unsigned buttons = 0;
+                _Alignas(8) unsigned char state[120];
+                result |= scePadReadState(handle, state);
+                result |= sceDeviceServiceInitialize(3, 0);
+                struct DeviceInfo info[16];
+                int count = 0, extra = 0;
+                unsigned long long hid = 0;
+                result |= sceDeviceServiceQueryDeviceInfo_(
+                    0x9001, 0, 0, info, 16, &count, &extra, sizeof(info[0]));
+                result |= sceMbusConvertToLocalDeviceId2(info[0].device_id, 0, &hid);
+                device = (int)hid;
+                result |= scePadLastLotusButtonData(device, 100, &buttons);
+                result |= scePadClose(handle);
+                return result | sceSystemServiceLoadExec("exit", 0);
+            }
+        """)
+        (project / "main.c").write_text(
+            "extern int read_remote(void);\nvoid _start(void) { (void)read_remote(); }\n")
+        (project / "CMakeLists.txt").write_text(f"""
+            cmake_minimum_required(VERSION 3.19)
+            project(kodi_remote_imports C)
+            set(CMAKE_TOOLCHAIN_FILE fixture)
+            set(APP_NAME_LC kodi)
+            set(PS5_NATIVE_RUNTIME_SDK fixture)
+            include("{ROOT}/cmake/scripts/ps5/ArchSetup.cmake")
+            list(FILTER SYSTEM_LDFLAGS INCLUDE REGEX "^-lSce(Pad|Mbus|SystemService)$")
+            if(NOT SYSTEM_LDFLAGS)
+              message(FATAL_ERROR "Kodi system link flags are missing remote-query imports")
+            endif()
+            add_library(platform_ps5 STATIC media.c)
+            add_executable(kodi main.c)
+            target_link_directories(kodi PRIVATE /opt/ps5-payload-sdk/target/lib)
+            target_link_options(kodi PRIVATE -fuse-ld=lld LINKER:-e,_start
+                                LINKER:--hash-style=sysv LINKER:--build-id=none)
+            target_link_libraries(kodi PRIVATE platform_ps5 ${{SYSTEM_LDFLAGS}})
+        """)
+        binary = project / "build"
+        for command in (
+                ["cmake", "-S", str(project), "-B", str(binary), "-G", "Ninja",
+                 "-DCMAKE_C_COMPILER=" + str(CC)],
+                ["cmake", "--build", str(binary), "--verbose"]):
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("-lSceSystemService", result.stdout)
+        self.assertIn("-lScePad", result.stdout)
+        self.assertIn("-lSceMbus", result.stdout)
+        providers, stubs = [], []
+        for module, symbols in (
+                ("libScePad", ("scePadInit", "scePadOpen", "scePadGetHandle", "scePadReadState",
+                               "scePadLastLotusButtonData", "scePadClose")),
+                ("libSceMbus", ("sceDeviceServiceInitialize", "sceDeviceServiceQueryDeviceInfo_",
+                               "sceMbusConvertToLocalDeviceId2")),
+                ("libSceSystemService", ("sceSystemServiceLoadExec",))):
+            installed = Path("/opt/ps5-payload-sdk/target/lib") / (module + ".so")
+            manifest = link.sdk_provider(
+                installed, self.root / module, module, module, 0x101, symbols)
+            provider = link.load_provider(manifest)
+            if module == "libSceMbus":
+                provider = link.with_symbol_libraries(provider, {
+                    name: {"library": "libSceDeviceService", "library_version": 1}
+                    for name in ("sceDeviceServiceInitialize", "sceDeviceServiceQueryDeviceInfo_")
+                })
+            stub = manifest.parent / provider["import_library"]["path"]
+            self.assertEqual(stub.read_bytes(), installed.read_bytes())
+            providers.append(provider)
+            stubs.append(stub)
+        source = (binary / "kodi").read_bytes()
+        self.assertEqual(link.select_providers(source, providers), providers)
+        imports = {name for name, symbol in Elf(source).symbols(".dynsym")
+                   if name and not symbol[3]}
+        self.assertEqual(imports, {s["name"] for p in providers for s in p["symbols"]})
+        native_source = self.build(
+            "remote-native-consumer", (project / "media.c").read_text(),
+            libraries=stubs).read_bytes()
+        converted = link.convert(native_source, "test.remote-query", providers)
+        _, proof = sdk.prove_provider(
+            native_source, converted, "test.remote-query",
+            include_dependencies=True, providers=providers)
+        self.assertEqual(proof["needed"], [
+            "libScePad.sprx", "libSceMbus.sprx", "libSceSystemService.sprx"])
+        libraries = {library["id"]: library["name"] for library in proof["libraries"]}
+        imports = {entry["name"]: entry for entry in proof["imports"]}
+        query = imports["scePadLastLotusButtonData"]
+        initialize = imports["sceDeviceServiceInitialize"]
+        discovery = imports["sceDeviceServiceQueryDeviceInfo_"]
+        exit_import = imports["sceSystemServiceLoadExec"]
+        conversion = imports["sceMbusConvertToLocalDeviceId2"]
+        self.assertEqual(query["nid"], "F9iDGS9ddCM")
+        self.assertEqual(initialize["nid"], "84fDxStrG44")
+        self.assertEqual(discovery["nid"], "UNMEa+5lrUA")
+        self.assertEqual(conversion["nid"], "wxmyc+71ijI")
+        self.assertEqual(libraries[initialize["library_id"]], "libSceDeviceService")
+        self.assertEqual(libraries[discovery["library_id"]], "libSceDeviceService")
+        self.assertEqual(libraries[conversion["library_id"]], "libSceMbus")
+        self.assertEqual(initialize["module_id"], conversion["module_id"])
+        self.assertEqual(discovery["module_id"], conversion["module_id"])
+        self.assertEqual(libraries[query["library_id"]], "libScePad")
+        self.assertEqual(libraries[exit_import["library_id"]], "libSceSystemService")
+        self.assertNotEqual(query["module_id"], exit_import["module_id"])
+
     def test_dynamic_table_uses_native_metadata_mapping(self):
         elf, native, _ = self.provider()
         raw = native.read_bytes()

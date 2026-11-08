@@ -1,0 +1,77 @@
+# Kodi Media Center language file
+# SPDX-License-Identifier: GPL-2.0-or-later
+msgid ""
+msgstr ""
+"Project-Id-Version: game.controller.ps5.mediaremote\n"
+"Language: en_GB\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgctxt "#30000"
+msgid "PS5 Media Remote"
+msgstr ""
+
+msgctxt "#30001"
+msgid "Select"
+msgstr ""
+
+msgctxt "#30002"
+msgid "Back"
+msgstr ""
+
+msgctxt "#30003"
+msgid "Options"
+msgstr ""
+
+msgctxt "#30004"
+msgid "Up"
+msgstr ""
+
+msgctxt "#30005"
+msgid "Right"
+msgstr ""
+
+msgctxt "#30006"
+msgid "Down"
+msgstr ""
+
+msgctxt "#30007"
+msgid "Left"
+msgstr ""
+
+msgctxt "#30008"
+msgid "Play / Pause"
+msgstr ""
+
+msgctxt "#30009"
+msgid "Rewind"
+msgstr ""
+
+msgctxt "#30010"
+msgid "Fast forward"
+msgstr ""
+
+msgctxt "#30011"
+msgid "Volume up"
+msgstr ""
+
+msgctxt "#30012"
+msgid "Volume down"
+msgstr ""
+
+msgctxt "#30013"
+msgid "Mute"
+msgstr ""
+
+msgctxt "#30020"
+msgid "Navigation"
+msgstr ""
+
+msgctxt "#30021"
+msgid "Playback"
+msgstr ""
+
+msgctxt "#30022"
+msgid "Volume"
+msgstr ""

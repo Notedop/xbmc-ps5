@@ -16,6 +16,26 @@
       "url": "https://github.com/xbmc/inputstream.ffmpegdirect", "ref": "Piers",
       "addons": {"inputstream.ffmpegdirect": {"bundled": false, "channel": "testing", "revision": 1}}
     },
+    "inputstream.rtmp": {
+      "url": "https://github.com/xbmc/inputstream.rtmp", "ref": "Piers",
+      "addons": {"inputstream.rtmp": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "vfs.rar": {
+      "url": "https://github.com/xbmc/vfs.rar", "ref": "Piers",
+      "addons": {"vfs.rar": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "vfs.sftp": {
+      "url": "https://github.com/xbmc/vfs.sftp", "ref": "Piers",
+      "addons": {"vfs.sftp": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "vfs.libarchive": {
+      "url": "https://github.com/xbmc/vfs.libarchive", "ref": "Piers",
+      "addons": {"vfs.libarchive": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
+    "vfs.pdf": {
+      "url": "https://github.com/xbmc/vfs.pdf", "ref": "Piers",
+      "addons": {"vfs.pdf": {"bundled": false, "channel": "testing", "revision": 1}}
+    },
     "pvr.hts": {
       "url": "https://github.com/kodi-pvr/pvr.hts", "ref": "Piers",
       "addons": {"pvr.hts": {"bundled": false, "channel": "stable", "revision": 3,

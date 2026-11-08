@@ -1,0 +1,24 @@
+Invoke GNU Make explicitly for RTMPDump when using the Ninja generator.
+
+The literal $(MAKE) creates an invalid dollar escape in generated Ninja
+rules. RTMPDump is a Makefile project regardless of the outer generator.
+Upstream: Generic fix for Ninja-based dependency builds.
+
+--- a/depends/common/librtmp/CMakeLists.txt
++++ b/depends/common/librtmp/CMakeLists.txt
+@@ -21,10 +21,14 @@
+ # Build only the static library using upstream Makefile overrides. _DEBUG
+ # enables upstream protocol test data and references tool-only dump streams.
+ include(ExternalProject)
++find_program(RTMP_MAKE NAMES gmake make)
++if(NOT RTMP_MAKE)
++  message(FATAL_ERROR "RTMPDump requires GNU Make")
++endif()
+ externalproject_add(librtmp
+                     SOURCE_DIR "${rtmpdump_SOURCE_DIR}"
+                     CONFIGURE_COMMAND ""
+-                    BUILD_COMMAND $(MAKE) -C <SOURCE_DIR>/librtmp all librtmp.pc
++                    BUILD_COMMAND "${RTMP_MAKE}" -C <SOURCE_DIR>/librtmp all librtmp.pc
+                                   SHARED= SYS=${SYS} CRYPTO=OPENSSL
+                                   "prefix=${OUTPUT_DIR}" "INC=-I${OUTPUT_DIR}/include"
+                                   "XCFLAGS=${CMAKE_C_FLAGS} -fPIC" XDEF=-U_DEBUG

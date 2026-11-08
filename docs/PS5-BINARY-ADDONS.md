@@ -73,6 +73,44 @@ python3 tools/ps5/addon-repository.py build \
 A multi-output target builds all of its catalogued outputs together. Use the
 target names shown by `list` with `--only`.
 
+### Native network and archive readers
+
+The catalogue includes these nonbundled testing targets:
+
+| Target | Upstream version | Private dependencies |
+|---|---|---|
+| `inputstream.rtmp` | 22.1.3 | RTMPDump 2.6, OpenSSL 3.5.8, zlib 1.3.2 |
+| `vfs.rar` | 22.0.5 | bundled Unrar 5.91, TinyXML 2.6.2 |
+| `vfs.sftp` | 22.0.6 | libssh 0.12.2, OpenSSL 3.5.8, zlib 1.3.2 |
+| `vfs.libarchive` | 22.0.3 | libarchive 3.8.9, bz2 1.0.8, LZ4 1.10.0, LZO2 2.10, XZ 5.8.4, OpenSSL 3.5.8, zlib 1.3.2 |
+| `vfs.pdf` | 22.0.2 | Poppler 26.10.0, FreeType 2.15, iconv 1.19, JPEG-turbo 3.2, PNG 1.6.58, OpenJPEG 2.5.4, zlib 1.3.2 |
+
+Build without packaging or contacting the console:
+
+```sh
+env -u PS5_HOST MAKEFLAGS=-j4 python3 tools/ps5/addon-repository.py build \
+  --only inputstream.rtmp --only vfs.rar --only vfs.sftp \
+  --only vfs.libarchive --only vfs.pdf --jobs 4
+```
+
+`MAKEFLAGS` also budgets nested raw-Make dependency recipes. For concurrent
+build commands, use separate `--work` directories and divide the aggregate job
+budget between them; a workspace permits only one repository command at a time.
+Preserve each workspace's source locks, build record, installed SPRX files and
+adjacent `.sprx.json` validation receipts.
+
+SFTP stores keys and known hosts in Kodi's writable `special://home/.ssh`.
+RAR omits unavailable Unix ownership restoration and symlink timestamps while
+retaining file extraction and ordinary timestamps. Libarchive keeps its
+upstream format selection, which excludes RAR. PDF retains the upstream
+Poppler/font configuration; rendering and font availability need console
+acceptance along with network authentication and archive contents. Native
+compile/import/signing validation is not console acceptance.
+
+`vfs.smb2` is deliberately not catalogued: Kodi's existing PS5 libsmb2 SMB
+implementation remains in use, rather than being overridden by an enabled
+binary VFS add-on.
+
 ## Title staging
 
 Title packaging reads `build/ps5-addon-repository/work/build-record.json`, or
@@ -176,6 +214,9 @@ locks and matching patches, and review license/corresponding-source obligations.
 ```sh
 python3 tools/ps5/test.py \
   test-addon-build.py test-addon-repository.py test-stage-installed-addons.py
+python3 tools/ps5/test.py \
+  test-inputstream-rtmp-ps5.py test-vfs-rar-ps5.py test-vfs-sftp-ps5.py \
+  test-vfs-libarchive-ps5.py test-vfs-pdf-ps5.py
 bash -n tools/ps5/package.sh
 ```
 

@@ -1,0 +1,58 @@
+Resolve the native Poppler stack exclusively from the add-on prefix.
+
+Bare pkg-config libraries can select SDK archives before the private
+dependencies. Use explicit archive paths and private headers, including
+JPEG, rather than mixing Poppler's dependencies with Kodi core versions.
+
+Upstream: PS5-only; native add-ons carry their private static dependencies.
+
+--- a/cmake/FindPoppler.cmake
++++ b/cmake/FindPoppler.cmake
+@@ -4,6 +4,28 @@
+ #
+ #   POPPLER_FOUND, POPPLER_INCLUDE_DIRS, POPPLER_LIBRARIES
+ 
++if(PS5_NATIVE_SHARED_ADDONS)
++  set(POPPLER_INCLUDE_DIR "${ADDON_DEPENDS_PATH}/include/poppler/cpp")
++  set(POPPLER_INCLUDE_DIRS "${POPPLER_INCLUDE_DIR}"
++      "${ADDON_DEPENDS_PATH}/include")
++  set(POPPLER_LIBRARIES "")
++  foreach(_library IN ITEMS poppler-cpp poppler freetype png16 openjp2 iconv jpeg z)
++    set(_archive "${ADDON_DEPENDS_PATH}/lib/lib${_library}.a")
++    if(NOT EXISTS "${_archive}")
++      message(FATAL_ERROR "Missing private Poppler dependency: ${_archive}")
++    endif()
++    list(APPEND POPPLER_LIBRARIES "${_archive}")
++  endforeach()
++  if(NOT EXISTS "${POPPLER_INCLUDE_DIR}/poppler-document.h")
++    message(FATAL_ERROR "Missing private Poppler C++ headers")
++  endif()
++  include(FindPackageHandleStandardArgs)
++  find_package_handle_standard_args(Poppler
++    REQUIRED_VARS POPPLER_LIBRARIES POPPLER_INCLUDE_DIR)
++  set(POPPLER_FOUND "${Poppler_FOUND}")
++  return()
++endif()
++
+ find_package(PkgConfig QUIET)
+ if(PKG_CONFIG_FOUND)
+   pkg_check_modules(PC_POPPLER QUIET poppler-cpp)
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -4,7 +4,15 @@
+ 
+ find_package(Kodi REQUIRED)
+ find_package(Poppler REQUIRED)
+-find_package(JPEG REQUIRED)
++if(PS5_NATIVE_SHARED_ADDONS)
++  set(JPEG_INCLUDE_DIRS "${ADDON_DEPENDS_PATH}/include")
++  set(JPEG_LIBRARIES "${ADDON_DEPENDS_PATH}/lib/libjpeg.a")
++  if(NOT EXISTS "${JPEG_INCLUDE_DIRS}/jpeglib.h" OR NOT EXISTS "${JPEG_LIBRARIES}")
++    message(FATAL_ERROR "Missing private JPEG dependency")
++  endif()
++else()
++  find_package(JPEG REQUIRED)
++endif()
+ 
+ include_directories(${KODI_INCLUDE_DIR}/..
+                     ${POPPLER_INCLUDE_DIRS}

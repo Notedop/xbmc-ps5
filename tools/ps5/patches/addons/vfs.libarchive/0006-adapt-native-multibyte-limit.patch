@@ -1,0 +1,22 @@
+Read the multibyte limit from native libc's exported data.
+
+The SDK MB_CUR_MAX macro calls ___mb_cur_max(), while native libc exports
+the __mb_cur_max integer. The final archive_string link requires an adapter.
+Read the actual locale limit; do not fix its value or alter wchar conversion.
+
+Upstream: PS5 native libc ABI adaptation only.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -73,6 +73,11 @@
+ 
+ build_addon(vfs.libarchive ARCHIVE DEPLIBS)
+ if(PS5_NATIVE_SHARED_ADDONS)
++  set(_multibyte_adapter "${CMAKE_CURRENT_BINARY_DIR}/ps5-multibyte-limit.c")
++  file(WRITE "${_multibyte_adapter}"
++    "#include <stdlib.h>\nint ___mb_cur_max(void) { return __mb_cur_max; }\n")
++  target_sources(vfs.libarchive PRIVATE "${_multibyte_adapter}")
++
+   target_link_options(vfs.libarchive PRIVATE "-Wl,-Bsymbolic")
+ endif()
+ include(CPack)

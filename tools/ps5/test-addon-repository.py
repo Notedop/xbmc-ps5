@@ -27,7 +27,7 @@ class RepositoryTests(unittest.TestCase):
         raw = json.loads(DEFAULT_CATALOGUE.read_text())
         self.assertNotIn("addons", raw)
         self.assertTrue(all(isinstance(t["addons"], dict) for t in raw["targets"].values()))
-        self.assertEqual(len(self.catalogue["addons"]), 37)
+        self.assertEqual(len(self.catalogue["addons"]), 42)
         self.assertIn("pvr.hts", self.catalogue["addons"])
         self.assertEqual(self.catalogue["targets"]["pvr.nextpvr"]["ref"], "Piers")
         self.assertEqual(self.catalogue["addons"]["pvr.nextpvr"],
@@ -37,12 +37,19 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(self.catalogue["addons"]["inputstream.ffmpegdirect"],
                          {"target": "inputstream.ffmpegdirect", "bundled": False,
                           "channel": "testing", "revision": 1})
+        readers = {"inputstream.rtmp", "vfs.rar", "vfs.sftp", "vfs.libarchive", "vfs.pdf"}
+        for addon in readers:
+            self.assertEqual(self.catalogue["targets"][addon]["ref"], "Piers")
+            self.assertEqual(self.catalogue["addons"][addon],
+                             {"target": addon, "bundled": False,
+                              "channel": "testing", "revision": 1})
+        self.assertNotIn("vfs.smb2", self.catalogue["addons"])
         self.assertEqual([addon for addon, entry in self.catalogue["addons"].items()
                           if entry["bundled"]], ["peripheral.joystick", "inputstream.adaptive"])
         testing = {addon for addon, policy in self.catalogue["addons"].items()
                    if policy["channel"] == "testing"}
         self.assertEqual(testing, {"peripheral.joystick", "pvr.nextpvr",
-                                  "inputstream.ffmpegdirect"})
+                                  "inputstream.ffmpegdirect"} | readers)
         stable = [policy for policy in self.catalogue["addons"].values()
                   if policy["channel"] == "stable"]
         self.assertEqual(len(stable), 34)

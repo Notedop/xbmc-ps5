@@ -1,0 +1,31 @@
+Subject: Pin libssh's OpenSSL discovery to the private dependency prefix
+
+The SDK crypto provider is a different OpenSSL version. Do not permit libssh
+to discover its headers or import archive instead of the local recipe.
+Upstream: PS5-only dependency library selection.
+
+--- /dev/null
++++ b/depends/common/libssh/05-ps5-private-openssl.patch
+@@ -0,0 +1,22 @@
++Subject: Use the matching private OpenSSL dependency on PS5
++
++Avoid mixing the SDK's core crypto provider with the add-on's OpenSSL.
++Upstream: PS5-only dependency library selection.
++
++--- a/CMakeLists.txt
+++++ b/CMakeLists.txt
++@@ -54,7 +54,14 @@
++ elseif(WITH_MBEDTLS)
++     find_package(MbedTLS REQUIRED)
++ else()
+++  if(CORE_PLATFORM_NAME STREQUAL "ps5")
+++    set(OPENSSL_USE_STATIC_LIBS ON)
+++    set(OPENSSL_ROOT_DIR "${OUTPUT_DIR}")
+++    set(OPENSSL_INCLUDE_DIR "${OUTPUT_DIR}/include" CACHE PATH "" FORCE)
+++    set(OPENSSL_SSL_LIBRARY "${OUTPUT_DIR}/lib/libssl.a" CACHE FILEPATH "" FORCE)
+++    set(OPENSSL_CRYPTO_LIBRARY "${OUTPUT_DIR}/lib/libcrypto.a" CACHE FILEPATH "" FORCE)
+++  endif()
++   find_package(OpenSSL 1.1.1 REQUIRED)
++ endif()
++ 
++ if (UNIT_TESTING)

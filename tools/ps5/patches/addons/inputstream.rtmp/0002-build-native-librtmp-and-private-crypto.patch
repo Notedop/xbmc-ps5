@@ -1,0 +1,45 @@
+Use native compiler commands and matching private RTMP/TLS archives.
+
+RTMPDump's raw Make bypasses CMake launchers. Its OpenSSL 3.5.8 dependency
+must not link Kodi's core 3.5.7 crypto archive; select this recipe's headers
+and archives explicitly, including its matching zlib.
+Upstream: PS5-only compiler and dependency isolation.
+
+--- a/depends/common/librtmp/CMakeLists.txt
++++ b/depends/common/librtmp/CMakeLists.txt
+@@ -9,6 +9,15 @@
+   set(SYS posix)
+ endif()
+ 
++if(CORE_PLATFORM_NAME STREQUAL "ps5")
++  if(NOT EXISTS "$ENV{CONFIG_SITE}")
++    message(FATAL_ERROR "PS5 librtmp requires the native CONFIG_SITE")
++  endif()
++  execute_process(COMMAND /bin/sh -c ". \"$ENV{CONFIG_SITE}\"; printf '%s' \"$CC\""
++                  OUTPUT_VARIABLE CMAKE_C_COMPILER COMMAND_ERROR_IS_FATAL ANY)
++  set(CMAKE_C_FLAGS "-DTARGET_POSIX -DTARGET_FREEBSD")
++endif()
++
+ # Build only the static library using upstream Makefile overrides. _DEBUG
+ # enables upstream protocol test data and references tool-only dump streams.
+ include(ExternalProject)
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,6 +5,17 @@
+ 
+ find_package(PkgConfig)
+ find_package(Kodi REQUIRED)
++if(CORE_PLATFORM_NAME STREQUAL "ps5")
++  set(OPENSSL_USE_STATIC_LIBS ON)
++  set(OPENSSL_ROOT_DIR "${ADDON_DEPENDS_PATH}")
++  set(OPENSSL_INCLUDE_DIR "${ADDON_DEPENDS_PATH}/include" CACHE PATH "" FORCE)
++  set(OPENSSL_SSL_LIBRARY "${ADDON_DEPENDS_PATH}/lib/libssl.a" CACHE FILEPATH "" FORCE)
++  set(OPENSSL_CRYPTO_LIBRARY "${ADDON_DEPENDS_PATH}/lib/libcrypto.a" CACHE FILEPATH "" FORCE)
++  set(ZLIB_INCLUDE_DIR "${ADDON_DEPENDS_PATH}/include" CACHE PATH "" FORCE)
++  set(ZLIB_LIBRARY "${ADDON_DEPENDS_PATH}/lib/libz.a" CACHE FILEPATH "" FORCE)
++  set(RTMP_LIBRARY "${ADDON_DEPENDS_PATH}/lib/librtmp.a" CACHE FILEPATH "" FORCE)
++  set(RTMP_INCLUDE_DIR "${ADDON_DEPENDS_PATH}/include" CACHE PATH "" FORCE)
++endif()
+ find_package(OpenSSL REQUIRED)
+ find_package(ZLIB REQUIRED)
+ find_package(RTMP REQUIRED)

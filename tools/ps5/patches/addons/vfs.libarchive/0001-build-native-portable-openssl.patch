@@ -1,0 +1,46 @@
+Build portable OpenSSL with the native CONFIG_SITE compiler.
+
+OpenSSL has no PS5/FreeBSD target in this dependency recipe and its raw
+make rules bypass CMake compiler launchers. Reuse the native ABI compiler
+command and opaque stdio overlay. Disable assembly to avoid execute-only
+unsafe crypto tables, and resolve zlib to the private dependency archive.
+
+Upstream: PS5 native build adaptation only.
+
+--- a/depends/common/openssl/CMakeLists.txt
++++ b/depends/common/openssl/CMakeLists.txt
+@@ -33,6 +33,24 @@
+   endif()
+ endif()
+ 
++if(PS5_NATIVE_SHARED_ADDONS)
++  if(NOT DEFINED ENV{CONFIG_SITE} OR NOT EXISTS "$ENV{CONFIG_SITE}")
++    message(FATAL_ERROR "OpenSSL requires the native CONFIG_SITE compiler commands")
++  endif()
++  set(OPENSSL_TARGET BSD-generic64)
++  set(_native_cc "${CMAKE_BINARY_DIR}/ps5-openssl-cc")
++  file(WRITE "${_native_cc}"
++    "#!/bin/sh\nset -eu\n. \"$CONFIG_SITE\"\nfor argument do\n  case \"$argument\" in\n    -lz) argument=\"${OUTPUT_DIR}/lib/libz.a\" ;;\n  esac\n  shift\n  set -- \"$@\" \"$argument\"\ndone\neval \"exec $CC \\\"\\$@\\\"\"\n")
++  execute_process(COMMAND chmod +x "${_native_cc}" RESULT_VARIABLE chmod_result)
++  if(NOT chmod_result EQUAL 0)
++    message(FATAL_ERROR "Could not make the native OpenSSL compiler driver executable")
++  endif()
++  set(CMAKE_C_COMPILER "${_native_cc}")
++  set(CMAKE_C_FLAGS "-DTARGET_POSIX -DTARGET_FREEBSD")
++  set(CMAKE_CPP_FLAGS "")
++  set(CMAKE_LD_FLAGS "")
++endif()
++
+ list(APPEND configure_command ${CMAKE_COMMAND} -E env)
+ if(CORE_SYSTEM_NAME MATCHES "android")
+   list(APPEND configure_command ANDROID_NDK_ROOT=${NDKROOT})
+@@ -53,6 +71,9 @@
+ list(APPEND configure_command <SOURCE_DIR>/Configure)
+ list(APPEND configure_command ${OPENSSL_TARGET})
+ list(APPEND configure_command no-shared no-apps no-tests no-ui-console zlib)
++if(PS5_NATIVE_SHARED_ADDONS)
++  list(APPEND configure_command no-asm)
++endif()
+ list(APPEND configure_command --prefix=${OUTPUT_DIR})
+ list(APPEND configure_command --with-zlib-include=${OUTPUT_DIR}/include)
+ list(APPEND configure_command --with-zlib-lib=${OUTPUT_DIR}/lib)

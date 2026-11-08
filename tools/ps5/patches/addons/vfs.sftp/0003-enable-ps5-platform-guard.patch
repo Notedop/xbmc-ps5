@@ -1,0 +1,15 @@
+Subject: Enable the PS5-specific writable SSH directory guard
+
+The native Kodi add-on SDK supplies TARGET_FREEBSD and TARGET_POSIX, but not
+TARGET_PS5. Define it locally so the SSH_DIR override is compiled on PS5.
+Upstream: PS5-only add-on platform definition.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -6,5 +6,6 @@
+ find_package(Kodi REQUIRED)
+ if(CORE_PLATFORM_NAME STREQUAL "ps5")
++  add_definitions(-DTARGET_PS5)
+   set(OPENSSL_USE_STATIC_LIBS ON)
+   set(OPENSSL_ROOT_DIR "${ADDON_DEPENDS_PATH}")
+   set(OPENSSL_INCLUDE_DIR "${ADDON_DEPENDS_PATH}/include" CACHE PATH "" FORCE)

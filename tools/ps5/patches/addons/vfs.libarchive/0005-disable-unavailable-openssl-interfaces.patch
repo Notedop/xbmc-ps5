@@ -1,0 +1,20 @@
+Omit OpenSSL interfaces unavailable to native archive decoding.
+
+The final native link imports dladdr through DSO loading, _setjmp/_longjmp
+through asynchronous fibres, and sendmmsg/recvmmsg through datagram BIOs.
+None is exported by the qualified providers. Static built-in crypto remains
+available; archive decoding needs neither DSO loading, fibres nor datagrams.
+
+Upstream: PS5 native provider capability configuration only.
+
+--- a/depends/common/openssl/CMakeLists.txt
++++ b/depends/common/openssl/CMakeLists.txt
+@@ -71,7 +71,7 @@
+ list(APPEND configure_command ${OPENSSL_TARGET})
+ list(APPEND configure_command no-shared no-apps no-tests no-ui-console zlib)
+ if(PS5_NATIVE_SHARED_ADDONS)
+-  list(APPEND configure_command no-asm)
++  list(APPEND configure_command no-asm no-dso no-async no-dgram)
+ endif()
+ list(APPEND configure_command --prefix=${OUTPUT_DIR})
+ list(APPEND configure_command --with-zlib-include=${OUTPUT_DIR}/include)

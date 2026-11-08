@@ -40,6 +40,27 @@ Other platforms never see these patches.
 | inputstream.ffmpegdirect | 0012-disable-execute-only-unsafe-crypto-assembly | use portable Nettle/GnuTLS crypto to avoid constant reads from execute-only code; retain TLS verification and FFmpeg codec optimizations | PS5-only |
 | inputstream.ffmpegdirect | 0013-use-kodi-ca-bundle | trust Kodi's bundled CA certificates for initial and nested FFmpeg/HLS requests while retaining TLS verification and native I/O handling | PS5-only |
 | inputstream.ffmpegdirect | 0014-batch-timeshift-segment-writes | batch segment persistence in bounded 256 KiB chunks, publish packets before I/O, finalize rollover outside playback locks and retain failed history in memory | PS5-only |
+| inputstream.rtmp | 0001-build-native-portable-openssl | select portable BSD OpenSSL and the native compiler instead of host-Linux configuration; omit unavailable optional interfaces | PS5-only |
+| inputstream.rtmp | 0002-build-native-librtmp-and-private-crypto | preserve native ABI lowering in raw Make and select matching private RTMP, OpenSSL and zlib archives/headers | PS5-only |
+| inputstream.rtmp | 0003-use-make-with-ninja-generator | invoke GNU Make explicitly instead of generating an invalid Ninja dollar escape | yes |
+| vfs.rar | 0001-adapt-native-unrar-metadata | omit unsupported Unix owner restoration and symlink timestamps while retaining archive extraction and file timestamps | PS5-only |
+| vfs.rar | 0002-adapt-native-multibyte-limit | read native libc's exported multibyte limit for Unrar filename conversions | PS5-only |
+| vfs.sftp | 0001-native-openssl-recipe | select portable BSD OpenSSL and the native compiler; omit unavailable DSO, async and batched datagram interfaces | PS5-only |
+| vfs.sftp | 0002-native-private-crypto-and-ssh-home | select matching private OpenSSL archives and Kodi's writable SSH home | PS5-only |
+| vfs.sftp | 0003-enable-ps5-platform-guard | define the add-on-local PS5 guard for the writable SSH directory | PS5-only |
+| vfs.sftp | 0004-libssh-private-openssl | pin libssh's headers and crypto archives to the private dependency prefix | PS5-only |
+| vfs.sftp | 0005-libssh-static-feature-checks | check declarations for optional OpenSSL and secure-wipe APIs during static cross-compilation | yes |
+| vfs.sftp | 0006-libssh-client-platform-apis | build client-only SSH using supported glob and scoped-address branches | PS5-only |
+| vfs.libarchive | 0001-build-native-portable-openssl | preserve native ABI compiler commands and portable crypto with private zlib | PS5-only |
+| vfs.libarchive | 0002-link-private-native-archives | select matching private archives and dependency headers explicitly | PS5-only |
+| vfs.libarchive | 0003-disable-unavailable-acl | omit unsupported filesystem ACL restoration from archive decoding | PS5-only |
+| vfs.libarchive | 0004-use-native-libc-capabilities | correct compile-only probes using the native provider inventory | PS5-only |
+| vfs.libarchive | 0005-disable-unavailable-openssl-interfaces | omit unsupported DSO, async and batched datagram interfaces | PS5-only |
+| vfs.libarchive | 0006-adapt-native-multibyte-limit | use native libc's exported locale multibyte limit | PS5-only |
+| vfs.pdf | 0001-build-iconv-library-only | build the required iconv library/header through native CONFIG_SITE without unused gnulib utilities | PS5-only |
+| vfs.pdf | 0002-link-private-poppler-archives | resolve the complete Poppler dependency stack to private static archives and headers | PS5-only |
+| vfs.pdf | 0003-adapt-native-multibyte-limit | read native libc's multibyte limit for iconv conversions | PS5-only |
+| vfs.pdf | 0004-use-native-large-file-functions | use native 64-bit `pread`/`lseek` instead of unavailable Linux aliases | PS5-only |
 | asap | 0001-readtag-free-player-on-load-failure | free the player when a tag read is rejected | yes |
 | dumb | 0001-include-stdint | `dumb.h` needs `<stdint.h>` with the SDK libc | yes |
 | dumb | 0002-fix-double-free-on-open-failure | buffer was freed twice when DUMB rejects a file | yes |

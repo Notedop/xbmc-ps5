@@ -1,0 +1,45 @@
+Build private portable OpenSSL with the native PS5 compiler.
+
+The unset FreeBSD target made Configure select the host Linux configuration,
+which failed on linux/version.h. Reuse CONFIG_SITE's native ABI compiler.
+Disable assembly, DSO and async APIs and retain the supported datagram fallback.
+Upstream: PS5-only dependency recipe adaptation.
+
+--- a/depends/common/openssl/CMakeLists.txt
++++ b/depends/common/openssl/CMakeLists.txt
+@@ -30,6 +30,9 @@
+   else()
+     set(OPENSSL_TARGET darwin64-arm64-cc)
+   endif()
++elseif(CORE_PLATFORM_NAME STREQUAL "ps5")
++  set(OPENSSL_TARGET BSD-generic64)
++  set(OPENSSL_NATIVE_OPTIONS no-asm no-dso no-async -DNO_RECVMMSG)
+ endif()
+ 
+ list(APPEND configure_command ${CMAKE_COMMAND} -E env)
+@@ -38,7 +41,16 @@
+   list(APPEND configure_command PATH=${TOOLCHAIN}/bin:$ENV{PATH})
+ endif()
+ list(APPEND configure_command AR=${CMAKE_AR})
+-list(APPEND configure_command CC=${CMAKE_C_COMPILER})
++if(CORE_PLATFORM_NAME STREQUAL "ps5")
++  if(NOT EXISTS "$ENV{CONFIG_SITE}")
++    message(FATAL_ERROR "PS5 OpenSSL requires the native CONFIG_SITE")
++  endif()
++  execute_process(COMMAND /bin/sh -c ". \"$ENV{CONFIG_SITE}\"; printf '%s' \"$CC\""
++                  OUTPUT_VARIABLE OPENSSL_NATIVE_CC COMMAND_ERROR_IS_FATAL ANY)
++  list(APPEND configure_command "CC=${OPENSSL_NATIVE_CC}")
++else()
++  list(APPEND configure_command CC=${CMAKE_C_COMPILER})
++endif()
+ list(APPEND configure_command CFLAGS=${CMAKE_C_FLAGS})
+ list(APPEND configure_command CPPFLAGS=${CMAKE_CPP_FLAGS})
+ list(APPEND configure_command CXX=${CMAKE_CXX_COMPILER})
+@@ -49,6 +61,7 @@
+ list(APPEND configure_command <SOURCE_DIR>/Configure)
+ list(APPEND configure_command ${OPENSSL_TARGET})
+ list(APPEND configure_command no-shared no-apps no-tests no-ui-console zlib)
++list(APPEND configure_command ${OPENSSL_NATIVE_OPTIONS})
+ list(APPEND configure_command --prefix=${OUTPUT_DIR})
+ list(APPEND configure_command --with-zlib-include=${OUTPUT_DIR}/include)
+ list(APPEND configure_command --with-zlib-lib=${OUTPUT_DIR}/lib)

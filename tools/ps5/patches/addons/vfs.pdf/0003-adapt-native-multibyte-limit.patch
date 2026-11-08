@@ -1,0 +1,21 @@
+Bridge libiconv's FreeBSD accessor to the exported native locale data.
+
+The SDK declares ___mb_cur_max(), while native libc exports __mb_cur_max.
+Read that variable so multibyte conversion retains the active locale.
+
+Upstream: PS5 native libc ABI adaptation only.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -25,4 +25,11 @@
+ 
+ build_addon(vfs.pdf PDF DEPLIBS)
+ 
++if(PS5_NATIVE_SHARED_ADDONS)
++  set(_multibyte_adapter "${CMAKE_CURRENT_BINARY_DIR}/ps5-multibyte-limit.c")
++  file(WRITE "${_multibyte_adapter}"
++    "#include <stdlib.h>\nint ___mb_cur_max(void) { return __mb_cur_max; }\n")
++  target_sources(vfs.pdf PRIVATE "${_multibyte_adapter}")
++endif()
++
+ include(CPack)

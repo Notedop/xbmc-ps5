@@ -1,0 +1,38 @@
+Subject: Limit native libssh to client APIs available on PS5
+
+SFTP does not need SSH server support (which imports unavailable ctime_r).
+PS5 lacks glob/globfree; use libssh's existing non-globbing include path.
+Classify scoped IPv6 addresses without if_nametoindex: interface resolution
+belongs to the native resolver used during connection, not syntax detection.
+Upstream: PS5-only platform capability adaptation.
+
+--- /dev/null
++++ b/depends/common/libssh/07-ps5-client-platform.patch
+@@ -0,0 +1,27 @@
++Subject: Use supported client-side APIs on PS5
++
++Disable unused server code and unavailable glob support; defer IPv6 scope
++interface validation to connection resolution.
++Upstream: PS5-only platform capability adaptation.
++
++--- a/CMakeLists.txt
+++++ b/CMakeLists.txt
++@@ -57,3 +57,5 @@
++   if(CORE_PLATFORM_NAME STREQUAL "ps5")
+++    set(WITH_SERVER OFF CACHE BOOL "" FORCE)
+++    set(HAVE_GLOB 0 CACHE INTERNAL "" FORCE)
++     set(OPENSSL_USE_STATIC_LIBS ON)
++     set(OPENSSL_ROOT_DIR "${OUTPUT_DIR}")
++--- a/src/misc.c
+++++ b/src/misc.c
++@@ -409,5 +409,10 @@
++         /* link-local (IP:v6:addr%ifname). */
++         if (network_interface != NULL) {
+++#if defined(__PROSPERO__)
+++            /* Scope interface lookup is performed by the connection resolver. */
+++            rc = network_interface[1] != '\0';
+++#else
++             rc = if_nametoindex(network_interface + 1);
+++#endif
++             if (rc == 0) {
++                 free(s);

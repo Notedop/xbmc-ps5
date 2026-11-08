@@ -1,0 +1,40 @@
+Subject: Check declarations when cross-compiling libssh as a static library
+
+Static try-compile cannot detect absent functions by linking. The old checks
+incorrectly enable C23 memset_explicit and retired OpenSSL APIs. Check their
+header declarations instead and retain libssh's secure volatile wipe fallback.
+Upstream: Suitable for upstream static cross-compilation support.
+
+--- /dev/null
++++ b/depends/common/libssh/06-static-feature-checks.patch
+@@ -0,0 +1,30 @@
++Subject: Check function declarations during static cross-compilation
++
++Static try-compile does not reject undefined symbols; header checks avoid
++selecting unavailable secure memory wipe and OpenSSL APIs.
++Upstream: Suitable for upstream static cross-compilation support.
++
++--- a/ConfigureChecks.cmake
+++++ b/ConfigureChecks.cmake
++@@ -101,7 +101,7 @@
++-    check_function_exists(EVP_KDF_CTX_new_id HAVE_OPENSSL_EVP_KDF_CTX_NEW_ID)
++-    check_function_exists(EVP_KDF_CTX_new HAVE_OPENSSL_EVP_KDF_CTX_NEW)
++-    check_function_exists(FIPS_mode HAVE_OPENSSL_FIPS_MODE)
++-    check_function_exists(RAND_priv_bytes HAVE_OPENSSL_RAND_PRIV_BYTES)
++-    check_function_exists(EVP_chacha20 HAVE_OPENSSL_EVP_CHACHA20)
+++    check_symbol_exists(EVP_KDF_CTX_new_id "openssl/kdf.h" HAVE_OPENSSL_EVP_KDF_CTX_NEW_ID)
+++    check_symbol_exists(EVP_KDF_CTX_new "openssl/kdf.h" HAVE_OPENSSL_EVP_KDF_CTX_NEW)
+++    check_symbol_exists(FIPS_mode "openssl/crypto.h" HAVE_OPENSSL_FIPS_MODE)
+++    check_symbol_exists(RAND_priv_bytes "openssl/rand.h" HAVE_OPENSSL_RAND_PRIV_BYTES)
+++    check_symbol_exists(EVP_chacha20 "openssl/evp.h" HAVE_OPENSSL_EVP_CHACHA20)
++ 
++     # Check for ML-KEM availability (OpenSSL 3.5+)
++@@ -145,5 +145,5 @@
++-check_function_exists(explicit_bzero HAVE_EXPLICIT_BZERO)
++-check_function_exists(memset_explicit HAVE_MEMSET_EXPLICIT)
++-check_function_exists(memset_s HAVE_MEMSET_S)
+++check_symbol_exists(explicit_bzero "string.h" HAVE_EXPLICIT_BZERO)
+++check_symbol_exists(memset_explicit "string.h" HAVE_MEMSET_EXPLICIT)
+++check_symbol_exists(memset_s "string.h" HAVE_MEMSET_S)
++ 
++ if (HAVE_GLOB_H)

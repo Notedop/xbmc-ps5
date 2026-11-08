@@ -1,0 +1,31 @@
+Build only the private libiconv library required by Poppler.
+
+The unused iconv tools pull in gnulib utility code incompatible with the
+native SDK. Preserve header preparation and check library installation.
+CONFIG_SITE supplies the native ABI compiler commands to configure.
+
+Upstream: PS5-only; omits unused cross-compiled utilities.
+
+--- a/depends/common/iconv/CMakeLists.txt
++++ b/depends/common/iconv/CMakeLists.txt
+@@ -17,8 +17,18 @@
+                       --enable-extra-encodings
+                       --enable-static
+                       --with-pic
+-                    BUILD_COMMAND make
++                    BUILD_COMMAND make lib/localcharset.h
++                      COMMAND make -C lib
+                     INSTALL_COMMAND ""
+                     BUILD_IN_SOURCE 1)
+ 
+-install(CODE "execute_process(COMMAND make install-lib WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})")
++install(CODE "
++  execute_process(COMMAND make -C lib install-lib
++                  WORKING_DIRECTORY \"${CMAKE_CURRENT_SOURCE_DIR}\"
++                  RESULT_VARIABLE install_result)
++  if(NOT install_result EQUAL 0)
++    message(FATAL_ERROR \"libiconv library install failed: \${install_result}\")
++  endif()
++  file(INSTALL \"${CMAKE_CURRENT_SOURCE_DIR}/include/iconv.h.inst\"
++       DESTINATION \"${OUTPUT_DIR}/include\" RENAME iconv.h)
++")

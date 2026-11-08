@@ -1,0 +1,74 @@
+Omit unsupported Unix metadata restoration in native PS5 Unrar.
+
+PS5 cannot resolve archived Unix groups. Guard ownership restoration,
+not Unix file handling or archive parsing. Disable the existing optional
+USE_LUTIMES feature because native libc cannot timestamp symlinks; retain
+symlink extraction, safety checks and normal file timestamps. Kodi's RAR
+VFS needs file contents, not restoration of another host's owner IDs.
+
+Upstream: PS5 native libc capability adaptation only.
+
+--- a/lib/UnrarXLib/CMakeLists.txt
++++ b/lib/UnrarXLib/CMakeLists.txt
+@@ -52,6 +52,10 @@
+ 
+ add_library(unrarxlib STATIC ${SOURCES})
+ set_property(TARGET unrarxlib PROPERTY POSITION_INDEPENDENT_CODE ON)
++if(PS5_NATIVE_SHARED_ADDONS)
++  target_compile_definitions(unrarxlib PRIVATE RAR_NO_UNIX_OWNERS RAR_NO_LUTIMES)
++endif()
++
+ if(NOT CORE_SYSTEM_NAME MATCHES windows)
+   target_compile_definitions(unrarxlib PRIVATE -DSILENT -DRARDLL)
+ else()
+--- a/lib/UnrarXLib/extinfo.cpp
++++ b/lib/UnrarXLib/extinfo.cpp
+@@ -9,7 +9,9 @@
+ #endif
+ 
+ #ifdef _UNIX
++#ifndef RAR_NO_UNIX_OWNERS
+ #include "uowners.cpp"
++#endif
+ #ifdef SAVE_LINKS
+ #include "ulinks.cpp"
+ #endif
+@@ -25,7 +27,7 @@
+     return;
+   switch(Arc.SubBlockHead.SubType)
+   {
+-#ifdef _UNIX
++#if defined(_UNIX) && !defined(RAR_NO_UNIX_OWNERS)
+     case UO_HEAD:
+       if (Cmd->ProcessOwners)
+         ExtractUnixOwner20(Arc,Name);
+@@ -48,7 +50,7 @@
+ // RAR3 and RAR5 service header extra records.
+ void SetExtraInfo(CommandData *Cmd,Archive &Arc,wchar *Name)
+ {
+-#ifdef _UNIX
++#if defined(_UNIX) && !defined(RAR_NO_UNIX_OWNERS)
+   if (!Cmd->Test && Cmd->ProcessOwners && Arc.Format==RARFMT15 &&
+       Arc.SubHead.CmpName(SUBHEAD_TYPE_UOWNER))
+     ExtractUnixOwner30(Arc,Name);
+@@ -65,7 +67,7 @@
+ // Extra data stored directly in file header.
+ void SetFileHeaderExtra(CommandData *Cmd,Archive &Arc,wchar *Name)
+ {
+-#ifdef _UNIX
++#if defined(_UNIX) && !defined(RAR_NO_UNIX_OWNERS)
+    if (Cmd->ProcessOwners && Arc.Format==RARFMT50 && Arc.FileHead.UnixOwnerSet)
+      SetUnixOwner(Arc,Name);
+ #endif
+--- a/lib/UnrarXLib/os.hpp
++++ b/lib/UnrarXLib/os.hpp
+@@ -174,7 +174,9 @@
+ 
+ #if defined(__linux) || defined(__FreeBSD__)
+ #include <sys/time.h>
++#ifndef RAR_NO_LUTIMES
+ #define USE_LUTIMES
++#endif
+ #endif
+ 
+ #define ENABLE_ACCESS

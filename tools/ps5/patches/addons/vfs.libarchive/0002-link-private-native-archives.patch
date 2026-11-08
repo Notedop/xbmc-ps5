@@ -1,0 +1,62 @@
+Select the add-on's private native static dependencies explicitly.
+
+Shared pkg-config metadata and the SDK homebrew search path can substitute
+core libraries, including OpenSSL 3.5.7 for this dependency's 3.5.8 headers.
+Use exact private archives and require the same paths for libarchive's
+dependency discovery. Keep internal crypto references bound locally.
+
+Upstream: PS5 native add-on build adaptation only.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -4,6 +4,24 @@
+ list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR})
+ 
+ find_package(Kodi REQUIRED)
++if(PS5_NATIVE_SHARED_ADDONS)
++  set(_private_prefix "${ADDON_DEPENDS_PATH}")
++  set(LibArchive_INCLUDE_DIR "${_private_prefix}/include" CACHE PATH "" FORCE)
++  set(LibArchive_LIBRARY "${_private_prefix}/lib/libarchive.a" CACHE FILEPATH "" FORCE)
++  set(BZIP2_INCLUDE_DIR "${_private_prefix}/include" CACHE PATH "" FORCE)
++  set(BZIP2_LIBRARY_RELEASE "${_private_prefix}/lib/libbz2.a" CACHE FILEPATH "" FORCE)
++  set(ZLIB_INCLUDE_DIR "${_private_prefix}/include" CACHE PATH "" FORCE)
++  set(ZLIB_LIBRARY_RELEASE "${_private_prefix}/lib/libz.a" CACHE FILEPATH "" FORCE)
++  set(OPENSSL_INCLUDE_DIR "${_private_prefix}/include" CACHE PATH "" FORCE)
++  set(OPENSSL_CRYPTO_LIBRARY "${_private_prefix}/lib/libcrypto.a" CACHE FILEPATH "" FORCE)
++  set(OPENSSL_SSL_LIBRARY "${_private_prefix}/lib/libssl.a" CACHE FILEPATH "" FORCE)
++  set(LZ4_INCLUDE_DIR "${_private_prefix}/include" CACHE PATH "" FORCE)
++  set(LZ4_LIBRARY "${_private_prefix}/lib/liblz4.a" CACHE FILEPATH "" FORCE)
++  set(LZO2_INCLUDE_DIR "${_private_prefix}/include" CACHE PATH "" FORCE)
++  set(LZO2_LIBRARY "${_private_prefix}/lib/liblzo2.a" CACHE FILEPATH "" FORCE)
++  set(LIBLZMA_INCLUDE_DIR "${_private_prefix}/include" CACHE PATH "" FORCE)
++  set(LIBLZMA_LIBRARY "${_private_prefix}/lib/liblzma.a" CACHE FILEPATH "" FORCE)
++endif()
+ find_package(LibArchive REQUIRED)
+ find_package(LibLZMA)
+ find_package(BZip2 REQUIRED)
+@@ -35,6 +53,17 @@
+   list(APPEND DEPLIBS ${LIBLZMA_LIBRARIES})
+ endif()
+ 
++if(PS5_NATIVE_SHARED_ADDONS)
++  set(DEPLIBS "")
++  foreach(_library IN ITEMS archive bz2 lz4 lzo2 lzma ssl crypto z)
++    set(_archive "${_private_prefix}/lib/lib${_library}.a")
++    if(NOT EXISTS "${_archive}")
++      message(FATAL_ERROR "Missing native private dependency: ${_archive}")
++    endif()
++    list(APPEND DEPLIBS "${_archive}")
++  endforeach()
++endif()
++
+ if(WIN32)
+   # Static libarchive uses CNG for Windows digests and random bytes.
+   list(APPEND DEPLIBS bcrypt)
+@@ -43,4 +72,7 @@
+ add_definitions(-DLIBARCHIVE_STATIC -D_CRT_NONSTDC_NO_DEPRECATE)
+ 
+ build_addon(vfs.libarchive ARCHIVE DEPLIBS)
++if(PS5_NATIVE_SHARED_ADDONS)
++  target_link_options(vfs.libarchive PRIVATE "-Wl,-Bsymbolic")
++endif()
+ include(CPack)

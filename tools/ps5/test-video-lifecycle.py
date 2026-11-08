@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile production PS5 fallback and GPU-retirement methods against lifetime mocks."""
+"""Focused playback pause, PS5 recovery and GPU lifetime regressions."""
 
 import shutil
 import subprocess
@@ -30,6 +30,248 @@ class VideoLifecycleTests(unittest.TestCase):
                             "-fsanitize=address,undefined", "-g", str(fixture),
                             "-o", str(output)], check=True)
             subprocess.run([str(output)], check=True, timeout=30)
+
+    def test_vp9_recovery_waits_for_real_keyframes(self):
+        source = (VIDEO / "DVDVideoCodecPS5.cpp").read_text()
+        start = source.index("bool CDVDVideoCodecPS5::DecodeOne(")
+        end = source.index("  std::vector<uint8_t> cleaned;", start)
+        gate = source[start:end]
+        harness = r"""
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+constexpr int LOGINFO = 1;
+struct CLog {
+  template<class... Args> static void Log(int, const char*, Args&&...) {}
+};
+struct CDVDVideoCodecPS5 {
+  bool m_software = false, m_recoveryPending = false;
+  bool m_waitKeyframe = true, m_vp9 = true;
+  int skippedPts = 0, nativeDecodes = 0, nalParses = 0;
+  void NextPts() { ++skippedPts; }
+  void CleanAccessUnit(const uint8_t* data, size_t, std::vector<uint8_t>&,
+                       bool& irap, bool& hasSlice) {
+    ++nalParses;
+    irap = data[0] == 0x65;
+    hasSlice = true;
+  }
+  bool DecodeOne(const uint8_t*, size_t);
+};
+"""
+        harness += method("DVDVideoCodecPS5.cpp", "bool IsVp9KeyFrame(")
+        harness += "\n" + gate + "  ++nativeDecodes;\n  return true;\n}\n"
+        harness += r"""
+int main() {
+  uint8_t data[] = {0x82, 0x49, 0x83, 0x42};
+  for (int header = 0; header < 256; ++header) {
+    data[0] = static_cast<uint8_t>(header);
+    bool expected = (header >= 0x80 && header <= 0x83) ||
+                    (header >= 0x90 && header <= 0x93);
+    assert(IsVp9KeyFrame(data, sizeof(data)) == expected);
+  }
+  data[0] = 0x92;
+  for (size_t size = 0; size < 4; ++size)
+    assert(!IsVp9KeyFrame(data, size));
+  assert(!IsVp9KeyFrame(nullptr, 4));
+  for (int index = 1; index < 4; ++index) {
+    data[index] ^= 1;
+    assert(!IsVp9KeyFrame(data, sizeof(data)));
+    data[index] ^= 1;
+  }
+  CDVDVideoCodecPS5 codec;
+  for (uint8_t header : {0x96, 0x9a, 0x65}) {
+    data[0] = header;
+    assert(codec.DecodeOne(data, sizeof(data)));
+    assert(codec.m_waitKeyframe && codec.nativeDecodes == 0);
+  }
+  assert(codec.skippedPts == 3 && codec.nalParses == 0);
+  data[0] = 0x92;
+  assert(codec.DecodeOne(data, sizeof(data)));
+  assert(!codec.m_waitKeyframe && codec.nativeDecodes == 1);
+  data[0] = 0x96;
+  assert(codec.DecodeOne(data, sizeof(data)));
+  assert(codec.nativeDecodes == 2 && codec.nalParses == 0);
+  codec.m_vp9 = false;
+  codec.m_waitKeyframe = true;
+  data[0] = 0x41;
+  codec.DecodeOne(data, sizeof(data));
+  assert(codec.m_waitKeyframe && codec.nativeDecodes == 2);
+  data[0] = 0x65;
+  codec.DecodeOne(data, sizeof(data));
+  assert(!codec.m_waitKeyframe && codec.nativeDecodes == 3 && codec.nalParses == 2);
+}
+"""
+        self.run_harness(harness)
+
+    def test_vp9_seek_rearms_keyframe_wait(self):
+        harness = r"""
+#include <cassert>
+#include <deque>
+#include <memory>
+struct Software {
+  int resets = 0;
+  void Reset() { ++resets; }
+};
+struct CDVDVideoCodecPS5 {
+  std::unique_ptr<Software> m_software;
+  std::deque<int> m_softwareQueue, m_replay;
+  int hardwareResets = 0, m_replayBytes = 0;
+  int m_failuresBeforeFirst = 0, m_cleanNoSlice = 0, m_cleanWaitIrap = 0;
+  int m_midStreamResets = 6;
+  bool m_replayOverflow = false, m_seenIrap = false;
+  bool m_waitKeyframe = false, m_vp9 = true;
+  void ResetDecoderState() { ++hardwareResets; }
+  void Reset();
+};
+"""
+        harness += method("DVDVideoCodecPS5.cpp", "void CDVDVideoCodecPS5::Reset()")
+        harness += r"""
+int main() {
+  CDVDVideoCodecPS5 codec;
+  codec.Reset();
+  assert(codec.m_waitKeyframe && codec.hardwareResets == 1);
+  assert(codec.m_midStreamResets == 0);
+  codec.m_waitKeyframe = false;
+  codec.Reset();
+  assert(codec.m_waitKeyframe && codec.hardwareResets == 2);
+  codec.m_vp9 = false;
+  codec.Reset();
+  assert(!codec.m_waitKeyframe && codec.hardwareResets == 3);
+  codec.m_software = std::make_unique<Software>();
+  codec.m_softwareQueue.push_back(1);
+  codec.Reset();
+  assert(codec.m_software->resets == 1 && codec.m_softwareQueue.empty());
+  assert(codec.hardwareResets == 3);
+}
+"""
+        self.run_harness(harness)
+
+    def test_pause_blocks_pending_output_and_packets_but_preserves_startup_and_steps(self):
+        source = (ROOT / "xbmc/cores/VideoPlayer/VideoPlayerVideo.cpp").read_text()
+        start = source.index("void CVideoPlayerVideo::Process()")
+        control_start = source.index("    auto timeout =", start)
+        control_end = source.index("    std::shared_ptr<CDVDMsg> pMsg;", control_start)
+        retry_start = source.index("      if (m_outputSate == OUTPUT_AGAIN", control_end)
+        retry_end = source.index("      // if we only wanted priority messages", retry_start)
+        controls = source[control_start:control_end]
+        retries = source[retry_start:retry_end]
+        harness = r"""
+#include <cassert>
+#include <chrono>
+using namespace std::chrono_literals;
+constexpr int DVD_PLAYSPEED_PAUSE = 0;
+constexpr int OUTPUT_AGAIN = 1, OUTPUT_NORMAL = 2;
+struct IDVDStreamPlayer {
+  enum { SYNC_STARTING, SYNC_WAITSYNC, SYNC_INSYNC };
+};
+struct ProcessInfo {
+  bool advance = false;
+  bool IsFrameAdvance() { return advance; }
+};
+struct RenderManager {
+  bool paused = false;
+  void SetPaused(bool value) { paused = value; }
+};
+struct Picture { bool videoBuffer = true; };
+struct Player {
+  int m_speed = 0, m_syncState = IDVDStreamPlayer::SYNC_INSYNC;
+  int m_outputSate = OUTPUT_AGAIN;
+  bool m_paused = false, m_stalled = false;
+  ProcessInfo m_processInfo;
+  RenderManager m_renderManager;
+  Picture m_picture;
+  int pictures = 0, decoderCalls = 0, packets = 0;
+  int OutputPicture(Picture*) { ++pictures; return OUTPUT_NORMAL; }
+  bool ProcessDecoderOutput(double&, double&) { ++decoderCalls; return false; }
+  void Poll() {
+    double frametime = 16683.33, pts = 0;
+    bool onlyPrioMsgs = false;
+    for (int tick = 0; tick < 20; ++tick) {
+"""
+        harness += controls + r"""
+      assert(timeout.count() >= 0);
+      if (iPriority == 0) ++packets;
+"""
+        harness += retries + r"""
+    }
+  }
+};
+int main() {
+  Player paused;
+  paused.Poll();
+  assert(paused.m_renderManager.paused && paused.pictures == 0);
+  assert(paused.decoderCalls == 0 && paused.packets == 0);
+  Player starting;
+  starting.m_syncState = IDVDStreamPlayer::SYNC_STARTING;
+  starting.Poll();
+  assert(!starting.m_renderManager.paused && starting.pictures == 1);
+  assert(starting.decoderCalls > 0 && starting.packets > 0);
+  Player waiting;
+  waiting.m_syncState = IDVDStreamPlayer::SYNC_WAITSYNC;
+  waiting.Poll();
+  assert(!waiting.m_renderManager.paused && waiting.packets == 0);
+  Player step;
+  step.m_processInfo.advance = true;
+  step.Poll();
+  assert(!step.m_renderManager.paused && step.pictures == 1 && step.decoderCalls > 0);
+  Player playing;
+  playing.m_speed = 1000;
+  playing.Poll();
+  assert(!playing.m_renderManager.paused && playing.pictures == 1 && playing.packets > 0);
+  Player internalPause;
+  internalPause.m_speed = 1000;
+  internalPause.m_paused = true;
+  internalPause.Poll();
+  assert(internalPause.pictures == 0 && internalPause.decoderCalls == 0);
+  assert(internalPause.packets == 0);
+  paused.m_speed = 1000;
+  paused.Poll();
+  assert(!paused.m_renderManager.paused && paused.pictures == 1 && paused.packets > 0);
+}
+"""
+        self.run_harness(harness)
+
+    def test_paused_renderer_holds_displayed_frame_despite_late_queued_frames(self):
+        source = (ROOT / "xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp").read_text()
+        start = source.index("void CRenderManager::PrepareNextRender()")
+        end = source.index("  const double frameOnScreen =", start)
+        harness = r"""
+#include <cassert>
+#include <deque>
+constexpr int LOGERROR = 1, PRESENT_IDLE = 0;
+struct CLog {
+  template<class... Args> static void Log(int, const char*, Args&&...) {}
+};
+struct Event { void notifyAll() {} };
+struct CRenderManager {
+  bool m_paused = true, m_forceNext = false, m_showVideo = true;
+  int m_presentstep = 1, displayed = 1;
+  std::deque<int> m_queued{2, 3, 4};
+  Event m_presentevent;
+  void PrepareNextRender();
+};
+"""
+        harness += source[start:end] + r"""
+  displayed = m_queued.front();
+  m_queued.pop_front();
+}
+int main() {
+  CRenderManager renderer;
+  for (int tick = 0; tick < 60; ++tick) renderer.PrepareNextRender();
+  assert(renderer.displayed == 1 && renderer.m_queued.size() == 3);
+  renderer.m_forceNext = true;
+  renderer.PrepareNextRender();
+  assert(renderer.displayed == 2 && renderer.m_queued.size() == 2);
+  renderer.m_forceNext = false;
+  renderer.PrepareNextRender();
+  assert(renderer.displayed == 2 && renderer.m_queued.size() == 2);
+  renderer.m_paused = false;
+  renderer.PrepareNextRender();
+  assert(renderer.displayed == 3 && renderer.m_queued.size() == 1);
+}
+"""
+        self.run_harness(harness)
 
     def test_fallback_retains_displayed_frames_and_handles_pending_transition(self):
         harness = r"""

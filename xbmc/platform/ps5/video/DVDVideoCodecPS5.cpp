@@ -68,6 +68,18 @@ constexpr unsigned kMaxMidStreamResets = 6; // then hand the rest to FFmpeg
 // (seen with a 1080p HEVC Main10 file refused with 0x811d0303).
 constexpr unsigned kFailuresBeforeSoftware = 8;
 
+bool IsVp9KeyFrame(const uint8_t* data, size_t size)
+{
+  if (!data || size < 4)
+    return false;
+  const uint8_t header = data[0];
+  const unsigned profile = ((header >> 5) & 1) | (((header >> 4) & 1) << 1);
+  // Supported profiles 0/2 have a byte-aligned sync code after the header.
+  return (header >> 6) == 2 && (profile == 0 || profile == 2) &&
+         (header & 0x08) == 0 && (header & 0x04) == 0 &&
+         data[1] == 0x49 && data[2] == 0x83 && data[3] == 0x42;
+}
+
 bool IsH264Supported(int profile)
 {
   // 8-bit 4:2:0 profiles; High 10, 4:2:2 and 4:4:4 go to FFmpeg
@@ -563,9 +575,15 @@ bool CDVDVideoCodecPS5::DecodeOne(const uint8_t* data, size_t size)
   // mid-GOP pictures just fails again. Drop access units until a keyframe.
   if (m_waitKeyframe)
   {
-    std::vector<uint8_t> tmp;
-    bool irap = false, hasSlice = false;
-    CleanAccessUnit(data, size, tmp, irap, hasSlice);
+    bool irap = false;
+    if (m_vp9)
+      irap = IsVp9KeyFrame(data, size);
+    else
+    {
+      std::vector<uint8_t> tmp;
+      bool hasSlice = false;
+      CleanAccessUnit(data, size, tmp, irap, hasSlice);
+    }
     if (!irap)
     {
       NextPts(); // its timestamp goes with it
@@ -679,7 +697,6 @@ bool CDVDVideoCodecPS5::DecodeOne(const uint8_t* data, size_t size)
                 "and resyncing (resync {})",
                 m_errorsInRow, m_streamName, m_midStreamResets);
       ResetDecoderState();   // drops queued pictures and pending access units
-      m_decoder->Reset();    // reclaims the decoder's frame buffers
       m_errorsInRow = 0;
       m_seenIrap = false;    // wait for the next keyframe before decoding again
       m_waitKeyframe = true;
@@ -1105,7 +1122,7 @@ void CDVDVideoCodecPS5::Reset()
   m_seenIrap = false;
   m_cleanNoSlice = 0;
   m_cleanWaitIrap = 0;
-  m_waitKeyframe = false;
+  m_waitKeyframe = m_vp9;
   m_midStreamResets = 0;
 }
 

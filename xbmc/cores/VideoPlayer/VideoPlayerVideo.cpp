@@ -97,6 +97,7 @@ CVideoPlayerVideo::~CVideoPlayerVideo()
 {
   m_bAbortOutput = true;
   StopThread();
+  m_renderManager.SetPaused(false);
 }
 
 double CVideoPlayerVideo::GetOutputDelay()
@@ -287,6 +288,7 @@ void CVideoPlayerVideo::CloseStream(bool bWaitForBuffers)
 
   m_bAbortOutput = true;
   StopThread();
+  m_renderManager.SetPaused(false);
 
   m_messageQueue.End();
 
@@ -365,11 +367,15 @@ void CVideoPlayerVideo::Process()
     auto timeout = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::duration<double, std::micro>(m_stalled ? frametime : frametime * 10));
     int iPriority = 0;
+    const bool holdPicture = m_speed == DVD_PLAYSPEED_PAUSE &&
+                             m_syncState == IDVDStreamPlayer::SYNC_INSYNC &&
+                             !m_processInfo.IsFrameAdvance();
+    m_renderManager.SetPaused(holdPicture);
 
     if (m_syncState == IDVDStreamPlayer::SYNC_WAITSYNC)
       iPriority = 1;
 
-    if (m_paused)
+    if (m_paused || holdPicture)
       iPriority = 1;
 
     if (onlyPrioMsgs)
@@ -393,7 +399,7 @@ void CVideoPlayerVideo::Process()
     else if (ret == MSGQ_TIMEOUT)
     {
       if (m_outputSate == OUTPUT_AGAIN &&
-          m_picture.videoBuffer)
+          m_picture.videoBuffer && !holdPicture && !m_paused)
       {
         m_outputSate = OutputPicture(&m_picture);
         if (m_outputSate == OUTPUT_AGAIN)

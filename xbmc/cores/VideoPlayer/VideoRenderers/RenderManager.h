@@ -106,6 +106,7 @@ public:
   bool AddVideoPicture(const VideoPicture& picture, volatile std::atomic_bool& bStop, EINTERLACEMETHOD deintMethod, bool wait);
   void AddOverlay(std::shared_ptr<CDVDOverlay> o, double pts);
   void ShowVideo(bool enable);
+  void SetPaused(bool paused) { m_paused = paused; }
 
   /*!
    * \brief True if any subtitle/overlay is visible on the current presented
@@ -182,6 +183,7 @@ protected:
   bool m_renderDebugVideo = false;
   XbmcThreads::EndTime<> m_debugTimer;
   std::atomic_bool m_showVideo = {false};
+  std::atomic_bool m_paused{false};
 
   enum EPRESENTSTEP
   {

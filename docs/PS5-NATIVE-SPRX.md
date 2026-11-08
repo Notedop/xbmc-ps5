@@ -54,6 +54,12 @@ retain the decoder until their release. The PS5 renderer retires GPU reads befor
 forced buffer release or reconfiguration. Focused host regressions are available
 in `tools/ps5/test-video-lifecycle.py` and `tools/ps5/test-controller-input.py`.
 
+User pause holds the currently displayed frame and prevents queued packets or
+pending output from advancing video. Startup synchronization, forced first-frame
+presentation and frame advance remain available. VP9 hardware decoding waits for
+a Profile 0/2 keyframe with a valid sync code after seeks or decoder recovery;
+VP9 recovery does not use H.264/HEVC Annex-B keyframe parsing.
+
 The obsolete in-title Media Remote Probe and its startup switches have been
 removed. Existing `kodi-media-probe` marker files and `KODI_PS5_MEDIA_PROBE`
 environment variables no longer alter Kodi startup.

@@ -445,7 +445,10 @@ bool CDVDVideoCodecPS5::AddData(const DemuxPacket& packet)
   if (m_decoded.size() >= 2)
     return false;
   // zero-copy: every frame shown or held - Kodi releases pictures first
-  if (!RetryPending() || !m_decoder->HasFreeFrame())
+  const bool pendingReady = RetryPending();
+  if (m_software)
+    return AddData(packet);
+  if (!pendingReady || !m_decoder->HasFreeFrame())
   {
     // Nothing shown yet, decodes have failed, and now no frame is free: the
     // decoder kept the refused frames and will never return a picture.
@@ -1228,13 +1231,15 @@ bool CDVDVideoCodecPS5::SwitchToSoftware()
     CLog::Log(LOGERROR, "CDVDVideoCodecPS5: software fallback could not open the stream");
     return false;
   }
-  CLog::Log(LOGWARNING, "CDVDVideoCodecPS5: the hardware decoder refused {} before its first "
-            "picture; continuing with software decoding ({})",
-            m_streamName, software->GetName());
-  // nothing of the hardware decoder was ever shown, so it can go now
+  CLog::Log(LOGWARNING,
+            "CDVDVideoCodecPS5: the hardware decoder refused {}; continuing with software "
+            "decoding ({}) after {} displayed pictures",
+            m_streamName, software->GetName(), m_picturesOut);
+  ClearQueue();
   m_pendingAus.clear();
   m_pts.clear();
-  m_decoder->Close();
+  // Renderer-held zero-copy pictures keep the decoder's memory alive.
+  m_decoder.reset();
   m_software = std::move(software);
   m_softwareQueue = std::move(m_replay); // from the start, not from the next keyframe
   m_replay.clear();

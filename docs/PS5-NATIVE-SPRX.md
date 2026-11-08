@@ -48,6 +48,12 @@ On a remote disconnect, the backend invalidates the Lotus ID and clears cached
 playback state and discovery backoff. Reconnection triggers fresh discovery;
 transient absence remains retryable without disabling navigation or controllers.
 
+Hardware video fallback releases the codec's decoder ownership rather than
+closing it while zero-copy pictures may still be displayed. Outstanding pictures
+retain the decoder until their release. The PS5 renderer retires GPU reads before
+forced buffer release or reconfiguration. Focused host regressions are available
+in `tools/ps5/test-video-lifecycle.py` and `tools/ps5/test-controller-input.py`.
+
 The obsolete in-title Media Remote Probe and its startup switches have been
 removed. Existing `kodi-media-probe` marker files and `KODI_PS5_MEDIA_PROBE`
 environment variables no longer alter Kodi startup.

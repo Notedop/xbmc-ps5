@@ -194,8 +194,13 @@ bool CRendererPS5::Configure(const VideoPicture& picture, float fps, unsigned in
 {
   m_imageTargetTexture2D =
       reinterpret_cast<ImageTargetTexture2D>(eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+  glFinish();
   for (auto& fence : m_fences)
+  {
+    if (glIsSync(fence))
+      glDeleteSync(fence);
     fence = {};
+  }
   m_layoutLogged = false;
   if (m_debug)
     CLog::Log(LOGINFO, "CRendererPS5 (kodi-video-debug): Configure {}x{} @ {:.3f} fps, {} cached frames dropped",
@@ -381,8 +386,10 @@ bool CRendererPS5::NeedBuffer(int idx)
 
 void CRendererPS5::ReleaseBuffer(int idx)
 {
-  if (glIsSync(m_fences[idx]))
+  if (NeedBuffer(idx))
   {
+    // Forced release (teardown/reconfiguration) must also retire GPU reads.
+    glFinish();
     glDeleteSync(m_fences[idx]);
     m_fences[idx] = {};
   }

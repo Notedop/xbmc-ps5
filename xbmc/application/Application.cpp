@@ -1564,10 +1564,8 @@ void CApplication::FrameMove(bool processEvents, bool processGUI)
       CGUIDialogKaiToast *toast = CServiceBroker::GetGUI()->GetWindowManager().GetWindow<CGUIDialogKaiToast>(WINDOW_DIALOG_KAI_TOAST);
       if (toast && toast->DoWork())
       {
-        if (!toast->IsDialogRunning())
-        {
-          toast->Open();
-        }
+        // also reopens the dialog if it is still running its close animation
+        toast->Open();
       }
     }
 
@@ -1965,8 +1963,6 @@ bool CApplication::Stop(int exitCode)
   }
 
   cleanup_emu_environ();
-
-  KODI::TIME::Sleep(200ms);
 
   return success;
 }

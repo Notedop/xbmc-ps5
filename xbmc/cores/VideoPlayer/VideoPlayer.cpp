@@ -961,7 +961,9 @@ bool CVideoPlayer::OpenInputStream()
 
     if (!URIUtils::IsUPnP(m_item.GetPath()) &&
         !m_item.GetProperty("no-ext-subs-scan").asBoolean(false))
-      CUtil::ScanForExternalSubtitles(m_item.GetSubtitleAnchorPath(), filenames);
+      CUtil::ScanForExternalSubtitles(m_item.GetSubtitleAnchorPath(), filenames,
+                                      m_item.HasVideoInfoTag() ? m_item.GetVideoInfoTag()
+                                                               : nullptr);
 
     // load any subtitles from file item
     std::string key("subtitle:1");
@@ -3797,31 +3799,49 @@ bool CVideoPlayer::CanSeek() const
 
 void CVideoPlayer::Seek(bool bPlus, bool bLargeStep, bool bChapterOverride)
 {
+  const SeekStep step = bLargeStep ? SeekStep::LARGE : SeekStep::NORMAL;
+  SeekToNearestTarget(bPlus ? Direction::FORWARD : Direction::BACKWARD, step,
+                      step == SeekStep::LARGE && bChapterOverride, false);
+}
+
+void CVideoPlayer::SeekChapterOrSceneOrBigStep(Direction direction)
+{
+  SeekToNearestTarget(direction, SeekStep::LARGE, true, true);
+}
+
+void CVideoPlayer::SeekToNearestTarget(Direction direction,
+                                       SeekStep step,
+                                       bool includeChapters,
+                                       bool includeScenes)
+{
   if (!m_State.canseek)
     return;
 
   const int64_t time = GetTime();
-  const Direction direction = bPlus ? Direction::FORWARD : Direction::BACKWARD;
-  const SeekStep step = bLargeStep ? SeekStep::LARGE : SeekStep::NORMAL;
 
-  if (step == SeekStep::LARGE && bChapterOverride)
+  std::vector<SeekCandidate> candidates;
+  if (includeChapters)
   {
-    std::vector<SeekCandidate> candidates;
     if (auto candidate = GetChapterSeekCandidate(time, direction); candidate.has_value())
       candidates.push_back(std::move(*candidate));
     if (auto candidate = GetBookmarkSeekCandidate(time, direction); candidate.has_value())
       candidates.push_back(std::move(*candidate));
+  }
+  if (includeScenes)
+  {
+    if (auto candidate = GetSceneSeekCandidate(time, direction); candidate.has_value())
+      candidates.push_back(std::move(*candidate));
+  }
 
-    if (!candidates.empty())
+  if (!candidates.empty())
+  {
+    auto bestCandidateIt = std::ranges::min_element(candidates, std::less<>{},
+                                                    [time](const CVideoPlayer::SeekCandidate& c)
+                                                    { return std::abs(c.targetTime - time); });
+    if (bestCandidateIt != candidates.end())
     {
-      auto bestCandidateIt = std::ranges::min_element(candidates, std::less<>{},
-                                                      [time](const CVideoPlayer::SeekCandidate& c)
-                                                      { return std::abs(c.targetTime - time); });
-      if (bestCandidateIt != candidates.end())
-      {
-        bestCandidateIt->action();
-        return;
-      }
+      bestCandidateIt->action();
+      return;
     }
   }
 
@@ -3963,39 +3983,58 @@ std::optional<CVideoPlayer::SeekCandidate> CVideoPlayer::GetBookmarkSeekCandidat
                        { ExecuteTimeSeek(bookmarkTime, direction, true); }};
 }
 
-bool CVideoPlayer::SeekScene(Direction seekDirection)
+std::optional<CVideoPlayer::SeekCandidate> CVideoPlayer::GetSceneSeekCandidate(int64_t time,
+                                                                               Direction direction)
 {
   if (!m_Edl.HasSceneMarker())
-    return false;
+    return std::nullopt;
 
   /*
    * There is a 5 second grace period applied when seeking for scenes backwards. If there is no
    * grace period applied it is impossible to go backwards past a scene marker.
+   * Forwards, a 1 second grace period is needed because the time reported right after the
+   * inaccurate seek to a scene marker is slightly before it, which would select it again.
    */
-  auto clock = std::chrono::milliseconds(GetTime());
-  if (seekDirection == Direction::BACKWARD && clock > 5s) // 5 seconds
+  auto clock = std::chrono::milliseconds(time);
+  if (direction == Direction::BACKWARD && clock > 5s) // 5 seconds
     clock -= 5s;
+  else if (direction == Direction::FORWARD)
+    clock += 1s;
 
   const std::optional<std::chrono::milliseconds> sceneMarker =
-      m_Edl.GetNextSceneMarker(seekDirection, clock);
-  if (sceneMarker)
-  {
-    /*
-     * Seeking is flushed and inaccurate, just like Seek()
-     */
-    CDVDMsgPlayerSeek::CMode mode;
-    mode.time = sceneMarker.value().count();
-    mode.backward = seekDirection == Direction::BACKWARD;
-    mode.accurate = false;
-    mode.restore = false;
-    mode.trickplay = false;
-    mode.sync = true;
+      m_Edl.GetNextSceneMarker(direction, clock);
+  if (!sceneMarker)
+    return std::nullopt;
 
-    m_messenger.Put(std::make_shared<CDVDMsgPlayerSeek>(mode));
-    SynchronizeDemuxer();
-    return true;
-  }
-  return false;
+  // Scene markers are raw times, the other candidates are compared without cuts.
+  const int64_t sceneTime = sceneMarker.value().count();
+  return SeekCandidate{m_Edl.GetTimeWithoutCuts(sceneMarker.value()).count(),
+                       [this, sceneTime, direction]()
+                       {
+                         /*
+                          * Seeking is flushed and inaccurate, just like Seek()
+                          */
+                         CDVDMsgPlayerSeek::CMode mode;
+                         mode.time = sceneTime;
+                         mode.backward = direction == Direction::BACKWARD;
+                         mode.accurate = false;
+                         mode.restore = false;
+                         mode.trickplay = false;
+                         mode.sync = true;
+
+                         m_messenger.Put(std::make_shared<CDVDMsgPlayerSeek>(mode));
+                         SynchronizeDemuxer();
+                       }};
+}
+
+bool CVideoPlayer::SeekScene(Direction seekDirection)
+{
+  const std::optional<SeekCandidate> candidate = GetSceneSeekCandidate(GetTime(), seekDirection);
+  if (!candidate)
+    return false;
+
+  candidate->action();
+  return true;
 }
 
 void CVideoPlayer::GetGeneralInfo(std::string& strGeneralInfo)
@@ -5632,8 +5671,9 @@ int CVideoPlayer::AddSubtitleFile(const std::string& filename, const std::string
       pDemux = pDemuxFFmpeg;
     }
 
-    ExternalStreamInfo info =
-        CUtil::GetExternalStreamDetailsFromFilename(m_item.GetDynPath(), filename);
+    ExternalStreamInfo info = CUtil::GetExternalStreamDetailsFromFilename(
+        m_item.GetDynPath(), filename,
+        m_item.HasVideoInfoTag() ? m_item.GetVideoInfoTag() : nullptr);
 
     for (auto sub : pDemux->GetStreams())
     {
@@ -5676,7 +5716,8 @@ int CVideoPlayer::AddSubtitleFile(const std::string& filename, const std::string
   s.type = StreamType::SUBTITLE;
   s.id       = 0;
   s.filename = filename;
-  ExternalStreamInfo info = CUtil::GetExternalStreamDetailsFromFilename(m_item.GetDynPath(), filename);
+  ExternalStreamInfo info = CUtil::GetExternalStreamDetailsFromFilename(
+      m_item.GetDynPath(), filename, m_item.HasVideoInfoTag() ? m_item.GetVideoInfoTag() : nullptr);
   s.name = info.name;
   s.language = info.language;
   if (static_cast<StreamFlags>(info.flag) != StreamFlags::FLAG_NONE)

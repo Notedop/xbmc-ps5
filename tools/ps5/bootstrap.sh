@@ -10,6 +10,8 @@
 #   4. Sony link stubs         libSceVideodec2 + VRR-extended libSceVideoOut
 #   5. ps5-opengl              OpenGL 4.6 / EGL SDK -> /opt/ps5-opengl-gl46
 #   6. native-app boilerplate  + imgui demo, the app template package.sh uses
+#   7. lapy-helper             one-shot owned-root helper ELF bundled for
+#                              privilege elevation (see docs/ps5/elevation.md)
 #
 # Everything is idempotent; re-run after a failure. Budget 1-3 hours of build
 # time for pacbrew and ps5-opengl (Mesa) on an 8-core machine.
@@ -19,8 +21,20 @@
 #   WORK   checkout/build dir for the external sources (ps5-opengl, pacbrew,
 #          the app boilerplate)                      default build/ps5-external
 #   JOBS   parallelism                                 default $(nproc)
-#   STEP   run a single step only: packages | sdk | stubs | opengl | template
+#   STEP   run a single step only: packages | sdk | stubs | opengl | template | lapy
 set -euo pipefail
+
+for arg in "$@"; do
+  case "$arg" in
+    STEP=*) STEP="${arg#STEP=}" ;;
+    *) echo "!! unknown argument: $arg (expected STEP=<step>)" >&2; exit 1 ;;
+  esac
+done
+STEP="${STEP-all}"
+case "$STEP" in
+  all|packages|sdk|stubs|opengl|template|lapy) ;;
+  *) echo "!! invalid STEP: $STEP (expected all, packages, sdk, stubs, opengl, template or lapy)" >&2; exit 1 ;;
+esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"        # tools/ps5
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -28,7 +42,6 @@ export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
 export PS5_OPENGL_PREFIX="${PS5_OPENGL_PREFIX:-/opt/ps5-opengl-gl46}"
 WORK="${WORK:-$ROOT/build/ps5-external}"
 JOBS="${JOBS:-$(nproc)}"
-STEP="${STEP:-all}"
 export MAKEFLAGS="${MAKEFLAGS:--j$JOBS}"
 mkdir -p "$WORK"
 
@@ -143,6 +156,13 @@ if want template; then
   else
     echo "    app template present"
   fi
+fi
+
+if want lapy; then
+  echo "==> Lapy one-shot owned-root helper (privilege elevation)"
+  # Needs the PS5 SDK only; package.sh bundles its lapy.elf + manifest + MIT
+  # license into app0/share/kodi/system/elevation.
+  WORK="$WORK" bash "$HERE/bootstrap/lapy-helper.sh"
 fi
 
 cat <<MSG

@@ -1,0 +1,10 @@
+{
+  "elevation": {
+    "methods": [
+      { "id": "elf_9021", "enabled": true },
+      { "id": "elf_9020", "enabled": true },
+      { "id": "jailbreak_marker", "enabled": true },
+      { "id": "etahen_ipc", "enabled": true }
+    ]
+  }
+}

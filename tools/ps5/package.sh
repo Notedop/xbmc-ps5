@@ -182,6 +182,47 @@ if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
   cp -a "$TEST_ADDON/screensaver.ps5.sprx-test" "$STAGE/app0/share/kodi/addons/"
 fi
 
+echo "==> elevation configuration and one-shot helper into app0/share/kodi/system/elevation"
+ELEVATION_STAGE="$STAGE/app0/share/kodi/system/elevation"
+mkdir -p "$ELEVATION_STAGE"
+LAPY_SRC="${LAPY_HELPER_DIR:-$WORK/ps5-lapy-jb-daemon/build/owned_root_helper-$TITLE_ID}"
+python3 - "$TITLE_ID" "$LAPY_SRC" "$WORK/ps5-lapy-jb-daemon/LICENSE" "$ELEVATION_STAGE" \
+  "$ROOT/tools/ps5/elevation/elevation.json" \
+  "$ROOT/tools/ps5/patches/lapy/LAPY-PROTOCOL-SHA256" <<'PY' || exit 1
+import hashlib, json, shutil, sys
+from pathlib import Path
+
+title_id, lapy_src, lapy_license, stage, default_config, protocol_pin = map(Path, sys.argv[1:])
+elf, manifest_path = lapy_src / "lapy.elf", lapy_src / "lapy-manifest.json"
+for required in (elf, manifest_path, lapy_license):
+    if not required.is_file():
+        sys.exit(f"elevation helper inputs missing ({required}); "
+                 "build them first: bash tools/ps5/bootstrap.sh STEP=lapy")
+manifest = json.loads(manifest_path.read_text())
+
+def require(ok, why):
+    if not ok:
+        sys.exit(f"elevation helper: {why}")
+
+require(elf.read_bytes()[:4] == b"\x7fELF", "helper is not an ELF")
+require(manifest.get("target_title") == str(title_id), "helper built for another title")
+require(manifest.get("mode") == "elf-helper", "helper is not one-shot ELF-helper mode")
+require(manifest.get("max_requests") == 1, "helper may serve more than one request")
+require(manifest.get("protocol_sha256") == protocol_pin.read_text().strip(),
+        "helper protocol differs from patches/lapy/LAPY-PROTOCOL-SHA256")
+require(hashlib.sha256(elf.read_bytes()).hexdigest() == manifest.get("elf_sha256"),
+        "helper ELF differs from its build manifest")
+shutil.copyfile(elf, stage / "lapy.elf")
+shutil.copyfile(manifest_path, stage / "lapy-manifest.json")
+shutil.copyfile(lapy_license, stage / "Lapy-MIT.txt")
+config = json.loads(default_config.read_text())
+ids = [entry["id"] for entry in config["elevation"]["methods"]]
+require(ids == ["elf_9021", "elf_9020", "jailbreak_marker", "etahen_ipc"] and
+        all(entry["enabled"] for entry in config["elevation"]["methods"]),
+        "packaged default configuration must match the code defaults")
+shutil.copyfile(default_config, stage / "elevation.json")
+PY
+
 echo "==> 2. app directory from the demo template"
 APP="$STAGE/app"
 mkdir -p "$APP"

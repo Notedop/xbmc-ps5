@@ -24,6 +24,34 @@ CORE_IMPORTS = (
     "__unw_add_dynamic_eh_frame_section",
 )
 
+ELEVATION_METHOD_ORDER = ["elf_9021", "elf_9020", "jailbreak_marker", "etahen_ipc"]
+
+
+def verify_elevation(dist, title_id):
+    elevation = dist / "share/kodi/system/elevation"
+    require(elevation.is_dir(), "packaged elevation directory missing")
+    config = json.loads((elevation / "elevation.json").read_text())
+    methods = config["elevation"]["methods"]
+    require([entry["id"] for entry in methods] == ELEVATION_METHOD_ORDER and
+            all(entry["enabled"] for entry in methods),
+            "packaged elevation configuration changed")
+    require((elevation / "Lapy-MIT.txt").is_file(),
+            "helper license notice missing from the packaged title")
+    manifest = json.loads((elevation / "lapy-manifest.json").read_text())
+    pin = (Path(__file__).parent / "patches/lapy/LAPY-PROTOCOL-SHA256").read_text().strip()
+    require(manifest.get("protocol_sha256") == pin,
+            "packaged helper protocol differs from the pinned Lapy protocol")
+    require(manifest.get("target_title") == title_id and
+            manifest.get("mode") == "elf-helper" and manifest.get("max_requests") == 1,
+            "packaged helper must be the one-shot owned helper for this title")
+    require((elevation / "lapy.elf").read_bytes()[:4] == b"\x7fELF",
+            "packaged elevation helper is not an ELF")
+    require(digest(elevation / "lapy.elf") == manifest.get("elf_sha256"),
+            "packaged elevation helper differs from its build manifest")
+    return {"helper_build_id": manifest.get("build_id"),
+            "helper_sha256": digest(elevation / "lapy.elf"),
+            "protocol_sha256": pin}
+
 
 def program_headers(raw, *, executable=True):
     require(len(raw) >= 64 and raw[:7] == b"\x7fELF\x02\x01\x01",
@@ -298,6 +326,7 @@ def verify(app, sdk, archive_map):
         require(imports[nid(name)] ==
                 {"module": "libkodi-gl", "library": "libkodi-gl"},
                 f"title graphics must bind through the shared provider: {name}")
+    elevation = verify_elevation(dist, title_id)
     proof = {
         "schema": 1, "format": "ps5-shared-title-local-proof", "console_accepted": False,
         "eboot_sha256": digest(dist / "eboot.bin"),
@@ -325,6 +354,7 @@ def verify(app, sdk, archive_map):
             "proven_export_count": len(published),
             "proven_import_count": len(dependencies["imports"]),
         },
+        "elevation": elevation,
     }
     (dist / "ps5-shared-title-proof.json").write_text(json.dumps(proof, indent=2) + "\n")
     return proof

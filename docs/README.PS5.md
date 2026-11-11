@@ -25,13 +25,18 @@ tools/ps5/bootstrap.sh
 ```
 
 The script installs host packages, prepares the payload SDK and required system
-import stubs, builds the patched OpenGL SDK, and prepares the native-app template.
+import stubs, builds the patched OpenGL SDK, prepares the native-app template,
+and builds the bundled one-shot elevation helper.
 Budget 1-3 hours for the first run; it requests `sudo`. Re-running resumes an
 incomplete setup. To repeat one step:
 
 ```bash
-STEP=opengl tools/ps5/bootstrap.sh  # packages | sdk | stubs | opengl | template
+STEP=opengl tools/ps5/bootstrap.sh  # packages | sdk | stubs | opengl | template | lapy
 ```
+
+The equivalent argument form is `bash tools/ps5/bootstrap.sh STEP=opengl`.
+To build only the elevation helper with an existing payload SDK, use
+`bash tools/ps5/bootstrap.sh STEP=lapy`; this does not rebuild OpenGL.
 
 External sources default to `build/ps5-external`. To keep these expensive builds
 outside a disposable build directory:

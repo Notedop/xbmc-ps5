@@ -18,7 +18,6 @@
 #include "platform/xbmc.h"
 
 #include <cerrno>
-#include <chrono>
 #include <clocale>
 #include <cstdarg>
 #include <cstddef>
@@ -27,7 +26,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -93,21 +91,18 @@ void NotifySandboxFailure()
 
 bool OpenSandbox()
 {
-    KODI::PLATFORM::PS5::RequestSandboxOpen();
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!KODI::PLATFORM::PS5::IsSandboxOpen())
-    {
-        const int error = errno;
-        if (std::chrono::steady_clock::now() >= deadline)
-        {
-            Klogf("[kodi-ps5] cannot create or open %s: %s (errno=%d)\n",
-                  HOME_PATH, std::strerror(error), error);
-            NotifySandboxFailure();
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    }
-    return true;
+    const auto result = KODI::PLATFORM::PS5::RequestSandboxOpen();
+    if (result == KODI::PLATFORM::PS5::ElevationResult::opened)
+        return true;
+    const char* reason =
+        result == KODI::PLATFORM::PS5::ElevationResult::configError
+            ? "invalid elevation configuration"
+            : result == KODI::PLATFORM::PS5::ElevationResult::unsafe
+                  ? "elevation completion uncertain"
+                  : "no elevation method opened the sandbox";
+    Klogf("[kodi-ps5] cannot create or open %s: %s\n", HOME_PATH, reason);
+    NotifySandboxFailure();
+    return false;
 }
 
 bool SetEnvironment(const char* name, const std::string& value)

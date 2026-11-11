@@ -10,13 +10,26 @@
 
 namespace KODI::PLATFORM::PS5
 {
-// Ask a resident jailbreak daemon (PS5-Lapy-JB-Daemon, etaHEN) to open Kodi's
-// sandbox, so /data and USB drives (/mnt/usbN, /mnt/extN) become reachable:
-// the file-drop protocol - {"PID":"<pid>"} written to
-// /download0/etahen_jailbreak, which the daemon consumes. In the background;
-// logs the outcome. Does nothing without a daemon.
-// Call after the system modules Kodi needs later are loaded: once the sandbox
-// is open, loading a system module fails.
-void RequestSandboxOpen();
+enum class ElevationResult
+{
+  // IsSandboxOpen() is true: startup may continue.
+  opened,
+  // Every enabled method completed without opening the sandbox.
+  failed,
+  // The elevation configuration was invalid; no request was sent.
+  configError,
+  // A fully submitted request ended with uncertain completion: no further
+  // request may be sent and startup must stop.
+  unsafe,
+};
+
+// Request privilege elevation through the configured method sequence
+// (elf_9021, elf_9020, jailbreak marker, etaHEN IPC; see
+// /app0/share/kodi/system/elevation/elevation.json): send requests
+// sequentially, verifying with IsSandboxOpen() after each attempt.
+// Runs on the caller's thread; bounded waits, never concurrent requests.
+// Call after the system modules Kodi needs later are loaded: once the
+// sandbox is open, loading a system module fails.
+ElevationResult RequestSandboxOpen();
 bool IsSandboxOpen();
 } // namespace KODI::PLATFORM::PS5

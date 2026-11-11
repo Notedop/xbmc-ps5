@@ -2,6 +2,9 @@ set(SOURCES AppDirectory.cpp
             AsyncLogSink.cpp
             CacheDiagnostics.cpp
             CPUInfoPS5.cpp
+            ElevationConfig.cpp
+            ElevationElf.cpp
+            ElevationIpc.cpp
             GPUInfoPS5.cpp
             MemUtils.cpp
             PlatformPS5.cpp
@@ -15,6 +18,8 @@ set(HEADERS AppDirectory.h
             AsyncLogSink.h
             CacheDiagnostics.h
             CPUInfoPS5.h
+            ElevationConfig.h
+            ElevationMethods.h
             GPUInfoPS5.h
             PlatformPS5.h
             PS5InterfaceForCLog.h

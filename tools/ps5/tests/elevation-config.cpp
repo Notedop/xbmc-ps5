@@ -53,17 +53,17 @@ int main()
 
   ExpectStatus(ElevationConfigStatus::defaults,
                ParseElevationConfig("{}", order, error), "{}", "empty object");
-  ExpectOrder("elf_9021,elf_9020,jailbreak_marker,etahen_ipc", order, "empty object default");
+  ExpectOrder("elf_9021,jailbreak_marker,etahen_ipc", order, "empty object default");
 
   ExpectStatus(ElevationConfigStatus::defaults,
                ParseElevationConfig(R"({"title": "other"})", order, error), "no elevation",
                "missing elevation section");
-  ExpectOrder("elf_9021,elf_9020,jailbreak_marker,etahen_ipc", order, "no elevation default");
+  ExpectOrder("elf_9021,jailbreak_marker,etahen_ipc", order, "no elevation default");
 
   ExpectStatus(ElevationConfigStatus::defaults,
                ParseElevationConfig(R"({"elevation": {}})", order, error), "no methods",
                "elevation without methods");
-  ExpectOrder("elf_9021,elf_9020,jailbreak_marker,etahen_ipc", order, "no methods default");
+  ExpectOrder("elf_9021,jailbreak_marker,etahen_ipc", order, "no methods default");
 
   ExpectStatus(
       ElevationConfigStatus::configured,
@@ -78,9 +78,9 @@ int main()
       ParseElevationConfig(R"({"elevation": {"methods": [
           { "id": "elf_9021", "enabled": false },
           { "id": "jailbreak_marker" },
-          { "id": "elf_9020" }]}})", order, error),
+          { "id": "etahen_ipc" }]}})", order, error),
       "disabled method", "disabled entry dropped, others keep order");
-  ExpectOrder("jailbreak_marker,elf_9020", order, "disabled method");
+  ExpectOrder("jailbreak_marker,etahen_ipc", order, "disabled method");
 
   ExpectStatus(ElevationConfigStatus::configured,
                ParseElevationConfig(R"({"elevation": {"methods": []}})", order, error), "empty",
@@ -92,7 +92,6 @@ int main()
       ParseElevationConfig(R"({"elevation": {"methods": [
           { "id": "elf_9021", "enabled": false },
           { "id": "etahen_ipc", "enabled": false },
-          { "id": "elf_9020", "enabled": false },
           { "id": "jailbreak_marker", "enabled": false }]}})", order, error),
       "all disabled", "all-disabled stays configured, not defaults");
   ExpectOrder("", order, "all disabled");
@@ -109,8 +108,8 @@ int main()
 
   ExpectStatus(ElevationConfigStatus::error,
                ParseElevationConfig(R"({"elevation": {"methods": [
-          { "id": "elf_9020" },
-          { "id": "elf_9020" }]}})", order, error),
+          { "id": "elf_9021" },
+          { "id": "elf_9021" }]}})", order, error),
       "duplicate id", "duplicate method id is an error");
 
   ExpectStatus(ElevationConfigStatus::error,

@@ -24,7 +24,7 @@ CORE_IMPORTS = (
     "__unw_add_dynamic_eh_frame_section",
 )
 
-ELEVATION_METHOD_ORDER = ["elf_9021", "elf_9020", "jailbreak_marker", "etahen_ipc"]
+ELEVATION_METHOD_ORDER = ["elf_9021", "jailbreak_marker", "etahen_ipc"]
 
 
 def verify_elevation(dist, title_id):

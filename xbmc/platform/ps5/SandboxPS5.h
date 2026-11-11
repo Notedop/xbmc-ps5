@@ -24,7 +24,7 @@ enum class ElevationResult
 };
 
 // Request privilege elevation through the configured method sequence
-// (elf_9021, elf_9020, jailbreak marker, etaHEN IPC; see
+// (elf_9021, jailbreak marker, etaHEN IPC; see
 // /app0/share/kodi/system/elevation/elevation.json): send requests
 // sequentially, verifying with IsSandboxOpen() after each attempt.
 // Runs on the caller's thread; bounded waits, never concurrent requests.

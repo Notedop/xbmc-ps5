@@ -217,7 +217,7 @@ shutil.copyfile(manifest_path, stage / "lapy-manifest.json")
 shutil.copyfile(lapy_license, stage / "Lapy-MIT.txt")
 config = json.loads(default_config.read_text())
 ids = [entry["id"] for entry in config["elevation"]["methods"]]
-require(ids == ["elf_9021", "elf_9020", "jailbreak_marker", "etahen_ipc"] and
+require(ids == ["elf_9021", "jailbreak_marker", "etahen_ipc"] and
         all(entry["enabled"] for entry in config["elevation"]["methods"]),
         "packaged default configuration must match the code defaults")
 shutil.copyfile(default_config, stage / "elevation.json")

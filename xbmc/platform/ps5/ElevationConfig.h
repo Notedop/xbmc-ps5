@@ -34,7 +34,7 @@ enum class ElevationConfigStatus
 
 const char* ElevationMethodName(ElevationMethodId id);
 
-// Default order: elf_9021, elf_9020, jailbreak_marker, etahen_ipc.
+// Default order: elf_9021, jailbreak_marker, etahen_ipc.
 std::vector<ElevationMethodId> DefaultElevationOrder();
 
 // Parse the elevation.json body. Unknown ids, duplicates, wrong types or

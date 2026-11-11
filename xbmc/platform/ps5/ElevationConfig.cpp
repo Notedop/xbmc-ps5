@@ -22,7 +22,7 @@ namespace
 {
 using namespace KODI::PLATFORM::PS5;
 
-constexpr std::array<std::pair<const char*, ElevationMethodId>, 4> kMethodIds{{
+constexpr std::array<std::pair<const char*, ElevationMethodId>, 3> kMethodIds{{
     { "elf_9021", ElevationMethodId::elf9021 },
     { "jailbreak_marker", ElevationMethodId::jailbreakMarker },
     { "etahen_ipc", ElevationMethodId::etahenIpc },

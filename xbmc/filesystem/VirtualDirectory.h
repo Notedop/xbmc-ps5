@@ -13,6 +13,7 @@
 #include "threads/IRunnable.h"
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace XFILE
@@ -26,6 +27,8 @@ namespace XFILE
   {
   public:
     CVirtualDirectory(void);
+    // Copy configuration, not an active directory fetch.
+    CVirtualDirectory(const CVirtualDirectory& other);
     ~CVirtualDirectory(void) override;
     bool GetDirectory(const CURL& url, CFileItemList &items) override;
     void CancelDirectory() override;
@@ -46,8 +49,8 @@ namespace XFILE
 
     void AllowNonLocalSources(bool allow) { m_allowNonLocalSources = allow; }
 
-    std::shared_ptr<IDirectory> GetDirImpl() { return m_pDir; }
-    void ReleaseDirImpl() { m_pDir.reset(); }
+    std::shared_ptr<IDirectory> GetDirImpl();
+    void ReleaseDirImpl();
 
   protected:
     void CacheThumbs(CFileItemList &items);
@@ -55,6 +58,9 @@ namespace XFILE
     std::vector<CMediaSource> m_sources;
     bool m_allowNonLocalSources;
     std::shared_ptr<IDirectory> m_pDir;
+
+  private:
+    std::mutex m_dirMutex;
   };
 
   class CGetDirectoryItems final : public IRunnable
@@ -74,9 +80,10 @@ namespace XFILE
     void Cancel() override { m_dir.CancelDirectory(); }
 
     bool GetResult() const { return m_result; }
+    std::shared_ptr<IDirectory> GetDirImpl() { return m_dir.GetDirImpl(); }
 
   private:
-    CVirtualDirectory& m_dir;
+    CVirtualDirectory m_dir;
     const CURL& m_url;
     CFileItemList& m_items;
     bool m_useDir{false};

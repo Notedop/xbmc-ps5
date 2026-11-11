@@ -31,6 +31,13 @@ CVirtualDirectory::CVirtualDirectory(void)
   m_allowNonLocalSources = true;
 }
 
+CVirtualDirectory::CVirtualDirectory(const CVirtualDirectory& other)
+  : IDirectory(other),
+    m_sources(other.m_sources),
+    m_allowNonLocalSources(other.m_allowNonLocalSources)
+{
+}
+
 CVirtualDirectory::~CVirtualDirectory(void) = default;
 
 /*!
@@ -66,11 +73,16 @@ bool CVirtualDirectory::GetDirectory(const CURL& url, CFileItemList &items, bool
   if (!strPath.empty() && strPath != "files://")
   {
     CURL realURL = URIUtils::SubstitutePath(url);
-    if (!m_pDir)
-      m_pDir.reset(CDirectoryFactory::Create(realURL));
-    bool ret = CDirectory::GetDirectory(strPath, m_pDir, items, m_strFileMask, flags);
+    std::shared_ptr<IDirectory> directory;
+    {
+      std::unique_lock lock(m_dirMutex);
+      if (!m_pDir)
+        m_pDir.reset(CDirectoryFactory::Create(realURL));
+      directory = m_pDir;
+    }
+    bool ret = CDirectory::GetDirectory(strPath, directory, items, m_strFileMask, flags);
     if (!keepImpl)
-      m_pDir.reset();
+      ReleaseDirImpl();
     return ret;
   }
 
@@ -90,8 +102,23 @@ bool CVirtualDirectory::GetDirectory(const CURL& url, CFileItemList &items, bool
 
 void CVirtualDirectory::CancelDirectory()
 {
-  if (m_pDir)
-    m_pDir->CancelDirectory();
+  if (const auto directory = GetDirImpl())
+    directory->CancelDirectory();
+}
+
+std::shared_ptr<IDirectory> CVirtualDirectory::GetDirImpl()
+{
+  std::unique_lock lock(m_dirMutex);
+  return m_pDir;
+}
+
+void CVirtualDirectory::ReleaseDirImpl()
+{
+  std::shared_ptr<IDirectory> directory;
+  {
+    std::unique_lock lock(m_dirMutex);
+    directory.swap(m_pDir);
+  }
 }
 
 /*!
@@ -209,4 +236,3 @@ void CVirtualDirectory::GetSources(std::vector<CMediaSource>& shares) const
 #endif
 }
 }
-

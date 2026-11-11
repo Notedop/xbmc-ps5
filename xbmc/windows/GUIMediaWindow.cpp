@@ -2227,8 +2227,9 @@ bool CGUIMediaWindow::GetDirectoryItems(CURL &url, CFileItemList &items, bool us
     }
     else if (!getItems.GetResult())
     {
-      if (CServiceBroker::GetAppMessenger()->IsProcessThread() && m_rootDir.GetDirImpl() &&
-          !m_rootDir.GetDirImpl()->ProcessRequirements())
+      const auto directory = getItems.GetDirImpl();
+      if (CServiceBroker::GetAppMessenger()->IsProcessThread() && directory &&
+          !directory->ProcessRequirements())
       {
         ret = false;
       }
@@ -2238,7 +2239,6 @@ bool CGUIMediaWindow::GetDirectoryItems(CURL &url, CFileItemList &items, bool us
       }
     }
 
-    m_rootDir.ReleaseDirImpl();
     return ret;
   }
   else

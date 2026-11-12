@@ -2,6 +2,9 @@
 
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -43,6 +46,87 @@ void ExpectOrder(const std::string& expected, const std::vector<ElevationMethodI
     std::fflush(stdout);
     std::abort();
   }
+}
+
+void TestConfigFiles()
+{
+  char temporary[] = "/tmp/kodi-elevation-config-XXXXXX";
+  const char* directory = mkdtemp(temporary);
+  assert(directory);
+  struct Cleanup
+  {
+    std::filesystem::path path;
+    ~Cleanup() { std::filesystem::remove_all(path); }
+  } cleanup{directory};
+  const std::string config = std::string(directory) + "/config.json";
+  const std::string defaults = std::string(directory) + "/default-config.json";
+  const auto write = [](const std::string& path, const std::string& body)
+  {
+    std::ofstream file(path);
+    file << body;
+    file.close();
+    assert(file);
+  };
+  std::vector<ElevationMethodId> order;
+  std::string error = "previous error";
+  const auto load = [&](ElevationConfigStatus expected, const std::string& what)
+  {
+    ExpectStatus(expected, LoadElevationConfig(config, defaults, order, error), "", what);
+  };
+
+  load(ElevationConfigStatus::defaults, "both files missing");
+  ExpectOrder("elf_9021,jailbreak_marker,etahen_ipc", order, "missing files default");
+  assert(error.empty());
+
+  write(defaults, R"({"elevation":{"methods":[{"id":"jailbreak_marker"}]}})");
+  load(ElevationConfigStatus::configured, "packaged fallback");
+  ExpectOrder("jailbreak_marker", order, "packaged fallback");
+
+  write(config, R"({"elevation":{"methods":[{"id":"etahen_ipc"}]}})");
+  load(ElevationConfigStatus::configured, "user config takes precedence");
+  ExpectOrder("etahen_ipc", order, "user config takes precedence");
+
+  write(defaults, "{");
+  load(ElevationConfigStatus::configured, "unused invalid fallback");
+  ExpectOrder("etahen_ipc", order, "unused invalid fallback");
+
+  write(defaults, R"({"elevation":{"methods":[{"id":"jailbreak_marker"}]}})");
+  write(config, "{}");
+  load(ElevationConfigStatus::defaults, "user config without elevation does not fall back");
+  ExpectOrder("elf_9021,jailbreak_marker,etahen_ipc", order, "user config without elevation");
+
+  write(config, R"({"elevation":{"methods":[]}})");
+  load(ElevationConfigStatus::configured, "user config disables all methods");
+  ExpectOrder("", order, "user config disables all methods");
+
+  write(config, "{");
+  load(ElevationConfigStatus::error, "invalid user config does not fall back");
+  assert(error.starts_with(config + ":"));
+
+  write(config, "");
+  load(ElevationConfigStatus::error, "empty user config does not fall back");
+
+  write(config, std::string(64u * 1024u + 1, ' '));
+  load(ElevationConfigStatus::error, "oversized user config does not fall back");
+  assert(error == config + ": exceeds 64 KiB");
+
+  ExpectStatus(ElevationConfigStatus::error,
+               LoadElevationConfig(config + "/config.json", defaults, order, error), "",
+               "invalid parent is not a missing user config");
+
+  std::filesystem::remove(config);
+  std::filesystem::create_directory(config);
+  load(ElevationConfigStatus::error, "unreadable user config does not fall back");
+  assert(error.starts_with(config + ":"));
+  std::filesystem::remove(config);
+
+  write(defaults, "{");
+  load(ElevationConfigStatus::error, "invalid packaged config");
+  assert(error.starts_with(defaults + ":"));
+  std::filesystem::remove(defaults);
+  load(ElevationConfigStatus::defaults, "missing files reset a previously configured order");
+  ExpectOrder("elf_9021,jailbreak_marker,etahen_ipc", order, "missing files reset order");
+  assert(error.empty());
 }
 } // namespace
 
@@ -142,6 +226,7 @@ int main()
           { "id": "made_up", "enabled": false }]}})", order, error),
       "unknown disabled", "unknown id is an error even when disabled");
 
+  TestConfigFiles();
   std::printf("elevation config tests passed\n");
   return 0;
 }

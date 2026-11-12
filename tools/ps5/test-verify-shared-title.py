@@ -2,11 +2,14 @@
 """Regression checks for strict native title extraction and ownership proof."""
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -72,6 +75,54 @@ PROVIDER = {
 
 
 class SharedTitleProofTest(unittest.TestCase):
+    def test_elevation_packaged_at_title_root_with_runtime_names(self):
+        script = (ROOT / "tools/ps5/package.sh").read_text()
+        staging = script.split('python3 - "$TITLE_ID" "$LAPY_SRC"', 1)[1]
+        staging = staging.split("<<'PY' || exit 1\n", 1)[1].split("\nPY\n", 1)[0]
+        copy = script.split('cp "$ELEVATION_STAGE/default-config.json"', 1)[1].split('\nif [', 1)[0]
+        copy = 'cp "$ELEVATION_STAGE/default-config.json"' + copy
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, stage, dist = (root / name for name in ("source", "stage", "title"))
+            for directory in (source, stage, dist):
+                directory.mkdir()
+            elf = b"\x7fELFtest-helper"
+            (source / "lapy.elf").write_bytes(elf)
+            pin = ROOT / "tools/ps5/patches/lapy/LAPY-PROTOCOL-SHA256"
+            manifest = {"target_title": "PPSA99420", "mode": "elf-helper", "max_requests": 1,
+                        "protocol_sha256": pin.read_text().strip(),
+                        "elf_sha256": hashlib.sha256(elf).hexdigest()}
+            (source / "lapy-manifest.json").write_text(json.dumps(manifest))
+            license = root / "LICENSE"
+            license.write_text("test license")
+            subprocess.run([sys.executable, "-c", staging, "PPSA99420", str(source),
+                            str(license), str(stage),
+                            str(ROOT / "tools/ps5/elevation/default-config.json"), str(pin)], check=True)
+            subprocess.run(["bash", "-c", copy], check=True,
+                           env={**os.environ, "ELEVATION_STAGE": str(stage), "DIST": str(dist)})
+            self.assertEqual({path.name for path in dist.iterdir()},
+                             {"default-config.json", "elevation-helper.elf", "lapy-manifest.json",
+                              "Lapy-MIT.txt"})
+            user_config = '{"elevation":{"methods":[]}}'
+            (dist / "config.json").write_text(user_config)
+            subprocess.run(["bash", "-c", copy], check=True,
+                           env={**os.environ, "ELEVATION_STAGE": str(stage), "DIST": str(dist)})
+            self.assertEqual((dist / "config.json").read_text(), user_config)
+            proof = MODULE.verify_elevation(dist, "PPSA99420")
+            self.assertEqual(proof["helper_sha256"], manifest["elf_sha256"])
+            for filename, source_file in (("config.json", "SandboxPS5.cpp"),
+                                          ("default-config.json", "SandboxPS5.cpp"),
+                                          ("elevation-helper.elf", "ElevationElf.cpp")):
+                runtime = (ROOT / "xbmc/platform/ps5" / source_file).read_text()
+                self.assertIn(f'"/app0/{filename}"', runtime)
+            (dist / "elevation-helper.elf").write_bytes(elf + b"changed")
+            with self.assertRaisesRegex(ValueError, "differs from its build manifest"):
+                MODULE.verify_elevation(dist, "PPSA99420")
+
+    def test_deployment_preserves_user_configuration(self):
+        script = (ROOT / "tools/ps5/package.sh").read_text()
+        self.assertIn("mirror -R --delete --exclude '^config[.]json$'", script)
+
     def test_shared_network_has_one_owner_and_preserves_old_sdk_support(self):
         symbol = (0, 0x12, 0, 0, 0, 0)
         symbols = {"getaddrinfo": symbol}

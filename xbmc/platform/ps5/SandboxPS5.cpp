@@ -35,7 +35,8 @@ using namespace KODI::PLATFORM::PS5;
 constexpr const char* kRequest = "/download0/etahen_jailbreak";
 constexpr const char* kEscapedTitleRoot = "/data/homebrew/kodi-psmc";
 constexpr const char* kSandboxMnt = "/mnt/sandbox";
-constexpr const char* kElevationConfig = "/app0/share/kodi/system/elevation/elevation.json";
+constexpr const char* kElevationConfig = "/app0/config.json";
+constexpr const char* kDefaultElevationConfig = "/app0/default-config.json";
 constexpr int kElfPort9021 = 9021;
 
 void Klog(const char* text)
@@ -158,7 +159,8 @@ ElevationResult KODI::PLATFORM::PS5::RequestSandboxOpen()
 
   std::vector<ElevationMethodId> order;
   std::string error;
-  const ElevationConfigStatus status = LoadElevationConfig(kElevationConfig, order, error);
+  const ElevationConfigStatus status =
+      LoadElevationConfig(kElevationConfig, kDefaultElevationConfig, order, error);
   if (status == ElevationConfigStatus::error)
   {
     Klogf("[kodi-ps5] elevation: configuration error: %s\n", error.c_str());

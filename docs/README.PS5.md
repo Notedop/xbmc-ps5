@@ -201,6 +201,14 @@ stage but excluded from the distributable ZIP.
 
 After manually installing the title, restart ShadowMountPlus and launch Kodi.
 
+The title ships `default-config.json` at its root. To customize the elevation
+method order or enabled methods, copy it to `config.json` beside `eboot.bin`
+and edit that copy. Startup uses `config.json` when present, otherwise
+`default-config.json`; an invalid or unreadable selected file is an error, not
+a reason to fall back. If neither file exists, the built-in defaults apply.
+Packages update only `default-config.json`, and the optional FTP deployment
+preserves `config.json`, so upgrades leave user configuration intact.
+
 ## 6. Troubleshooting and rebuild scope
 
 - **Bootstrap or SDK failures:** check the configured prefixes and pinned source

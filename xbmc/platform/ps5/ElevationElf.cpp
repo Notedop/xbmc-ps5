@@ -86,7 +86,7 @@ static_assert(sizeof(LapyMessage) == 24);
 // same option set and value the helper exchange is built and tested with.
 constexpr int kIoTimeoutUs = 5'000'000;
 
-constexpr const char* kHelperElf = "/app0/share/kodi/system/elevation/lapy.elf";
+constexpr const char* kHelperElf = "/app0/elevation-helper.elf";
 
 const char* LapyStatusName(uint32_t status)
 {

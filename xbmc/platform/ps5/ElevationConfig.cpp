@@ -55,12 +55,12 @@ ElevationConfigStatus ParseElevationConfig(const std::string& json,
   const nlohmann::json parsed = nlohmann::json::parse(json, nullptr, false);
   if (parsed.is_discarded())
   {
-    error = "elevation.json: malformed JSON";
+    error = "malformed JSON";
     return ElevationConfigStatus::error;
   }
   if (!parsed.is_object())
   {
-    error = "elevation.json: expected a JSON object";
+    error = "expected a JSON object";
     return ElevationConfigStatus::error;
   }
   const auto elevation = parsed.find("elevation");
@@ -68,7 +68,7 @@ ElevationConfigStatus ParseElevationConfig(const std::string& json,
     return ElevationConfigStatus::defaults;
   if (!elevation->is_object())
   {
-    error = "elevation.json: \"elevation\" must be an object";
+    error = "\"elevation\" must be an object";
     return ElevationConfigStatus::error;
   }
   const auto methods = elevation->find("methods");
@@ -76,7 +76,7 @@ ElevationConfigStatus ParseElevationConfig(const std::string& json,
     return ElevationConfigStatus::defaults;
   if (!methods->is_array())
   {
-    error = "elevation.json: \"elevation.methods\" must be an array";
+    error = "\"elevation.methods\" must be an array";
     return ElevationConfigStatus::error;
   }
 
@@ -84,7 +84,7 @@ ElevationConfigStatus ParseElevationConfig(const std::string& json,
   for (size_t index = 0; index < methods->size(); ++index)
   {
     const auto& entry = (*methods)[index];
-    const std::string where = "elevation.json: elevation.methods[" + std::to_string(index) + "]";
+    const std::string where = "elevation.methods[" + std::to_string(index) + "]";
     if (!entry.is_object())
     {
       error = where + ": expected an object";
@@ -134,15 +134,24 @@ ElevationConfigStatus ParseElevationConfig(const std::string& json,
 }
 
 ElevationConfigStatus LoadElevationConfig(const std::string& path,
+                                          const std::string& defaultPath,
                                           std::vector<ElevationMethodId>& order,
                                           std::string& error)
 {
-  const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  order = DefaultElevationOrder();
+  error.clear();
+  std::string selectedPath = path;
+  int fd = open(selectedPath.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0 && errno == ENOENT)
+  {
+    selectedPath = defaultPath;
+    fd = open(selectedPath.c_str(), O_RDONLY | O_CLOEXEC);
+  }
   if (fd < 0)
   {
-    if (errno == ENOENT || errno == ENOTDIR)
+    if (errno == ENOENT)
       return ElevationConfigStatus::defaults;
-    error = path + ": " + std::strerror(errno);
+    error = selectedPath + ": " + std::strerror(errno);
     return ElevationConfigStatus::error;
   }
   std::string body;
@@ -162,14 +171,17 @@ ElevationConfigStatus LoadElevationConfig(const std::string& path,
   close(fd);
   if (tooLarge)
   {
-    error = path + ": exceeds 64 KiB";
+    error = selectedPath + ": exceeds 64 KiB";
     return ElevationConfigStatus::error;
   }
   if (count < 0)
   {
-    error = path + ": read failed: " + std::strerror(readError);
+    error = selectedPath + ": read failed: " + std::strerror(readError);
     return ElevationConfigStatus::error;
   }
-  return ParseElevationConfig(body, order, error);
+  const ElevationConfigStatus status = ParseElevationConfig(body, order, error);
+  if (status == ElevationConfigStatus::error)
+    error = selectedPath + ": " + error;
+  return status;
 }
 } // namespace KODI::PLATFORM::PS5

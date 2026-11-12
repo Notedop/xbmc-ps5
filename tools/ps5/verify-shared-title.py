@@ -28,9 +28,9 @@ ELEVATION_METHOD_ORDER = ["elf_9021", "jailbreak_marker", "etahen_ipc"]
 
 
 def verify_elevation(dist, title_id):
-    elevation = dist / "share/kodi/system/elevation"
+    elevation = dist
     require(elevation.is_dir(), "packaged elevation directory missing")
-    config = json.loads((elevation / "elevation.json").read_text())
+    config = json.loads((elevation / "default-config.json").read_text())
     methods = config["elevation"]["methods"]
     require([entry["id"] for entry in methods] == ELEVATION_METHOD_ORDER and
             all(entry["enabled"] for entry in methods),
@@ -44,12 +44,12 @@ def verify_elevation(dist, title_id):
     require(manifest.get("target_title") == title_id and
             manifest.get("mode") == "elf-helper" and manifest.get("max_requests") == 1,
             "packaged helper must be the one-shot owned helper for this title")
-    require((elevation / "lapy.elf").read_bytes()[:4] == b"\x7fELF",
+    require((elevation / "elevation-helper.elf").read_bytes()[:4] == b"\x7fELF",
             "packaged elevation helper is not an ELF")
-    require(digest(elevation / "lapy.elf") == manifest.get("elf_sha256"),
+    require(digest(elevation / "elevation-helper.elf") == manifest.get("elf_sha256"),
             "packaged elevation helper differs from its build manifest")
     return {"helper_build_id": manifest.get("build_id"),
-            "helper_sha256": digest(elevation / "lapy.elf"),
+            "helper_sha256": digest(elevation / "elevation-helper.elf"),
             "protocol_sha256": pin}
 
 

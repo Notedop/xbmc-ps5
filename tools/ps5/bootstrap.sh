@@ -160,8 +160,8 @@ fi
 
 if want lapy; then
   echo "==> Lapy one-shot owned-root helper (privilege elevation)"
-  # Needs the PS5 SDK only; package.sh bundles its lapy.elf + manifest + MIT
-  # license into app0/share/kodi/system/elevation.
+  # Needs the PS5 SDK only; package.sh renames upstream lapy.elf to
+  # app0/elevation-helper.elf and bundles its manifest and MIT license alongside it.
   WORK="$WORK" bash "$HERE/bootstrap/lapy-helper.sh"
 fi
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Check out the pinned Lapy jailbreak daemon and build the one-shot owned
 # root helper ELF for Kodi's own title, for tools/ps5/package.sh to bundle
-# into app0/share/kodi/system/elevation.
+# into app0/ as elevation-helper.elf, alongside default-config.json and eboot.bin.
 #
 # Upstream: https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon (MIT, see its
 # LICENSE, which package.sh stages next to the ELF). Pinned commit:

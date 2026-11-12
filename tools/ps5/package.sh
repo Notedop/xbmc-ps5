@@ -182,12 +182,12 @@ if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
   cp -a "$TEST_ADDON/screensaver.ps5.sprx-test" "$STAGE/app0/share/kodi/addons/"
 fi
 
-echo "==> elevation configuration and one-shot helper into app0/share/kodi/system/elevation"
-ELEVATION_STAGE="$STAGE/app0/share/kodi/system/elevation"
+echo "==> elevation configuration and one-shot helper into app0/"
+ELEVATION_STAGE="$STAGE/app0/"
 mkdir -p "$ELEVATION_STAGE"
 LAPY_SRC="${LAPY_HELPER_DIR:-$WORK/ps5-lapy-jb-daemon/build/owned_root_helper-$TITLE_ID}"
 python3 - "$TITLE_ID" "$LAPY_SRC" "$WORK/ps5-lapy-jb-daemon/LICENSE" "$ELEVATION_STAGE" \
-  "$ROOT/tools/ps5/elevation/elevation.json" \
+  "$ROOT/tools/ps5/elevation/default-config.json" \
   "$ROOT/tools/ps5/patches/lapy/LAPY-PROTOCOL-SHA256" <<'PY' || exit 1
 import hashlib, json, shutil, sys
 from pathlib import Path
@@ -212,7 +212,7 @@ require(manifest.get("protocol_sha256") == protocol_pin.read_text().strip(),
         "helper protocol differs from patches/lapy/LAPY-PROTOCOL-SHA256")
 require(hashlib.sha256(elf.read_bytes()).hexdigest() == manifest.get("elf_sha256"),
         "helper ELF differs from its build manifest")
-shutil.copyfile(elf, stage / "lapy.elf")
+shutil.copyfile(elf, stage / "elevation-helper.elf")
 shutil.copyfile(manifest_path, stage / "lapy-manifest.json")
 shutil.copyfile(lapy_license, stage / "Lapy-MIT.txt")
 config = json.loads(default_config.read_text())
@@ -220,7 +220,7 @@ ids = [entry["id"] for entry in config["elevation"]["methods"]]
 require(ids == ["elf_9021", "jailbreak_marker", "etahen_ipc"] and
         all(entry["enabled"] for entry in config["elevation"]["methods"]),
         "packaged default configuration must match the code defaults")
-shutil.copyfile(default_config, stage / "elevation.json")
+shutil.copyfile(default_config, stage / "default-config.json")
 PY
 
 echo "==> 2. app directory from the demo template"
@@ -434,6 +434,8 @@ PY
 echo "==> 6. Kodi data into the title folder"
 mkdir -p "$DIST/share"
 cp -a "$STAGE/app0/share/kodi" "$DIST/share/"
+cp "$ELEVATION_STAGE/default-config.json" "$ELEVATION_STAGE/elevation-helper.elf" \
+  "$ELEVATION_STAGE/lapy-manifest.json" "$ELEVATION_STAGE/Lapy-MIT.txt" "$DIST/"
 if [ "$PS5_TEST_BINARY_ADDON" = "1" ]; then
   cmp "$TEST_ADDON/screensaver.ps5.sprx-test/screensaver.ps5.sprx-test.sprx" \
     "$DIST/share/kodi/addons/screensaver.ps5.sprx-test/screensaver.ps5.sprx-test.sprx"
@@ -564,7 +566,7 @@ if [ -n "${PS5_HOST:-}" ]; then
     echo "!! lftp is required for deployment; install lftp or copy the folder manually" >&2; exit 1; }
   echo "==> uploading to ftp://$PS5_HOST:${PS5_FTP_PORT:-2121}/data/homebrew/$TITLE_ID"
   # Console timestamps can run ahead; always re-send the launcher and all modules.
-  lftp -e "set cmd:fail-exit yes; mirror -R --delete --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST' '/data/homebrew/$TITLE_ID'; put -O '/data/homebrew/$TITLE_ID' '$DIST/eboot.bin'; mirror -R --transfer-all --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST/sce_module' '/data/homebrew/$TITLE_ID/sce_module'; quit" -p "${PS5_FTP_PORT:-2121}" "$PS5_HOST"
+  lftp -e "set cmd:fail-exit yes; mirror -R --delete --exclude '^config[.]json$' --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST' '/data/homebrew/$TITLE_ID'; put -O '/data/homebrew/$TITLE_ID' '$DIST/eboot.bin'; mirror -R --transfer-all --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST/sce_module' '/data/homebrew/$TITLE_ID/sce_module'; quit" -p "${PS5_FTP_PORT:-2121}" "$PS5_HOST"
 fi
 
 echo

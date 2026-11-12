@@ -37,16 +37,17 @@ const char* ElevationMethodName(ElevationMethodId id);
 // Default order: elf_9021, jailbreak_marker, etahen_ipc.
 std::vector<ElevationMethodId> DefaultElevationOrder();
 
-// Parse the elevation.json body. Unknown ids, duplicates, wrong types or
+// Parse the configuration body. Unknown ids, duplicates, wrong types or
 // malformed JSON produce ElevationConfigStatus::error so startup can stop
 // instead of silently skipping a method the user meant to enable.
 ElevationConfigStatus ParseElevationConfig(const std::string& json,
                                            std::vector<ElevationMethodId>& order,
                                            std::string& error);
 
-// Read the file at path and parse it. A missing file uses the defaults; an
-// existing but unreadable file is a configuration error.
+// Read path, or defaultPath only if path is missing. If both are missing, use
+// the built-in defaults. An existing invalid or unreadable file is an error.
 ElevationConfigStatus LoadElevationConfig(const std::string& path,
+                                          const std::string& defaultPath,
                                           std::vector<ElevationMethodId>& order,
                                           std::string& error);
 } // namespace KODI::PLATFORM::PS5

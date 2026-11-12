@@ -35,6 +35,8 @@ def verify_elevation(dist, title_id):
     require([entry["id"] for entry in methods] == ELEVATION_METHOD_ORDER and
             all(entry["enabled"] for entry in methods),
             "packaged elevation configuration changed")
+    require(config.get("debug") == {"enabled": False, "video": False, "addons": False},
+            "packaged debug settings must default to disabled")
     require((elevation / "Lapy-MIT.txt").is_file(),
             "helper license notice missing from the packaged title")
     manifest = json.loads((elevation / "lapy-manifest.json").read_text())

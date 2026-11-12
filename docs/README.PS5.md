@@ -201,13 +201,40 @@ stage but excluded from the distributable ZIP.
 
 After manually installing the title, restart ShadowMountPlus and launch Kodi.
 
-The title ships `default-config.json` at its root. To customize the elevation
-method order or enabled methods, copy it to `config.json` beside `eboot.bin`
+The title ships `title/default-config.json` from the repository as
+`default-config.json` at its root. To customize elevation or
+debug settings, copy it to `config.json` beside `eboot.bin`
 and edit that copy. Startup uses `config.json` when present, otherwise
 `default-config.json`; an invalid or unreadable selected file is an error, not
 a reason to fall back. If neither file exists, the built-in defaults apply.
 Packages update only `default-config.json`, and the optional FTP deployment
 preserves `config.json`, so upgrades leave user configuration intact.
+Configuration is loaded and validated once before sandbox elevation, even when
+the sandbox is already open. Missing settings use built-in defaults; the two
+files are not merged.
+
+Debug settings replace the old `kodi-debug`, `kodi-video-debug` and
+`kodi-addon-debug` marker files, which are no longer read:
+
+```json
+{
+  "debug": {
+    "enabled": false,
+    "video": false,
+    "addons": false
+  }
+}
+```
+
+Set `debug.enabled` to `true` for Kodi debug logging and the background network
+self-test, `debug.video` for detailed video diagnostics, or `debug.addons` for
+binary add-on/inputstream diagnostics. All three are independent booleans and
+default to `false`. Restart Kodi after changing them. Startup passes the typed
+configuration to elevation and debug setup; debug setup exports the existing
+`KODI_PS5_*_DEBUG` environment flags for Kodi and external add-on consumers.
+The old `kodi-reset` and `kodi-uninstall` markers are no longer read; startup
+does not delete userdata based on marker files.
+Run `bash tools/ps5/test-config.sh` for host-side configuration regression checks.
 
 ## 6. Troubleshooting and rebuild scope
 
@@ -225,7 +252,5 @@ preserves `config.json`, so upgrades leave user configuration intact.
 
 Writable Kodi data is under `/data/homebrew/kodi-psmc/.kodi`; the file log is
 `/data/homebrew/kodi-psmc/.kodi/temp/kodi.log`.
-For startup troubleshooting, create an empty `kodi-debug` file in
-`/data/homebrew/kodi-psmc` and restart Kodi. `kodi-video-debug` enables detailed
-video diagnostics independently. Remove diagnostic markers and restart when
-finished; packaging does not create or remove them.
+For startup troubleshooting, enable the relevant `debug` settings in the title's
+`config.json` and restart Kodi. Set them back to `false` and restart when finished.

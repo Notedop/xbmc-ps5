@@ -97,7 +97,7 @@ class SharedTitleProofTest(unittest.TestCase):
             license.write_text("test license")
             subprocess.run([sys.executable, "-c", staging, "PPSA99420", str(source),
                             str(license), str(stage),
-                            str(ROOT / "tools/ps5/elevation/default-config.json"), str(pin)], check=True)
+                            str(ROOT / "title/default-config.json"), str(pin)], check=True)
             subprocess.run(["bash", "-c", copy], check=True,
                            env={**os.environ, "ELEVATION_STAGE": str(stage), "DIST": str(dist)})
             self.assertEqual({path.name for path in dist.iterdir()},
@@ -110,14 +110,39 @@ class SharedTitleProofTest(unittest.TestCase):
             self.assertEqual((dist / "config.json").read_text(), user_config)
             proof = MODULE.verify_elevation(dist, "PPSA99420")
             self.assertEqual(proof["helper_sha256"], manifest["elf_sha256"])
-            for filename, source_file in (("config.json", "SandboxPS5.cpp"),
-                                          ("default-config.json", "SandboxPS5.cpp"),
+            for filename, source_file in (("config.json", "main.cpp"),
+                                          ("default-config.json", "main.cpp"),
                                           ("elevation-helper.elf", "ElevationElf.cpp")):
                 runtime = (ROOT / "xbmc/platform/ps5" / source_file).read_text()
                 self.assertIn(f'"/app0/{filename}"', runtime)
             (dist / "elevation-helper.elf").write_bytes(elf + b"changed")
             with self.assertRaisesRegex(ValueError, "differs from its build manifest"):
                 MODULE.verify_elevation(dist, "PPSA99420")
+            (dist / "elevation-helper.elf").write_bytes(elf)
+            default_config = dist / "default-config.json"
+            config = json.loads(default_config.read_text())
+            config["debug"]["addons"] = True
+            default_config.write_text(json.dumps(config))
+            with self.assertRaisesRegex(ValueError, "debug settings must default to disabled"):
+                MODULE.verify_elevation(dist, "PPSA99420")
+
+    def test_configuration_loaded_once_before_sandbox_and_shared_with_consumers(self):
+        source = (ROOT / "xbmc/platform/ps5/main.cpp").read_text()
+        sandbox = (ROOT / "xbmc/platform/ps5/SandboxPS5.cpp").read_text()
+        self.assertEqual(source.count("::LoadConfig("), 1)
+        self.assertLess(source.index("::LoadConfig("), source.index("if (!OpenSandbox(config))"))
+        self.assertIn("RequestSandboxOpen(config)", source)
+        self.assertIn("ApplyDebugConfig(config.debug, error)", source)
+        self.assertIn("if (config.debug.enabled)", source)
+        self.assertIn("config.elevationMethods", sandbox)
+        self.assertNotIn("LoadConfig", sandbox)
+        self.assertNotIn("config.json", sandbox)
+        for marker in ("kodi-debug", "kodi-video-debug", "kodi-addon-debug"):
+            self.assertNotIn(f'"{marker}"', source)
+        for marker in ("kodi-reset", "kodi-uninstall"):
+            self.assertNotIn(marker, source)
+        for helper in ("ApplyMaintenanceSwitches", "RemoveDataTree", "ConsumeSwitch", "SwitchPresent"):
+            self.assertNotIn(helper, source)
 
     def test_deployment_preserves_user_configuration(self):
         script = (ROOT / "tools/ps5/package.sh").read_text()

@@ -11,6 +11,7 @@
 #include "platform/posix/PlatformPosix.h"
 #include "platform/ps5/AppDirectory.h"
 #include "platform/ps5/BuildStamp.h"
+#include "platform/ps5/ConfigPS5.h"
 #include "platform/ps5/SandboxPS5.h"
 #include "platform/ps5/input/PS5ImeDialog.h"
 #include "platform/ps5/storage/PS5StorageUsage.h"
@@ -26,13 +27,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <utility>
 #include <vector>
 
-#include <dirent.h>
 #include <sys/errno.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
 extern "C" int sceKernelDebugOutText(int channel, const char* text);
 extern "C" int sceKernelSendNotificationRequest(int device, void* request, std::size_t size,
@@ -72,7 +70,7 @@ int ExitRequest(int status)
     return status;
 }
 
-void NotifySandboxFailure()
+void NotifyStartupFailure(const char* message)
 {
     // Kernel debug-toast layout from the SDK's notify_debug sample.
     struct
@@ -82,26 +80,25 @@ void NotifySandboxFailure()
     } notification{};
     static_assert(sizeof(notification) == 3120);
     std::snprintf(notification.message, sizeof(notification.message),
-                  "Kodi cannot access its home directory. Sandbox escape or directory creation failed.");
+                  "%s", message);
     const int result = sceKernelSendNotificationRequest(0, &notification, sizeof(notification), 0);
     if (result != 0)
         Klogf("[kodi-ps5] debug notification failed (0x%08x)\n",
               static_cast<unsigned int>(result));
 }
 
-bool OpenSandbox()
+bool OpenSandbox(const KODI::PLATFORM::PS5::Config& config)
 {
-    const auto result = KODI::PLATFORM::PS5::RequestSandboxOpen();
+    const auto result = KODI::PLATFORM::PS5::RequestSandboxOpen(config);
     if (result == KODI::PLATFORM::PS5::ElevationResult::opened)
         return true;
     const char* reason =
-        result == KODI::PLATFORM::PS5::ElevationResult::configError
-            ? "invalid elevation configuration"
-            : result == KODI::PLATFORM::PS5::ElevationResult::unsafe
-                  ? "elevation completion uncertain"
-                  : "no elevation method opened the sandbox";
+        result == KODI::PLATFORM::PS5::ElevationResult::unsafe
+            ? "elevation completion uncertain"
+            : "no elevation method opened the sandbox";
     Klogf("[kodi-ps5] cannot create or open %s: %s\n", HOME_PATH, reason);
-    NotifySandboxFailure();
+    NotifyStartupFailure(
+        "Kodi cannot access its home directory. Sandbox escape or directory creation failed.");
     return false;
 }
 
@@ -149,99 +146,6 @@ bool InitializeEnvironment(const std::string& title)
            SetEnvironment("SSL_CERT_FILE", resources + "/system/certs/cacert.pem");
 }
 
-bool SwitchPresent(const std::string& path)
-{
-    struct stat st{};
-    if (stat(path.c_str(), &st) == 0)
-        return true;
-    if (errno != ENOENT)
-        Klogf("[kodi-ps5] switch %s: %s\n", path.c_str(), std::strerror(errno));
-    return false;
-}
-
-// Do not follow symlinks when resetting data.
-bool RemoveDataTree(const std::string& path)
-{
-    struct stat st{};
-    if (lstat(path.c_str(), &st) != 0)
-    {
-        if (errno == ENOENT)
-            return true;
-        Klogf("[kodi-ps5] lstat %s: %s\n", path.c_str(), std::strerror(errno));
-        return false;
-    }
-    bool success = true;
-    if (S_ISDIR(st.st_mode))
-    {
-        DIR* dir = opendir(path.c_str());
-        if (!dir)
-        {
-            Klogf("[kodi-ps5] opendir %s: %s\n", path.c_str(), std::strerror(errno));
-            return false;
-        }
-        int readError = 0;
-        for (;;)
-        {
-            errno = 0;
-            const dirent* entry = readdir(dir);
-            if (!entry)
-            {
-                readError = errno;
-                break;
-            }
-            if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0)
-                continue;
-            if (!RemoveDataTree(path + "/" + entry->d_name))
-                success = false;
-        }
-        closedir(dir);
-        if (readError != 0)
-        {
-            Klogf("[kodi-ps5] readdir %s: %s\n", path.c_str(), std::strerror(readError));
-            success = false;
-        }
-    }
-    const int result = S_ISDIR(st.st_mode) ? rmdir(path.c_str()) : unlink(path.c_str());
-    if (result != 0)
-    {
-        Klogf("[kodi-ps5] remove %s: %s\n", path.c_str(),
-              std::strerror(errno));
-        success = false;
-    }
-    return success;
-}
-
-bool ConsumeSwitch(const std::string& path)
-{
-    if (unlink(path.c_str()) == 0)
-        return true;
-    Klogf("[kodi-ps5] cannot remove switch %s: %s\n", path.c_str(), std::strerror(errno));
-    return false;
-}
-
-bool ApplySwitches(const std::string& data, bool& uninstall)
-{
-    const std::string home = HOME_PATH;
-    uninstall = SwitchPresent(home + "/kodi-uninstall");
-    const std::string reset = home + (uninstall ? "/kodi-uninstall" : "/kodi-reset");
-    if ((uninstall || SwitchPresent(reset)) &&
-        (!RemoveDataTree(data) || !ConsumeSwitch(reset)))
-        return false;
-    if (uninstall)
-        return true;
-
-    const std::pair<const char*, const char*> switches[] = {
-        {"kodi-debug", "KODI_PS5_DEBUG"},
-        {"kodi-video-debug", "KODI_PS5_VIDEO_DEBUG"},
-        {"kodi-addon-debug", "KODI_PS5_ADDON_DEBUG"},
-    };
-    for (const auto& [file, variable] : switches)
-    {
-        if (SwitchPresent(home + "/" + file) && !SetEnvironment(variable, "1"))
-            return false;
-    }
-    return true;
-}
 } // namespace
 
 int main(int argc, char* argv[])
@@ -257,6 +161,20 @@ int main(int argc, char* argv[])
     }
     setlocale(LC_NUMERIC, "C");
     Klogf("[kodi-ps5] build %s\n", KODI_PS5_BUILD_STAMP);
+    KODI::PLATFORM::PS5::Config config;
+    std::string error;
+    const auto configStatus = KODI::PLATFORM::PS5::LoadConfig(
+        "/app0/config.json", "/app0/default-config.json", config, error);
+    if (configStatus == KODI::PLATFORM::PS5::ConfigStatus::error ||
+        !KODI::PLATFORM::PS5::ApplyDebugConfig(config.debug, error))
+    {
+        Klogf("[kodi-ps5] configuration error: %s\n", error.c_str());
+        NotifyStartupFailure("Kodi configuration failed. Check config.json or default-config.json and the debug log.");
+        return ExitRequest(EXIT_FAILURE);
+    }
+    Klogf("[kodi-ps5] configuration: %s; debug enabled=%d video=%d addons=%d\n",
+          configStatus == KODI::PLATFORM::PS5::ConfigStatus::defaults ? "built-in defaults" : "loaded",
+          config.debug.enabled, config.debug.video, config.debug.addons);
     std::string title;
     {
         KODI::PLATFORM::PS5::AppDirectory appDirectory;
@@ -266,25 +184,19 @@ int main(int argc, char* argv[])
         KODI::PLATFORM::PS5::CVideoDec2::LoadModule();
         KODI::PLATFORM::PS5::CPS5ImeDialog::Preload();
         PreloadPS5UsbStorage();
-        if (!OpenSandbox())
+        if (!OpenSandbox(config))
             return ExitRequest(EXIT_FAILURE);
         PreloadPS5InternalStorageModules();
         if (!appDirectory.Resolve(title))
             return ExitRequest(EXIT_FAILURE);
     }
 
-    const std::string data = std::string(HOME_PATH) + "/.kodi";
-    bool uninstall = false;
-    if (!ApplySwitches(data, uninstall))
-        return ExitRequest(EXIT_FAILURE);
-    if (uninstall)
-        return ExitRequest(EXIT_SUCCESS);
     if (!InitializeEnvironment(title))
         return ExitRequest(EXIT_FAILURE);
 
     std::vector<char*> args(argv, argv + argc);
     static char debugFlag[] = "--debug";
-    if (getenv("KODI_PS5_DEBUG"))
+    if (config.debug.enabled)
         args.push_back(debugFlag);
     CAppParamParser parser;
     parser.Parse(args.data(), static_cast<int>(args.size()));

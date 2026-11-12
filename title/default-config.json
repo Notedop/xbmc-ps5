@@ -1,0 +1,15 @@
+{
+  "_comment": "Do not make changes to this file. Copy this file to config.json to customize settings. config.json will superseed default-config.json when present.",
+  "elevation": {
+    "methods": [
+      { "id": "elf_9021", "enabled": true },
+      { "id": "jailbreak_marker", "enabled": true },
+      { "id": "etahen_ipc", "enabled": true }
+    ]
+  },
+  "debug": {
+    "enabled": false,
+    "video": false,
+    "addons": false
+  }
+}

@@ -39,7 +39,7 @@ bool CPlatformPS5::InitStageOne()
   // HTTPS: curl's compiled-in CA path is a path on the build machine, so the
   // bundled list goes to curl as a memory blob, as on Kodi's UWP platform
   XFILE::CCurlFile::PreloadCaCertsBlob();
-  KODI::PLATFORM::PS5::StartNetworkSelfTest(); // kodi-debug only
+  KODI::PLATFORM::PS5::StartNetworkSelfTest(); // debug.enabled only
 
   // main() preloads before sandbox escape; these calls return the cached result.
   const int32_t videodec = KODI::PLATFORM::PS5::CVideoDec2::LoadModule();

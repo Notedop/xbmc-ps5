@@ -187,7 +187,7 @@ ELEVATION_STAGE="$STAGE/app0/"
 mkdir -p "$ELEVATION_STAGE"
 LAPY_SRC="${LAPY_HELPER_DIR:-$WORK/ps5-lapy-jb-daemon/build/owned_root_helper-$TITLE_ID}"
 python3 - "$TITLE_ID" "$LAPY_SRC" "$WORK/ps5-lapy-jb-daemon/LICENSE" "$ELEVATION_STAGE" \
-  "$ROOT/tools/ps5/elevation/default-config.json" \
+  "$ROOT/title/default-config.json" \
   "$ROOT/tools/ps5/patches/lapy/LAPY-PROTOCOL-SHA256" <<'PY' || exit 1
 import hashlib, json, shutil, sys
 from pathlib import Path
@@ -220,6 +220,8 @@ ids = [entry["id"] for entry in config["elevation"]["methods"]]
 require(ids == ["elf_9021", "jailbreak_marker", "etahen_ipc"] and
         all(entry["enabled"] for entry in config["elevation"]["methods"]),
         "packaged default configuration must match the code defaults")
+require(config.get("debug") == {"enabled": False, "video": False, "addons": False},
+        "packaged debug settings must default to disabled")
 shutil.copyfile(default_config, stage / "default-config.json")
 PY
 

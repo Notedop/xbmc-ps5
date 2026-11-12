@@ -8,7 +8,7 @@
 
 #include "SandboxPS5.h"
 
-#include "ElevationConfig.h"
+#include "ConfigPS5.h"
 #include "ElevationMethods.h"
 
 #include <algorithm>
@@ -19,7 +19,6 @@
 #include <cstdlib>
 #include <string>
 #include <thread>
-#include <vector>
 
 #include <fcntl.h>
 #include <dirent.h>
@@ -35,8 +34,6 @@ using namespace KODI::PLATFORM::PS5;
 constexpr const char* kRequest = "/download0/etahen_jailbreak";
 constexpr const char* kEscapedTitleRoot = "/data/homebrew/kodi-psmc";
 constexpr const char* kSandboxMnt = "/mnt/sandbox";
-constexpr const char* kElevationConfig = "/app0/config.json";
-constexpr const char* kDefaultElevationConfig = "/app0/default-config.json";
 constexpr int kElfPort9021 = 9021;
 
 void Klog(const char* text)
@@ -148,7 +145,7 @@ bool KODI::PLATFORM::PS5::IsSandboxOpen()
   return true;
 }
 
-ElevationResult KODI::PLATFORM::PS5::RequestSandboxOpen()
+ElevationResult KODI::PLATFORM::PS5::RequestSandboxOpen(const Config& config)
 {
   if (IsSandboxOpen())
   {
@@ -157,15 +154,7 @@ ElevationResult KODI::PLATFORM::PS5::RequestSandboxOpen()
   }
   Klog("[kodi-ps5] elevation: initial privilege check failed\n");
 
-  std::vector<ElevationMethodId> order;
-  std::string error;
-  const ElevationConfigStatus status =
-      LoadElevationConfig(kElevationConfig, kDefaultElevationConfig, order, error);
-  if (status == ElevationConfigStatus::error)
-  {
-    Klogf("[kodi-ps5] elevation: configuration error: %s\n", error.c_str());
-    return ElevationResult::configError;
-  }
+  const auto& order = config.elevationMethods;
   std::string effectiveOrder;
   for (const auto& id : order)
   {
@@ -173,9 +162,8 @@ ElevationResult KODI::PLATFORM::PS5::RequestSandboxOpen()
       effectiveOrder += ", ";
     effectiveOrder += ElevationMethodName(id);
   }
-  Klogf("[kodi-ps5] elevation: effective order: %s (%s)\n",
-        effectiveOrder.empty() ? "none" : effectiveOrder.c_str(),
-        status == ElevationConfigStatus::defaults ? "defaults" : "configured");
+  Klogf("[kodi-ps5] elevation: effective order: %s\n",
+        effectiveOrder.empty() ? "none" : effectiveOrder.c_str());
   {
     std::string disabled;
     for (const auto& id : DefaultElevationOrder())

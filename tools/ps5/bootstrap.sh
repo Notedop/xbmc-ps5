@@ -11,7 +11,7 @@
 #   5. ps5-opengl              delegates to tools/depends/target/ps5-opengl
 #   6. native-app boilerplate  + imgui demo, the app template package.sh uses
 #   7. lapy-helper             one-shot owned-root helper ELF bundled for
-#                              privilege elevation (see docs/ps5/elevation.md)
+#                              privilege elevation (see docs/README.PS5.md)
 #
 # Everything is idempotent; re-run after a failure. Budget 1-3 hours of build
 # time for pacbrew and ps5-opengl (Mesa) on an 8-core machine.

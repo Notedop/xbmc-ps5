@@ -1,4 +1,4 @@
-# Experimental native PS5 add-on loader
+# Native PS5 add-on loader
 
 `CPS5AddonLoader` is a thin `LibraryLoader` adapter over
 `sceKernelLoadStartModule`, `sceKernelDlsym` and `sceKernelStopUnloadModule`.
@@ -12,6 +12,5 @@ release retains the registered loader and quarantines further export access;
 it is not retried automatically because a stop may have partially executed.
 `GetHModule` is an opaque loader identity, not a public native integer handle.
 
-See [the experiment guide](../../../../docs/PS5-NATIVE-SPRX.md). Historical mapper
-tests and tooling in `tools/ps5` apply to the original `Piers`/checkpoint branches,
-not this native route.
+See the [PS5 build guide](../../../../docs/README.PS5.md) for native runtime
+preparation and bundled add-on builds.

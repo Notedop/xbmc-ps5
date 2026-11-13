@@ -9,9 +9,8 @@
 #   ps5_opengl_set_scanout_format()    HDR output (scanout pixel format)
 #   ps5_opengl_memory_image_create()   zero-copy video (EGL image over
 #                                      decoder-owned memory)
-# None of these exist in the stock upstream build; see
-# docs/ps5/upstream-migration-tasks.md for the plan to upstream them, after
-# which this patch step disappears and a release archive can be used as-is.
+# These additions are required with the pinned upstream revision; a stock
+# upstream release archive cannot replace the patched SDK.
 #
 # Safe to run repeatedly; afterwards rebuild Kodi (the SDK is linked into it).
 #

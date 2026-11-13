@@ -7,10 +7,6 @@ Compile -> Package -> Deploy; each step can also be rerun independently.
 PS5 integration is tracked in the source tree; configuration does not copy
 overlays or apply Kodi patch files.
 
-For binary add-on builds and publication, see
-[PS5 binary add-ons](PS5-BINARY-ADDONS.md). For the shared-runtime architecture,
-see [PS5 native SPRX](PS5-NATIVE-SPRX.md#shared-runtime-title-profile).
-
 ## 1. Prerequisites
 
 ### Build location
@@ -220,8 +216,8 @@ caches by default.
 
 ## 5. Package
 
-Build required binary add-ons through the
-[catalogue workflow](PS5-BINARY-ADDONS.md) before packaging. In particular,
+Build required binary add-ons with `tools/buildsteps/ps5/make-binary-addons`
+before packaging (section 4). In particular,
 `peripheral.joystick` is a required bundled provider; packaging rejects a title
 without it. The packaging targets discover installed catalogue outputs but do
 not compile add-ons or publish feeds.

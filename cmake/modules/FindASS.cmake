@@ -115,6 +115,18 @@ if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
 
   if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
     if(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
+      if(CORE_SYSTEM_NAME STREQUAL "ps5")
+        # SDK pkg-config metadata can select an iconv without legacy codepages.
+        # Reuse Kodi's selected iconv target for this transitive dependency.
+        find_package(Iconv REQUIRED ${SEARCH_QUIET})
+        get_target_property(_ass_link_libraries PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}
+                            INTERFACE_LINK_LIBRARIES)
+        list(TRANSFORM _ass_link_libraries REPLACE "^(.*/)?libiconv\\.a$|^(-l)?iconv$"
+             "${APP_NAME_LC}::Iconv")
+        set_property(TARGET PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}
+                     PROPERTY INTERFACE_LINK_LIBRARIES "${_ass_link_libraries}")
+        unset(_ass_link_libraries)
+      endif()
       add_library(${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIAS PkgConfig::${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME})
     elseif(TARGET libass::libass AND NOT TARGET ${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_BUILD_NAME})
       # Kodi custom libass target used for windows platforms

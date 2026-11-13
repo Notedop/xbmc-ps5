@@ -4,7 +4,7 @@ set -e
 echo "Running host PS5 build-tool regressions; PS5 target/runtime tests are not run."
 if [ "$#" = 0 ]; then
   set -- test-buildsteps.py test-check-package-build.py test-package-deploy.py \
-    test-package-inputs.py test-package-metadata.py test-package-stage.py \
+    test-package-inputs.py test-package-metadata.py test-package-stage.py test-kodi-link-inputs.py \
     test-native-graphics.py test-prepare-native-runtime.py test-python-discovery.py \
     test-opengl-bootstrap.py test-bootstrap-sdk.py test-pacbrew-bootstrap.py test-test-runner.py
 fi

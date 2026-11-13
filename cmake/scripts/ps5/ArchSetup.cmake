@@ -103,11 +103,8 @@ endif()
 # -lprocstat: stub from shims/libprocstat (scripts/12); exiv2 references
 # libprocstat on any __FreeBSD__ target for its library-info dump.
 # libSceVideodec2: stub from scripts/17-build-sce-stubs.sh
-# iconv: pacbrew's GNU libiconv (Find module forced on for ps5 in
-# cmake/modules/FindIconv.cmake). Its <iconv.h> renames iconv_open ->
-# libiconv_open, so Kodi's calls resolve in libiconv.a instead of binding to
-# the console libc's Unicode-only iconv at run time. -liconv is added by the
-# Iconv::Iconv target Kodi links; it need not be repeated here.
+# iconv: the Iconv::Iconv target supplies tools/depends' GNU libiconv and its
+# headers; do not add a competing SDK archive here.
 set(SYSTEM_LDFLAGS -lSceNotification
         -lSceAudioOut
         -lScePad

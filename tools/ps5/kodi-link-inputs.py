@@ -59,6 +59,10 @@ def extract(build, hb, sdk, gl):
     # Payload libc/pthread cannot be linked into a native title.
     payload_lib = (sdk / "target/lib").resolve()
     deps = [path for path in deps if path.resolve().parent != payload_lib]
+    iconv_archives = {path.resolve() for path in deps if path.name == "libiconv.a"}
+    if len(iconv_archives) > 1:
+        raise ValueError("conflicting iconv archives in Kodi link; reconfigure to use "
+                         "Iconv::Iconv: " + ", ".join(map(str, sorted(iconv_archives))))
     return whole, list(dict.fromkeys(deps))
 
 

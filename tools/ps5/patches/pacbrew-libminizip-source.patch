@@ -1,0 +1,11 @@
+diff --git a/libminizip/PKGBUILD b/libminizip/PKGBUILD
+--- a/libminizip/PKGBUILD
++++ b/libminizip/PKGBUILD
+@@ -6,6 +6,6 @@
+ license=('zlib')
+ options=(!strip libtool staticlibs)
+-source=("https://zlib.net/zlib-$pkgver.tar.gz")
++source=("https://zlib.net/fossils/zlib-$pkgver.tar.gz")
+ sha256sums=('bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16')
+ groups=('ps5-payload-dev')
+ makedepends=('ps5-payload-sdk' 'ps5-payload-zlib')

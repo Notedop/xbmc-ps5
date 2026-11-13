@@ -53,6 +53,46 @@ class PackageStageTests(unittest.TestCase):
             self.assertEqual(capture.read_text().splitlines(),
                              ["--install", str(self.build), *(["--config", config] if config else [])])
 
+    def configure_python_install(self, populate):
+        prefix = self.root / "depends choice"
+        stdlib = prefix / "lib/python3.15"
+        if populate:
+            (stdlib / "encodings").mkdir(parents=True)
+            (stdlib / "os.py").write_text("# standard library\n")
+            (stdlib / "encodings/__init__.py").write_text("# codecs\n")
+            (stdlib / "__pycache__").mkdir()
+            (stdlib / "__pycache__/os.pyc").write_bytes(b"cache")
+        script = (ps5_test_paths.ROOT / "cmake/scripts/ps5/Install.cmake").read_text()
+        python_install = "if(ENABLE_PYTHON)" + script.split("if(ENABLE_PYTHON)", 1)[1]
+        python_install = python_install.split("foreach(_dir", 1)[0]
+        (self.root / "CMakeLists.txt").write_text(
+            'cmake_minimum_required(VERSION 3.20)\nproject(PythonStage NONE)\n'
+            f'set(PS5_DEPENDS_PREFIX "{prefix.as_posix()}")\n'
+            'set(PYTHON_VERSION 3.15)\nset(ENABLE_PYTHON ON)\n'
+            'set(datarootdir share)\nset(APP_NAME_LC kodi)\n'
+            + python_install)
+        return subprocess.run(
+            ["cmake", "-S", str(self.root), "-B", str(self.build)],
+            text=True, capture_output=True)
+
+    def test_python_install_uses_depends_prefix_and_selected_version(self):
+        result = self.configure_python_install(True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        stage = self.root / "stage"
+        result = subprocess.run(
+            ["cmake", "--install", str(self.build), "--prefix", "/app0"],
+            env={**os.environ, "DESTDIR": str(stage)}, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        stdlib = stage / "app0/share/kodi/python/lib/python3.15"
+        self.assertTrue((stdlib / "os.py").is_file())
+        self.assertTrue((stdlib / "encodings/__init__.py").is_file())
+        self.assertFalse((stdlib / "__pycache__").exists())
+
+    def test_python_install_rejects_missing_standard_library_at_configure(self):
+        result = self.configure_python_install(False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Missing Python 3.15 standard library", result.stderr)
+
     def test_repeated_builds_share_one_clean_output(self):
         for override in (None, self.root / "custom output"):
             with self.subTest(override=override):

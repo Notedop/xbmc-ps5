@@ -6,7 +6,7 @@ if [ "$#" = 0 ]; then
   set -- test-buildsteps.py test-check-package-build.py test-package-deploy.py \
     test-package-inputs.py test-package-metadata.py test-package-stage.py \
     test-native-graphics.py test-prepare-native-runtime.py test-python-discovery.py \
-    test-opengl-bootstrap.py test-bootstrap-sdk.py test-test-runner.py
+    test-opengl-bootstrap.py test-bootstrap-sdk.py test-pacbrew-bootstrap.py test-test-runner.py
 fi
 mkdir -p "$WORKSPACE/build"
 TEST_TMP="$WORKSPACE/build/ps5-host-tests-$$"

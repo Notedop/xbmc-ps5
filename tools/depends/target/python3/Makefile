@@ -129,7 +129,10 @@ ifeq ($(OS),ps5)
   # these, so the link-only probe succeeds even though the title's
   # clean-room libc.prx does not share FreeBSD's FILE layout. See
   # 25-ps5-stdio-nomacros.patch for the matching Python.h macro removal.
-  EXTRA_CONFIGURE+= ac_cv_func_wait=no ac_cv_func_wait3=no ac_cv_func_wait4=no ac_cv_func_waitpid=no \
+  # Match --without-pymalloc: use the title allocator, not mimalloc's
+  # prioritized legacy constructors, which the native module CRT rejects.
+  EXTRA_CONFIGURE+= --without-mimalloc \
+                    ac_cv_func_wait=no ac_cv_func_wait3=no ac_cv_func_wait4=no ac_cv_func_waitpid=no \
                     ac_cv_func_execv=no ac_cv_func_fexecve=no ac_cv_func_setpriority=no ac_cv_func_sendfile=no \
                     ac_cv_header_sched_h=no ac_cv_func_posix_spawn=no ac_cv_func_posix_spawnp=no \
                     ac_cv_func_forkpty=no ac_cv_lib_util_forkpty=no ac_cv_func_getgroups=no \

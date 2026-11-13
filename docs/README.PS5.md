@@ -57,7 +57,13 @@ older or manually customized SDK, choose a new empty absolute
 `STEP=stubs` now verifies the packaged stubs rather than modifying the SDK.
 
 Pacbrew separately supplies the homebrew libraries and cannot replace the pinned
-SDK. Host tools (`STEP=packages`) use the host package manager. Setup can require
+SDK. Setup applies checked-in source-location fixes to its recipes without
+changing their archive checksums, and uses a UTF-8 locale for source extraction.
+Pacbrew and native-app template revisions come from
+`tools/ps5/dependency-manifest.json`; there is no fallback to a moving branch.
+Setup preserves differently pinned cached checkouts and stops rather than
+overwriting them. Use a separate `WORK` directory when changing these pins.
+Host tools (`STEP=packages`) use the host package manager. Setup can require
 sudo; empty, relative and unsafe system-directory SDK prefixes are rejected.
 Subsequent dependency, Kodi and package steps verify the SDK but never install it.
 To build only the elevation helper with an existing payload SDK, use
@@ -85,7 +91,7 @@ sudo apt-get install -y \
   git build-essential autoconf automake autopoint libtool libtool-bin \
   pkg-config cmake ninja-build meson nasm gperf bison flex gawk \
   python3 python3-dev python3-pip default-jre swig \
-  libcurl4-openssl-dev zip unzip rsync
+  libcurl4-openssl-dev zip unzip rsync xxd
 ```
 
 `libcurl4-openssl-dev` is required by the host-native CMake build; installing
@@ -125,8 +131,8 @@ tools/buildsteps/ps5/make-depends
 
 The PS5 Make graph owns the pinned OpenGL SDK and the port's patched libraries
 and shims, orders their
-prerequisites (including brotli before curl), and reuses the remaining pacbrew
-libraries. It does not build the generic all-platform dependency set. Native
+prerequisites (including brotli and nghttp2 before curl), and reuses the remaining
+pacbrew libraries. It does not build the generic all-platform dependency set. Native
 tools are built separately before target dependencies.
 The `ps5-opengl` recipe reuses the specialized graphics helper and existing
 source/build/install caches. Every invocation validates the installed graphics
@@ -205,6 +211,8 @@ tools/buildsteps/ps5/make-binary-addons
 The add-on step builds the required bundled `peripheral.joystick` and
 `inputstream.adaptive` providers through the existing catalogue CLI, preserving
 its incremental/resume checks. It does not package or publish repository feeds.
+Build-local definitions use the locked catalogue sources; no separate global
+binary-add-on repository bootstrap is needed.
 Use that CLI for other catalogue selections. No step cleans dependency or add-on
 caches by default.
 
@@ -215,6 +223,11 @@ Build required binary add-ons through the
 `peripheral.joystick` is a required bundled provider; packaging rejects a title
 without it. The packaging targets discover installed catalogue outputs but do
 not compile add-ons or publish feeds.
+
+Python's standard library is staged from the configured `tools/depends` prefix,
+using the Python version selected by CMake, not the SDK's homebrew directory.
+The PS5 Python recipe disables both pymalloc and mimalloc to use the title's
+allocator and supported module initialization.
 
 Title metadata is owned by `title/sce_sys/param.json`. Increment `contentVersion`
 there before packaging, for example from `22.000.000` to `22.000.001`.

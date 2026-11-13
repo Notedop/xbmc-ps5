@@ -12,7 +12,7 @@
       "name": "pacbrew-repo",
       "role": "dependency recipes/packages",
       "source": "https://github.com/ps5-payload-dev/pacbrew-repo.git",
-      "pin": "dbb6998c90910f58d4f781fc2cab0ecb5ac202b4"
+      "pin": "722187f0ee246c0d7d57401c8a97de1c7f4e2ff0"
     },
     {
       "name": "ps5-opengl",
@@ -30,10 +30,8 @@
     {
       "name": "ps5-native-app-boilerplate",
       "role": "native app runtime/packaging template",
-      "source": "https://github.com/blackbearreloaded/ps5-native-app-boilerplate.git",
-      "local_head": "4f531c4b517f80bcb6b1267135848168d2250047",
-      "fallback_commit_in_setup_script": "81d4235346afc7490e98866af4020e94f255b204",
-      "notes": "Setup script attempts older pinned commit first, falls back to RELRO-fixed commit."
+      "source": "https://github.com/drakmor/ps5-native-app-boilerplate.git",
+      "pin": "81d4235346afc7490e98866af4020e94f255b204"
     },
     {
       "name": "dav1d",

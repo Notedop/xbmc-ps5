@@ -270,19 +270,17 @@ rm -f "$APP/.deps/native/ps5-payload-sdk/target/lib/libScePosixForWebKit.so"
 # title (umask() from it jumped to address 0). Anything only it provides now
 # shows up as undefined at link time instead of crashing at run time.
 rm -f "$APP/.deps/native/ps5-payload-sdk/target/lib/libkernel_sys.so"
-# Our Sony link stubs (scripts/17-build-sce-stubs.sh put them in the SDK)
+# Our Sony link stubs (installed by the qualified SDK recipe)
 # go next to the SDK stubs the template links against.
 STUBDIR="$APP/.deps/native/ps5-payload-sdk/target/lib"
 for stub in "$HERE"/shims/sce_stubs/*.c; do
   so="$PS5_PAYLOAD_SDK/target/lib/$(basename "$stub" .c).so"
-  [ -f "$so" ] || { echo "!! $so missing: run scripts/17-build-sce-stubs.sh"; exit 1; }
+  [ -f "$so" ] || { echo "!! $so missing: repair the qualified SDK with prepare-depends STEP=sdk"; exit 1; }
   cp "$so" "$STUBDIR/"
 done
 # libSceVideoOut: our extended stub (the SDK's plus the VRR unpeg function)
 # replaces the template's copy, provided it exports everything that one does.
 VO_EXT="$PS5_PAYLOAD_SDK/target/lib/libSceVideoOut.so"
-[ -f "$PS5_PAYLOAD_SDK/target/lib/libSceVideoOut.so.sdk" ] || {
-  echo "!! extended libSceVideoOut stub missing: run scripts/17-build-sce-stubs.sh"; exit 1; }
 VO_NM="$PS5_PAYLOAD_SDK/bin/llvm-nm"; [ -x "$VO_NM" ] || VO_NM="$(command -v llvm-nm-18 || command -v llvm-nm)"
 VO_MISSING="$(comm -23 <("$VO_NM" -D --defined-only "$STUBDIR/libSceVideoOut.so" | awk '{print $3}' | sort) \
                        <("$VO_NM" -D --defined-only "$VO_EXT" | awk '{print $3}' | sort))"

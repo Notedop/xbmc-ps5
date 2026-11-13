@@ -273,6 +273,32 @@ class IncrementalBuildTests(unittest.TestCase):
         self.assertEqual(self.resolve_mock.call_count, 1)
         self.assertEqual(state, {path: path.stat().st_mtime_ns for path in state})
 
+    def test_clean_build_uses_local_locked_definitions_without_bootstrap(self) -> None:
+        definitions = self.root / "cmake/addons/addons"
+        shutil.rmtree(definitions)
+        first = self.build()
+        command = self.run_mock.call_args_list[0].args[0]
+        selected = next(arg.split("=", 1)[1] for arg in command
+                        if arg.startswith("-DADDONS_DEFINITION_DIR="))
+        local = Path(selected)
+        self.assertTrue(local.is_relative_to(self.workspace))
+        self.assertEqual(
+            (local / "addon.bundle/addon.bundle.txt").read_text(),
+            f"addon.bundle https://github.com/example/addon.bundle {self.sha}\n",
+        )
+        self.assertEqual((local / "addon.bundle/platforms.txt").read_text(), "all\n")
+        self.assertEqual([path.name for path in local.iterdir()], ["addon.bundle"])
+        self.assertFalse(definitions.exists())
+        self.assertEqual(first, self.build())
+        self.assertEqual(self.run_mock.call_count, 2)
+
+    def test_unused_global_definitions_do_not_invalidate_local_build(self) -> None:
+        first = self.build()
+        definition = self.root / "cmake/addons/addons/addon.bundle/addon.bundle.txt"
+        definition.write_text("unrelated upstream definition\n")
+        self.assertEqual(first, self.build())
+        self.assertEqual(self.run_mock.call_count, 2)
+
     def test_sdk_target_layout_without_sysroot(self) -> None:
         self.assertFalse((self.sdk / "sysroot").exists())
         addon_build._validate_environment(self.root, self.sdk, self.depends)

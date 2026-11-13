@@ -137,9 +137,9 @@ ifeq ($(OS),linux)
 endif
 
 ifeq ($(OS),ps5)
-  # Remaining libraries (including nghttp2) come from the pacbrew sysroot.
+  # Remaining libraries come from the pacbrew sysroot.
   DEPENDS = bzip2 expat gettext libffi libxml2 openssl sqlite3 xz zlib \
-    dav1d ffmpeg python3 brotli curl libiconv tinyxml tinyxml2 fstrcmp \
+    dav1d ffmpeg python3 brotli nghttp2 curl libiconv tinyxml tinyxml2 fstrcmp \
     libuuid libprocstat libkodishim libsmb2 ps5-opengl
   ZLIB = zlib
 endif
@@ -160,7 +160,7 @@ download: $(DOWNLOAD_TARGETS)
 
 crossguid: $(LIBUUID)
 ifeq ($(OS),ps5)
-curl: brotli openssl $(ZLIB)
+curl: brotli nghttp2 openssl $(ZLIB)
 ps5-opengl: export PS5_PAYLOAD_SDK ?= $(TOOLCHAIN)
 else
 curl: brotli openssl nghttp2 $(ZLIB)

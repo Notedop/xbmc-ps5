@@ -743,9 +743,6 @@ def _cmake_inputs(
         inputs.extend(runtime_sdk / relative
                       for relative in json.loads(receipt.read_text())["files"])
     for addon_id in addon_ids:
-        addon_definition = root / "cmake" / "addons" / "addons" / addon_id
-        if addon_definition.exists():
-            inputs.append(addon_definition)
         patch_dir = root / "tools" / "ps5" / "patches" / "addons" / addon_id
         if patch_dir.exists():
             inputs.append(patch_dir)
@@ -1317,6 +1314,12 @@ def _build_target(
     build_dir = dependencies.build_dir
     install_prefix = dependencies.install_prefix
     source_prefix = build_dir / "source-prefix"
+    definitions = build_dir / "addon-definitions"
+    _write_if_changed(
+        definitions / target_name / f"{target_name}.txt",
+        f"{target_name} {source['url']} {source['sha']}\n".encode("utf-8"),
+    )
+    _write_if_changed(definitions / target_name / "platforms.txt", b"all\n")
     if dependencies.changed:
         _stage_sources(source_root, source_prefix, [target_name], target_name, [target_name], workspace)
     if dependencies.changed or dependencies.state.get("finished"):
@@ -1365,6 +1368,7 @@ def _build_target(
         f"-DADDON_DEPENDS_PATH={local_depends}",
         f"-DCMAKE_PREFIX_PATH={depends};{local_depends};{sdk / 'target' / 'user' / 'homebrew'}",
         f"-DADDON_SRC_PREFIX={source_prefix}",
+        f"-DADDONS_DEFINITION_DIR={definitions}",
         f"-DADDONS_TO_BUILD={target_name}",
         "-DCORE_SYSTEM_NAME=freebsd",
         "-DCORE_PLATFORM_NAME=ps5",

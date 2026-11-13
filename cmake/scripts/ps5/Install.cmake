@@ -17,10 +17,16 @@ install(TARGETS ${APP_NAME_LC} DESTINATION ${libdir}/${APP_NAME_LC}
 
 # Python's standard library, found by PYTHONHOME (set in main.cpp)
 if(ENABLE_PYTHON)
-  install(DIRECTORY ${CMAKE_SYSROOT}/user/homebrew/lib/python3.14
+  set(_ps5_python_stdlib "${PS5_DEPENDS_PREFIX}/lib/python${PYTHON_VERSION}")
+  if(NOT EXISTS "${_ps5_python_stdlib}/os.py" OR
+     NOT EXISTS "${_ps5_python_stdlib}/encodings/__init__.py")
+    message(FATAL_ERROR "Missing Python ${PYTHON_VERSION} standard library: ${_ps5_python_stdlib}; build tools/depends/target/python3 first")
+  endif()
+  install(DIRECTORY "${_ps5_python_stdlib}"
           DESTINATION ${datarootdir}/${APP_NAME_LC}/python/lib
           COMPONENT kodi
           PATTERN "__pycache__" EXCLUDE)
+  unset(_ps5_python_stdlib)
 endif()
 
 foreach(_dir addons media system userdata)

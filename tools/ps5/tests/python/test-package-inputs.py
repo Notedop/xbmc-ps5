@@ -6,6 +6,7 @@ import json
 import contextlib
 import importlib.util
 import io
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -17,6 +18,37 @@ SCRIPT = (ps5_test_paths.HERE / 'package.sh')
 
 
 class PackageInputsTests(unittest.TestCase):
+    def test_videoout_uses_qualified_stub_without_legacy_backup(self):
+        script = SCRIPT.read_text().split('VO_EXT=', 1)[1]
+        script = "VO_EXT=" + script.split('grep -q -- "--wrap=malloc"', 1)[0]
+        with tempfile.TemporaryDirectory(prefix="native-videoout-inputs-") as directory:
+            root = Path(directory)
+            sdk = root / "sdk"
+            (sdk / "bin").mkdir(parents=True)
+            (sdk / "target/lib").mkdir(parents=True)
+            nm = sdk / "bin/llvm-nm"
+            nm.write_text('#!/bin/sh\ncat "$3"\n')
+            nm.chmod(0o755)
+            template = root / "template"
+            template.mkdir()
+            stub = sdk / "target/lib/libSceVideoOut.so"
+            original = "000 T sceVideoOutOpen\n"
+            for exports, success in (
+                    (original + "001 T sceVideoOutVrrUnpegFromFixedRate\n", True),
+                    ("001 T sceVideoOutVrrUnpegFromFixedRate\n", False)):
+                with self.subTest(success=success):
+                    stub.write_text(exports)
+                    destination = template / stub.name
+                    destination.write_text(original)
+                    result = subprocess.run(
+                        ["bash", "-c", "set -euo pipefail\n" + script],
+                        env={**os.environ, "PS5_PAYLOAD_SDK": str(sdk),
+                             "STUBDIR": str(template)},
+                        text=True, capture_output=True)
+                    self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+                    self.assertEqual(destination.read_text(), exports if success else original)
+                    self.assertFalse(stub.with_suffix(".so.sdk").exists())
+
     def test_title_app_is_required_only_when_packaging(self):
         script = SCRIPT.with_name("addon-repository.py")
         spec = importlib.util.spec_from_file_location("addon_repository_cli", script)

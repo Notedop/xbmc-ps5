@@ -106,6 +106,9 @@ class BootstrapSDKTests(unittest.TestCase):
         here = self.root / "tools/ps5"
         for path in assets() + [HERE / "bootstrap.sh", HERE / "bootstrap/ps5-sdk.sh",
                                 HERE / "bootstrap/sce-stubs.sh", HERE / "bootstrap/pacbrew.sh",
+                                HERE / "patches/pacbrew-libminizip-source.patch",
+                                HERE / "patches/pacbrew-lua-source.patch",
+                                HERE / "dependency-manifest.json",
                                 HERE / "sdk/pacman.conf"]:
             destination = self.root / path.relative_to(ROOT)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -123,7 +126,16 @@ class BootstrapSDKTests(unittest.TestCase):
                 ("makepkg", 'case "$1" in --packagelist) echo "$PWD/sdk.pkg.tar.zst";;\n'
                  '*) [ "${BUILD_RESULT:-0}" = 0 ] || exit "$BUILD_RESULT"; '
                  'touch sdk.pkg.tar.zst;; esac'),
-                ("git", "exit 98"), ("make", "exit 98"), ("apt-get", "exit 98")):
+                ("git", 'case "$1" in apply) exit 0;;\n'
+                 'clone) mkdir -p "$4/.git";;\n'
+                 '-C) case "$3" in\n'
+                 'fetch) exit "${SOURCE_FETCH_RESULT:-0}";;\n'
+                 'checkout) printf "%s\\n" "$5" > "$2/.git/fixture-head"; '
+                 'touch "$2/.git/index";;\n'
+                 'rev-parse) if [ -f "$2/.git/fixture-head" ]; then '
+                 'cat "$2/.git/fixture-head"; else printf "%s\\n" "$CHECKOUT_HEAD"; fi;;\n'
+                 '*) exit 98;; esac;;\n*) exit 98;; esac'),
+                ("make", "exit 98"), ("apt-get", "exit 98")):
             path = self.bin / name
             path.write_text(f'#!/bin/sh\nprintf "%s\\n" "{name} $*" >> "$CAPTURE"\n{body}\n')
             path.chmod(0o755)
@@ -138,7 +150,10 @@ class BootstrapSDKTests(unittest.TestCase):
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.defpath,
                     "STEP": "sdk", "PS5_PAYLOAD_SDK": str(self.sdk),
                     "SDK_FIXTURE": str(self.fixture),
-                    "WORK": str(self.work), "CAPTURE": str(self.log)}
+                    "WORK": str(self.work), "CAPTURE": str(self.log),
+                    "CHECKOUT_HEAD": next(item["pin"] for item in
+                        json.loads((HERE / "dependency-manifest.json").read_text())["dependencies"]
+                        if item["name"] == "pacbrew-repo")}
 
     def run_bootstrap(self, **overrides):
         self.log.unlink(missing_ok=True)
@@ -236,6 +251,53 @@ class BootstrapSDKTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("sdk (skipped)", result.stdout)
         self.assertNotIn("makepkg", self.log.read_text())
+
+    def test_cached_pacbrew_revision_mismatch_preserves_sources(self):
+        shutil.copytree(self.fixture, self.sdk)
+        sentinel = self.work / "pacbrew-repo/local-changes"
+        sentinel.write_text("preserve this cache")
+        result = self.run_bootstrap(CHECKOUT_HEAD="0" * 40)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Existing sources were preserved", result.stderr)
+        self.assertEqual(sentinel.read_text(), "preserve this cache")
+        self.assertNotIn("makepkg", self.log.read_text())
+        self.assertNotIn("checkout", self.log.read_text())
+
+    def test_new_recipe_cache_fetches_exact_pin_before_checkout(self):
+        shutil.copytree(self.fixture, self.sdk)
+        source = self.work / "pacbrew-repo"
+        source.rmdir()
+        result = self.run_bootstrap()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        commands = self.log.read_text()
+        self.assertIn("clone --no-checkout", commands)
+        self.assertIn("fetch --no-tags --depth 1", commands)
+        self.assertIn("checkout --detach " + self.env["CHECKOUT_HEAD"], commands)
+        self.assertLess(commands.index("fetch "), commands.index("checkout --detach"))
+
+    def test_interrupted_source_fetch_resumes_without_deleting_cache(self):
+        shutil.copytree(self.fixture, self.sdk)
+        source = self.work / "pacbrew-repo"
+        (source / ".git").mkdir()
+        failed = self.run_bootstrap(SOURCE_FETCH_RESULT="7")
+        self.assertEqual(failed.returncode, 7, failed.stdout + failed.stderr)
+        self.assertTrue((source / ".git").is_dir())
+        self.assertNotIn("checkout", self.log.read_text())
+        result = self.run_bootstrap()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("clone ", self.log.read_text())
+        self.assertTrue((source / ".git/index").is_file())
+
+    def test_cached_template_revision_mismatch_never_falls_back_to_main(self):
+        source = self.work / "ps5-native-app-boilerplate"
+        source.mkdir()
+        sentinel = source / "local-changes"
+        sentinel.write_text("preserve this template")
+        result = self.run_bootstrap(STEP="template", CHECKOUT_HEAD="0" * 40)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Existing sources were preserved", result.stderr)
+        self.assertEqual(sentinel.read_text(), "preserve this template")
+        self.assertNotIn("checkout", self.log.read_text())
 
 
 class SDKWrapperTests(unittest.TestCase):

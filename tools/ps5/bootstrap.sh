@@ -59,6 +59,38 @@ mkdir -p "$WORK"
 
 want() { [ "$STEP" = all ] || [ "$STEP" = "$1" ]; }
 
+checkout_pinned_source() {
+  local name="$1" source="$WORK/$1" url pin actual
+  read -r url pin < <(python3 - "$HERE/dependency-manifest.json" "$name" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as stream:
+    dependency = next(item for item in json.load(stream)["dependencies"]
+                      if item["name"] == sys.argv[2])
+print(dependency["source"], dependency["pin"])
+PY
+  )
+  if [[ ! "$pin" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "!! invalid source pin for $name: expected a full commit hash" >&2
+    exit 1
+  fi
+  if [ ! -e "$source" ]; then
+    git clone --no-checkout "$url" "$source"
+  fi
+  if [ -d "$source/.git" ] && [ ! -e "$source/.git/index" ] &&
+     [ -z "$(find "$source" -mindepth 1 -maxdepth 1 ! -name .git -print -quit)" ]; then
+    git -C "$source" fetch --no-tags --depth 1 "$url" "$pin"
+    git -C "$source" checkout --detach "$pin"
+  fi
+  actual="$(git -C "$source" rev-parse HEAD)"
+  if [ "$actual" != "$pin" ]; then
+    echo "!! $name at $source is $actual, but Kodi requires $pin" >&2
+    echo "!! Existing sources were preserved. Select a new WORK directory for the upgrade." >&2
+    exit 1
+  fi
+}
+
 if want sdk && { [ -e "$PS5_PAYLOAD_SDK" ] || [ -L "$PS5_PAYLOAD_SDK" ]; }; then
   python3 "$HERE/check-sdk.py" --fingerprint --sdk "$PS5_PAYLOAD_SDK" >/dev/null
 fi
@@ -78,7 +110,7 @@ if want packages; then
   # docs/building.md asks for, and what Kodi's own configure step and native
   # tools need on the host (see docs/README.PS5.md section 0.2).
   sudo apt-get install -y \
-    bash clang clang-18 lld lld-18 llvm llvm-18 wget curl git unzip socat rsync zip \
+    bash clang clang-18 lld lld-18 llvm llvm-18 wget curl git unzip socat rsync zip xxd \
     cmake ninja-build meson pkg-config pkgconf python3 python3-dev python3-pip \
     python3-pyelftools python3-mako python3-glad python3-yaml python3-ply \
     python3-setuptools python3-packaging python3-venv \
@@ -99,9 +131,7 @@ if want sdk; then
   echo "==> pinned Kodi payload SDK"
   WORK="$WORK" bash "$HERE/bootstrap/ps5-sdk.sh"
   echo "==> pacbrew-repo (ported libraries)"
-  if [ ! -d "$WORK/pacbrew-repo" ]; then
-    git clone --depth 1 https://github.com/ps5-payload-dev/pacbrew-repo.git "$WORK/pacbrew-repo"
-  fi
+  checkout_pinned_source pacbrew-repo
   if [ ! -f "$PS5_PAYLOAD_SDK/target/user/homebrew/lib/pkgconfig/fontconfig.pc" ]; then
     # Builds and installs libraries (pacman -U) into the sysroot in the
     # order of upstream's ci-libs.sh - but through our own loop,
@@ -128,19 +158,7 @@ fi
 
 if want template; then
   echo "==> native-app boilerplate (app template for tools/ps5/package.sh)"
-  # The boilerplate supplies the ELF -> folder-title tooling that the imgui
-  # demo uses, and that tools/ps5/package.sh reuses as its app template.
-  # ps5-opengl's pinned boilerplate commit is no longer in upstream history;
-  # the next best is 81d4235 (the RELRO fix, same build layout as before).
-  # Newer main restructured the build (Ninja), which this tooling has not been
-  # validated against.
-  if [ ! -d "$WORK/ps5-native-app-boilerplate" ]; then
-    git clone https://github.com/blackbearreloaded/ps5-native-app-boilerplate.git "$WORK/ps5-native-app-boilerplate"
-    ( cd "$WORK/ps5-native-app-boilerplate" \
-        && { git checkout -q 4e1d1277dd0531a9a9df8c780e446b9cc26534dd 2>/dev/null \
-             || git checkout -q 81d4235346afc7490e98866af4020e94f255b204 2>/dev/null \
-             || echo "    known boilerplate commits not found upstream; staying on main"; } )
-  fi
+  checkout_pinned_source ps5-native-app-boilerplate
   # Older boilerplate revisions wrote the RELRO LOAD segment at the wrong file
   # offset and the console refused the title (CE-107750-0). Upstream fixed it
   # in 81d4235 (relro_origin); for revisions before that, apply the fix here.
@@ -192,7 +210,7 @@ to /data/homebrew/PPSA99005 (FTP, port 2121) and launch it from the home
 screen.
 
 Next: docs/README.PS5.md section 2 (tools/depends), then:
-  python3 tools/ps5/prepare-native-runtime.py --homebrew-sources "$WORK/pacbrew-repo" --jobs 4
+  python3 tools/ps5/prepare-native-runtime.py --homebrew-sources "$WORK/pacbrew-repo" --jobs "$JOBS"
   bash tools/ps5/configure.sh
 These commands prepare/build locally. Deployment is separate and user-operated.
 MSG

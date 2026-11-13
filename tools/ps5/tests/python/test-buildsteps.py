@@ -155,12 +155,13 @@ class BuildstepTests(unittest.TestCase):
             f"TOOLCHAIN={depends}/selected-sdk\nHAS_ZLIB=1\nNEED_LIBICONV=0\n")
         shutil.copy(ROOT / "tools/depends/target/Makefile", target)
         expected = ("bzip2 expat gettext libffi libxml2 openssl sqlite3 xz zlib dav1d ffmpeg "
-                    "python3 brotli curl libiconv tinyxml tinyxml2 fstrcmp libuuid "
+                    "python3 brotli nghttp2 curl libiconv tinyxml tinyxml2 fstrcmp libuuid "
                     "libprocstat libkodishim libsmb2 ps5-opengl").split()
         for recipe in expected:
             directory = target / recipe
             directory.mkdir()
-            check = "@test -f ../brotli/done\n\t" if recipe == "curl" else ""
+            check = ("@test -f ../brotli/done && test -f ../nghttp2/done\n\t"
+                     if recipe == "curl" else "")
             if recipe == "ps5-opengl":
                 check = f'@test "$$PS5_PAYLOAD_SDK" = "{depends}/selected-sdk"\n\t'
             (directory / "Makefile").write_text("all:\n\t" + check + "@touch done\n")
@@ -180,6 +181,26 @@ class BuildstepTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((native / "visited").exists())
         self.assertTrue((target / "curl/done").exists())
+
+    def test_python_uses_title_allocator_only_on_ps5(self):
+        depends = self.root / "python-graph"
+        recipe = depends / "target/python3"
+        recipe.mkdir(parents=True)
+        (depends / "Makefile.include").write_text(
+            "PREFIX=/target\nNATIVEPREFIX=/native\nPLATFORM=test\nPYTHON_VERSION=3.14\n")
+        (depends / "download-files.include").touch()
+        for name in ("Makefile", "PYTHON3-VERSION"):
+            shutil.copy(ROOT / "tools/depends/target/python3" / name, recipe)
+        for platform in ("ps5", "linux", "wasm"):
+            with self.subTest(platform=platform):
+                result = subprocess.run(
+                    ["/usr/bin/make", "-s", "-C", str(recipe), "-f", "Makefile",
+                     "-f", "-", "python-config", f"OS={platform}"],
+                    input='python-config:\n\t@printf \'%s\\n\' "$(CONFIGURE)"\n',
+                    env=self.env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("--without-pymalloc", result.stdout)
+                self.assertEqual("--without-mimalloc" in result.stdout, platform == "ps5")
 
     def test_graphics_recipe_always_delegates_to_its_cache_validating_backend(self):
         recipe = self.root / "tools/depends/target/ps5-opengl"

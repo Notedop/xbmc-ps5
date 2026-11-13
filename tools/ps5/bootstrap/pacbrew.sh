@@ -22,7 +22,15 @@ START="${1:?usage: $0 <first-package> [last-package]  (names as in ci-libs.sh)}"
 END="${2:-}"
 SKIP="sdk ${SKIP:-}"
 export MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}"
+# Upstream source archives contain UTF-8 filenames, even on minimal C-locale hosts.
+export LC_ALL=C.UTF-8
 cd "$REPO"
+
+for PATCH in "$ROOT/tools/ps5/patches"/pacbrew-*.patch; do
+  if ! git apply --reverse --check "$PATCH" >/dev/null 2>&1; then
+    git apply "$PATCH" || exit 1
+  fi
+done
 
 # sudo keep-alive: llvm/mesa outlast sudo's 15 minute credential cache, and
 # every package ends in `sudo pacman -U`.

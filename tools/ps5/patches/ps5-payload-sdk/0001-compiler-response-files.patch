@@ -1,0 +1,120 @@
+diff --git a/host/Makefile b/host/Makefile
+index d9f43b9..9bd2ba0 100644
+--- a/host/Makefile
++++ b/host/Makefile
+@@ -27,6 +27,7 @@ TOOLS := bin/prospero-cmake \
+          bin/prospero-llvm-config \
+          bin/prospero-clang \
+          bin/prospero-clang++ \
++         bin/ps5-wrapper-args.py \
+          bin/prospero-deploy \
+          bin/prospero-lld \
+          bin/prospero-pkg-config \
+diff --git a/host/bin/prospero-clang b/host/bin/prospero-clang
+index 0f91935..d117050 100755
+--- a/host/bin/prospero-clang
++++ b/host/bin/prospero-clang
+@@ -28,7 +28,15 @@ LIBS_DEPS="-lSceLibcInternal -lSceNet"
+ LIBS_KERN="-lkernel_web"
+ TU=""
+ 
+-for ARG in "$@"; do
++# Inspect response-file options, while passing the original arguments to Clang.
++# CLion stores -c/-E in @files; startup objects must not enter these probes.
++WRAPPER_SCAN=$(python3 "${SCRIPT_DIR}/ps5-wrapper-args.py" "$@") || exit $?
++WRAPPER_ARGS=()
++if [[ -n "$WRAPPER_SCAN" ]]; then
++    mapfile -t WRAPPER_ARGS <<< "$WRAPPER_SCAN"
++fi
++
++for ARG in "${WRAPPER_ARGS[@]}"; do
+     if [[ "$ARG" == "-nostdlibc" ||
+           "$ARG" == "-nodefaultlibs" ]]; then
+ 	LIBS_C=""
+@@ -42,6 +50,11 @@ for ARG in "$@"; do
+     fi
+     if [[ "$ARG" == "-nostartfiles" ||
+           "$ARG" == "-c" ||
++          "$ARG" == "-E" ||
++          "$ARG" == "-S" ||
++          "$ARG" == "-fsyntax-only" ||
++          "$ARG" == "-M" ||
++          "$ARG" == "-MM" ||
+           "$ARG" == "-shared" ]]; then
+ 	LIBS_CRT=""
+     fi
+diff --git a/host/bin/prospero-clang++ b/host/bin/prospero-clang++
+index 9b698cf..49c2a46 100755
+--- a/host/bin/prospero-clang++
++++ b/host/bin/prospero-clang++
+@@ -29,7 +29,15 @@ LIBS_DEPS="-lSceLibcInternal -lSceNet"
+ LIBS_KERN="-lkernel_web"
+ TU=""
+ 
+-for ARG in "$@"; do
++# Inspect response-file options, while passing the original arguments to Clang.
++# CLion stores -c/-E in @files; startup objects must not enter these probes.
++WRAPPER_SCAN=$(python3 "${SCRIPT_DIR}/ps5-wrapper-args.py" "$@") || exit $?
++WRAPPER_ARGS=()
++if [[ -n "$WRAPPER_SCAN" ]]; then
++    mapfile -t WRAPPER_ARGS <<< "$WRAPPER_SCAN"
++fi
++
++for ARG in "${WRAPPER_ARGS[@]}"; do
+     if [[ "$ARG" == "-nostdlib" ||
+           "$ARG" == "-nodefaultlibs" ]]; then
+ 	LIBS_C=""
+@@ -47,6 +55,11 @@ for ARG in "$@"; do
+     fi
+     if [[ "$ARG" == "-nostartfiles" ||
+ 	  "$ARG" == "-c" ||
++          "$ARG" == "-E" ||
++          "$ARG" == "-S" ||
++          "$ARG" == "-fsyntax-only" ||
++          "$ARG" == "-M" ||
++          "$ARG" == "-MM" ||
+ 	  "$ARG" == "-shared" ]]; then
+ 	LIBS_CRT=""
+     fi
+diff --git a/host/bin/ps5-wrapper-args.py b/host/bin/ps5-wrapper-args.py
+new file mode 100755
+index 0000000..86381d2
+--- /dev/null
++++ b/host/bin/ps5-wrapper-args.py
+@@ -0,0 +1,36 @@
++#!/usr/bin/env python3
++"""Inspect GNU-style response files without changing arguments sent to Clang."""
++import pathlib
++import shlex
++import sys
++
++FLAGS = {
++    '-c', '-E', '-S', '-fsyntax-only', '-M', '-MM',
++    '-nostdlib', '-nostdlibc', '-nostdlib++', '-nodefaultlibs',
++    '-nostartfiles', '-shared', '-lkernel', '-lkernel_sys', '-lkernel_web',
++}
++
++
++def expand(arguments, stack=()):
++    for argument in arguments:
++        if argument.startswith('@'):
++            path = pathlib.Path(argument[1:]).resolve()
++            if path in stack or len(stack) >= 32:
++                raise ValueError(f'recursive response file: {path}')
++            lexer = shlex.shlex(path.read_text(), posix=True)
++            lexer.whitespace_split = True
++            lexer.commenters = ''
++            yield from expand(list(lexer), (*stack, path))
++        else:
++            yield argument
++
++
++try:
++    for argument in expand(sys.argv[1:]):
++        if argument in FLAGS:
++            print(argument)
++        elif argument and not argument.startswith('-'):
++            print('__PS5_WRAPPER_INPUT__')
++except (OSError, ValueError) as error:
++    print(f'PS5 compiler wrapper: {error}', file=sys.stderr)
++    sys.exit(1)

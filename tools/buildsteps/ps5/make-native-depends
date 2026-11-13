@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -e
+. "$(dirname "$0")/environment"
+exec make -C "$WORKSPACE/tools/depends/native" -j"$BUILDTHREADS" "$@"

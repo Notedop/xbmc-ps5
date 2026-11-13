@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Shared environment for the PS5 buildsteps.
+WORKSPACE="${WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)}"
+XBMC_PLATFORM_DIR=ps5
+. "$WORKSPACE/tools/buildsteps/defaultenv"
+set -euo pipefail
+
+export BUILD="${BUILD:-$WORKSPACE/build/ps5-release}"
+export BUILD_TYPE="${BUILD_TYPE:-$Configuration}"
+export WORK="${WORK:-$WORKSPACE/build/ps5-external}"
+export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK-/opt/ps5-payload-sdk}"
+export PS5_OPENGL_PREFIX="${PS5_OPENGL_PREFIX:-/opt/ps5-opengl-gl46}"
+export PS5_OPENGL_SOURCE="${PS5_OPENGL_SOURCE:-$WORK/ps5-opengl}"
+export APP_TEMPLATE="${APP_TEMPLATE:-$PS5_OPENGL_SOURCE/build/native-app/PPSA99005}"
+export PS5_DEPENDS_PREFIX="${PS5_DEPENDS_PREFIX:-$XBMC_DEPENDS_ROOT/x86_64-unknown-freebsd-debug}"
+export NATIVE="${NATIVE:-$XBMC_DEPENDS_ROOT/x86_64-linux-gnu-native}"
+export PS5_NATIVE_OUTPUT="${PS5_NATIVE_OUTPUT:-$WORKSPACE/build/ps5-native}"
+export PS5_NATIVE_RUNTIME_SDK="${PS5_NATIVE_RUNTIME_SDK:-$PS5_NATIVE_OUTPUT/sdk}"
+export PS5_NATIVE_DEPENDS_MAP="${PS5_NATIVE_DEPENDS_MAP:-$PS5_NATIVE_OUTPUT/depends/archive-map.json}"
+export PS5_HOMEBREW_SOURCES="${PS5_HOMEBREW_SOURCES:-$WORK/pacbrew-repo}"
+export JOBS="$BUILDTHREADS"
+[[ "$BUILDTHREADS" =~ ^[1-9][0-9]*$ ]] || {
+  echo "BUILDTHREADS must be a positive integer" >&2; exit 1; }
+echo "PS5: $BUILD_TYPE; build=$BUILD; depends=$PS5_DEPENDS_PREFIX; jobs=$BUILDTHREADS"

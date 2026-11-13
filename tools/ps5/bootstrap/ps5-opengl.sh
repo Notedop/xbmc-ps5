@@ -24,7 +24,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # tools/ps5
 ROOT="$(cd "$HERE/../.." && pwd)"
 WORK="${WORK:-$ROOT/build/ps5-external}"
-SRC="$WORK/ps5-opengl"
+SRC="${PS5_OPENGL_SOURCE:-$WORK/ps5-opengl}"
 SOURCE_URL="https://github.com/Notedop/ps5-opengl.git"
 export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
 export PS5_OPENGL_PREFIX="${PS5_OPENGL_PREFIX:-/opt/ps5-opengl-gl46}"
@@ -70,6 +70,13 @@ if git -C "$SRC" apply --reverse --check "${PATCHES[@]}" >/dev/null 2>&1; then
 else
   git -C "$SRC" apply --check "${PATCHES[@]}"
   git -C "$SRC" apply "${PATCHES[@]}"
+fi
+
+# Always qualify installed content; a Make marker cannot prove this cache is current.
+if [ "$(cat "$SRC/build/.kodi-display-profile" 2>/dev/null)" = "$PROFILE" ] &&
+   python3 "$HERE/native_graphics.py" --source "$SRC" --installed "$PS5_OPENGL_PREFIX"; then
+  echo "SDK already qualified ($PROFILE): $PS5_OPENGL_PREFIX"
+  exit 0
 fi
 
 # The runtime's make rules do not track compiler flags.
@@ -143,4 +150,5 @@ if ! grep -q "PS5_OPENGL_NATIVE_HEIGHT $PS5_SCANOUT_HEIGHT" "$PS5_OPENGL_PREFIX/
 fi
 printf '%s\n' "$PROFILE" > "$STAMP"
 printf '%s\n' "$SDK_IDENTITY" > "$SDK_STAMP"
+python3 "$HERE/native_graphics.py" --source "$SRC" --installed "$PS5_OPENGL_PREFIX"
 echo "SDK ready ($PROFILE): all three Kodi integration entry points exported"

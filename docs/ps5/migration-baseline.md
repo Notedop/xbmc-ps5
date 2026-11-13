@@ -60,7 +60,7 @@ No existing checkout was reset, overwritten, or repurposed.
 - Total ledger rows generated: **110**
 
 See:
-- `tools/ps5/migration-ledger.csv`
+- `ps5-migration/migration-ledger.csv` in the separate workspace repository
 - `docs/ps5/migration-ledger.md`
 
 ## Phase 0 blockers / uncertainties (precise)
@@ -79,5 +79,5 @@ See:
 Proceed to Phase 1A/2 from this baseline:
 - Baseline source SHA: `28ea2eac1eb7af8fdcbd2672d933ce87f594be79`
 - Reference intake SHA: `3cbafb95fdf4d0a921843475f971c62b65fa5ce9`
-- Ledger source of truth: `tools/ps5/migration-ledger.csv`
+- Historical ledger: `ps5-migration/migration-ledger.csv` in the separate workspace repository
 - Dependency manifest source of truth: `tools/ps5/dependency-manifest.json`

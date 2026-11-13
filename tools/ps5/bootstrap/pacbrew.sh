@@ -13,22 +13,21 @@
 #          .pkg.tar.gz instead of rebuilding it (e.g. llvm built fine but the
 #          `sudo pacman -U` step failed) - later packages are built as usual.
 #
-# Installs the ps5-payload-sdk package itself first (it is the first entry in
-# ci-libs.sh), so this is also what puts $PS5_PAYLOAD_SDK on the machine.
+# The payload SDK is owned by Kodi's SDK recipe, not pacbrew's moving SDK recipe.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 WORK="${WORK:-$ROOT/build/ps5-external}"
 REPO="$WORK/pacbrew-repo"
 START="${1:?usage: $0 <first-package> [last-package]  (names as in ci-libs.sh)}"
 END="${2:-}"
-SKIP="${SKIP:-}"
+SKIP="sdk ${SKIP:-}"
 export MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}"
 cd "$REPO"
 
 # sudo keep-alive: llvm/mesa outlast sudo's 15 minute credential cache, and
 # every package ends in `sudo pacman -U`.
 sudo -v
-( while kill -0 "$$" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 60; done ) &
+( while kill -0 "$$" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 60; done ) >/dev/null 2>&1 &
 SUDO_KEEPALIVE=$!
 trap 'kill "$SUDO_KEEPALIVE" 2>/dev/null' EXIT
 
@@ -39,7 +38,7 @@ FOUND=0
 for PKG in $PKGS; do
   [ "$PKG" = "$START" ] && FOUND=1
   [ "$FOUND" -eq 1 ] || continue
-  case " $SKIP " in *" $PKG "*) echo "==> $PKG (skipped)"; continue;; esac
+  case " $SKIP " in *" $PKG "*) echo "==> $PKG (skipped)"; [ "$PKG" = "$END" ] && break; continue;; esac
   echo "==> $PKG"
   if [ "$PKG" = "$START" ] && [ "${REUSE:-0}" = 1 ] && ls "$PKG"/ps5-payload-*.pkg.tar.gz >/dev/null 2>&1; then
     echo "    reusing already-built package"

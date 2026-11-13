@@ -453,7 +453,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "build/ps5-native-stdio-depends")
     parser.add_argument("--sdk", type=Path, default=Path("/opt/ps5-payload-sdk"))
-    parser.add_argument("--depends", type=Path, default=ROOT / "build/ps5-depends-test" / PLATFORM)
+    parser.add_argument("--depends", type=Path, default=ROOT / "tools/depends/xbmc-depends" / PLATFORM)
     parser.add_argument("--overlay", type=Path, default=ROOT / "tools/ps5/sdk/include")
     parser.add_argument("--homebrew-sources", type=Path,
                         default=Path(os.environ.get(

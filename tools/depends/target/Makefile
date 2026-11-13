@@ -137,9 +137,11 @@ ifeq ($(OS),linux)
 endif
 
 ifeq ($(OS),ps5)
-  # PS5 uses a FreeBSD-derived target runtime and does not use linux-system-*
-  # proxy packages. Keep the graph to Kodi-relevant target libraries.
-  DEPENDS += dav1d ffmpeg
+  # Remaining libraries (including nghttp2) come from the pacbrew sysroot.
+  DEPENDS = bzip2 expat gettext libffi libxml2 openssl sqlite3 xz zlib \
+    dav1d ffmpeg python3 brotli curl libiconv tinyxml tinyxml2 fstrcmp \
+    libuuid libprocstat libkodishim libsmb2 ps5-opengl
+  ZLIB = zlib
 endif
 DEPENDS := $(filter-out $(EXCLUDED_DEPENDS),$(DEPENDS))
 
@@ -147,7 +149,7 @@ DEPENDS := $(filter-out $(EXCLUDED_DEPENDS),$(DEPENDS))
 
 all: .installed-$(PLATFORM)
 
-EXCLUDE := linux-system-gl-libs linux-system-x11-libs
+EXCLUDE := linux-system-gl-libs linux-system-x11-libs ps5-opengl
 DOWNLOAD_DEPS := $(filter-out $(EXCLUDE:%=%), $(DEPENDS))
 DOWNLOAD_TARGETS := $(addprefix download/, $(DOWNLOAD_DEPS))
 
@@ -157,7 +159,12 @@ $(DOWNLOAD_TARGETS):
 download: $(DOWNLOAD_TARGETS)
 
 crossguid: $(LIBUUID)
+ifeq ($(OS),ps5)
+curl: brotli openssl $(ZLIB)
+ps5-opengl: export PS5_PAYLOAD_SDK ?= $(TOOLCHAIN)
+else
 curl: brotli openssl nghttp2 $(ZLIB)
+endif
 dbus: expat
 exiv2: $(ICONV) $(ZLIB) expat
 ffmpeg: $(ICONV) $(ZLIB) bzip2 openssl dav1d $(LIBVA)

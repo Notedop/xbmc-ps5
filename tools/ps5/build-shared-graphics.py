@@ -212,8 +212,8 @@ def include_configuration(sdk, overlay):
                             else "baseline-stdio-unqualified")}
 
 
-def mesa_link_configuration():
-    manifests = [
+def mesa_link_configuration(manifests=None):
+    manifests = manifests if manifests is not None else [
         ROOT / "build/ps5-shared-runtime/core-native-abi/manifest.json",
         ROOT / "build/ps5-shared-runtime/system-sdk/libSceLibcInternal/manifest.json",
         ROOT / "build/ps5-shared-runtime/system-sdk/libkernel/manifest.json"]
@@ -467,7 +467,7 @@ def run_stage(args):
     output = args.output.resolve()
     sdk = args.sdk.resolve()
     includes = include_configuration(sdk, args.sdk_include)
-    link_config = mesa_link_configuration()
+    link_config = mesa_link_configuration(getattr(args, "provider", None))
     fingerprint = stage_fingerprint(source, sdk, includes, link_config)
     if output == ROOT or output in ROOT.parents:
         raise ValueError("output must be an isolated build directory")
@@ -801,6 +801,8 @@ def main():
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--sdk-include", type=Path,
                         help="native ABI header overlay; C++ wrappers precede this include path")
+    parser.add_argument("--provider", type=Path, action="append",
+                        help="qualified provider manifest for Meson link checks")
     parser.add_argument("--resume", action="store_true",
                         help="resume an incomplete stage only if the protected baseline is identical")
     parser.add_argument("--rebuild-psbc-from", type=Path,

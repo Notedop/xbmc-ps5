@@ -6,12 +6,13 @@ BUILD="${BUILD:-$ROOT/build/ps5-release}"
 # Produced by `make -C tools/depends/native` (TexturePacker, swig, etc.) against
 # the prefix passed to `tools/depends/configure --prefix=...`. See
 # docs/README.PS5.md for the full dependency-build sequence.
-NATIVE="${NATIVE:-$ROOT/build/ps5-depends-test/x86_64-linux-gnu-native}"
+NATIVE="${NATIVE:-$ROOT/tools/depends/xbmc-depends/x86_64-linux-gnu-native}"
 TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-$ROOT/toolchain/ps5-kodi.cmake}"
 PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
-PS5_DEPENDS_PREFIX="${PS5_DEPENDS_PREFIX:-$ROOT/build/ps5-depends-test/x86_64-unknown-freebsd-debug}"
+PS5_DEPENDS_PREFIX="${PS5_DEPENDS_PREFIX:-$ROOT/tools/depends/xbmc-depends/x86_64-unknown-freebsd-debug}"
 PS5_HOMEBREW_PREFIX="${PS5_HOMEBREW_PREFIX:-$PS5_PAYLOAD_SDK/target/user/homebrew}"
 export PS5_DEPENDS_PREFIX PS5_HOMEBREW_PREFIX
+python3 "$ROOT/tools/ps5/check-sdk.py" --sdk "$PS5_PAYLOAD_SDK"
 PS5_NATIVE_RUNTIME_SDK="${PS5_NATIVE_RUNTIME_SDK:-$ROOT/build/ps5-native/sdk}"
 PS5_NATIVE_DEPENDS_MAP="${PS5_NATIVE_DEPENDS_MAP:-$ROOT/build/ps5-native/depends/archive-map.json}"
 export PS5_NATIVE_RUNTIME_SDK PS5_NATIVE_DEPENDS_MAP
@@ -133,9 +134,7 @@ if [ -f "$PY_ROOT/lib/libpython3.14.a" ]; then
   PYTHON_ARGS=(
     -DENABLE_PYTHON=ON
     -DENABLE_INTERNAL_SWIG=ON
-    -DPYTHON_PATH="$PS5_DEPENDS_PREFIX"
-    -DPYTHON_VER=3.14
-    -DPython3_USE_STATIC_LIBS=ON
+    -DPS5_PYTHON_VERSION=3.14
   )
 fi
 
@@ -149,8 +148,8 @@ if [ -x "$NATIVE/bin/JsonSchemaBuilder" ]; then
   JSONSCHEMABUILDER_ARGS=(-DWITH_JSONSCHEMABUILDER="$NATIVE/bin")
 fi
 
-# CMake's pkg_check_modules()/find_package(Python3) cache their resolved
-# library paths under these prefixes, not under "FFMPEG_*"/"Python3_*"
+# CMake's pkg_check_modules() caches its resolved
+# library paths under these prefixes, not under "FFMPEG_*"
 # themselves - a stale entry here (e.g. from a previous configure against the
 # SDK sysroot) makes find_library() skip re-searching entirely and keep
 # linking the old path even though FFMPEG_LIBAVCODEC_VERSION etc. gets
@@ -167,7 +166,6 @@ fi
 # resolving to the SDK's older brotli even after everything else is fixed.
 cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -U "FFMPEG_*" -U "pkgcfg_lib_FFMPEG_*" -U "pkgcfg_include_FFMPEG_*" \
-  -U "Python3_*" -U "PYTHON_*" -U "_Python3_*" \
   -U "Dav1d_*" -U "pkgcfg_lib_Dav1d_*" -U "pkgcfg_include_Dav1d_*" \
   -U "EXPAT_*" -U "PC_EXPAT*" -U "FFI_LIBRARY" -U "GMP_LIBRARY" -U "PYEXPAT_LIBRARY" \
   -U "Iconv_*" -U "Intl_*" -U "LIBLZMA_*" \

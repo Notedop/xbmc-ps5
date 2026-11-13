@@ -52,7 +52,7 @@ Hardware video fallback releases the codec's decoder ownership rather than
 closing it while zero-copy pictures may still be displayed. Outstanding pictures
 retain the decoder until their release. The PS5 renderer retires GPU reads before
 forced buffer release or reconfiguration. Focused host regressions are available
-in `tools/ps5/test-video-lifecycle.py` and `tools/ps5/test-controller-input.py`.
+in `tools/ps5/tests/python/test-video-lifecycle.py` and `tools/ps5/tests/python/test-controller-input.py`.
 
 User pause holds the currently displayed frame and prevents queued packets or
 pending output from advancing video. Startup synchronization, forced first-frame
@@ -196,7 +196,7 @@ as whole-file equality. Title staging never deploys or contacts the console.
 | `build-native-kodi-app.py`, `build-native-title-launcher.py`, `native_loader_companion.py` | Normal title packaging |
 | `addon-repository.py`, `stage-installed-addons.py` | Native catalogue build/stage/feed/publication |
 | `native_system_provider.py`, `native_system_sdk.py` | Standalone implementation analysis, not normal build dependencies |
-| `build-sprx-test-addon.sh`, `NativeCAddon.cmake` | Restricted import-free C loader sample; explicit diagnostic only |
+| `tests/shell/build-sprx-test-addon.sh`, `NativeCAddon.cmake` | Restricted import-free C loader sample; explicit diagnostic only |
 | `test.py` | Explicit runner for hyphenated Python test files |
 
 ```sh
@@ -204,7 +204,7 @@ python3 tools/ps5/test.py \
   test-native-runtime-sdk.py test-native-shared-link.py test-native-module-crt.py \
   test-native-loader-companion.py test-native-title-launcher.py \
   test-build-native-kodi-app.py test-prepare-shared-title.py test-verify-shared-title.py
-bash tools/ps5/test-native-loader.sh
+bash tools/ps5/tests/shell/test-native-loader.sh
 ```
 
 Host sanitizer/mock tests cover ownership and lifecycle error paths; target

@@ -23,7 +23,7 @@ def main():
     parser.add_argument("--sdk", type=Path, default=Path(
         os.environ.get("PS5_PAYLOAD_SDK", "/opt/ps5-payload-sdk")))
     parser.add_argument("--depends", type=Path, default=Path(os.environ.get(
-        "PS5_DEPENDS_PREFIX", str(ROOT / "build/ps5-depends-test/x86_64-unknown-freebsd-debug"))))
+        "PS5_DEPENDS_PREFIX", str(ROOT / "tools/depends/xbmc-depends/x86_64-unknown-freebsd-debug"))))
     parser.add_argument("--runtime-sdk", type=Path, default=Path(os.environ.get(
         "PS5_NATIVE_RUNTIME_SDK", str(ROOT / "build/ps5-native/sdk"))))
     parser.add_argument("--archive-map", type=Path, default=Path(os.environ.get(

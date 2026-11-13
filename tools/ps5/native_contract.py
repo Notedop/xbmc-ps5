@@ -143,6 +143,10 @@ def validate_sdk(sdk, archive_map=None):
                 f"native SDK runtime receipt mismatch: {module}")
     contract["sdk_receipt_sha256"] = digest(root / "receipt.json")
     if archive_map is not None:
+        expected_map = receipt.get("native_depends_map_sha256")
+        if expected_map is not None:
+            require(digest(archive_map) == expected_map,
+                    "native SDK/dependency generation mismatch; rerun with a matching SDK and map")
         mapping = load_verified_map(archive_map, sdk_file(root, "include/stdio.h"))
         contract["archive_map_sha256"] = digest(archive_map)
         contract["archive_replacements"] = len(mapping)

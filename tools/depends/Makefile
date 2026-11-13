@@ -2,6 +2,9 @@ include Makefile.include
 
 NATIVE=native/.installed-$(NATIVEPLATFORM)
 target=target/.installed-$(PLATFORM)
+ifeq ($(OS),ps5)
+.PHONY: all $(NATIVE) $(target)
+endif
 all: $(target)
 
 download:
@@ -26,4 +29,3 @@ test-dependencies:
 distclean::
 	$(MAKE) -C native distclean
 	$(MAKE) -C target distclean
-

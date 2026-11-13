@@ -5,7 +5,7 @@ during migration from the reference PS5 port to a native Kodi fork branch.
 
 ## Source of truth
 
-- Complete row set: `tools/ps5/migration-ledger.csv`
+- Complete row set: `ps5-migration/migration-ledger.csv` in the separate workspace repository
 - Row count: **110**
   - `19` Kodi patch rows (`PATCH-*`)
   - `87` overlay file rows (`OVERLAY-*`)

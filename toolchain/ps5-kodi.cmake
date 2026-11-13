@@ -19,6 +19,7 @@ if(NOT DEFINED PS5_PAYLOAD_SDK)
   endif()
 endif()
 set(PS5_PAYLOAD_SDK "${PS5_PAYLOAD_SDK}" CACHE PATH "ps5-payload-sdk install directory")
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/scripts/ps5/SDK.cmake")
 
 if(NOT EXISTS "${PS5_PAYLOAD_SDK}/toolchain/prospero.cmake")
   message(FATAL_ERROR "ps5-payload-sdk not found at ${PS5_PAYLOAD_SDK} (set PS5_PAYLOAD_SDK)")
@@ -71,6 +72,7 @@ if(PS5_DEPENDS_PREFIX)
   set(PS5_DEPENDS_PREFIX "${PS5_DEPENDS_PREFIX}" CACHE PATH "tools/depends/target install prefix (ffmpeg/dav1d/python3)")
   list(APPEND CMAKE_FIND_ROOT_PATH "${PS5_DEPENDS_PREFIX}")
 endif()
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/scripts/ps5/Python.cmake")
 
 # --- Libraries built by pacbrew-repo (inside the sysroot) -------------------
 if(NOT DEFINED PS5_HOMEBREW_PREFIX)

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -e
+. "$(dirname "$0")/environment"
+exec bash "$WORKSPACE/tools/ps5/deploy.sh" "$@"

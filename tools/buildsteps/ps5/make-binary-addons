@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -e
+. "$(dirname "$0")/environment"
+python3 "$WORKSPACE/tools/ps5/check-sdk.py" --sdk "$PS5_PAYLOAD_SDK"
+exec python3 "$WORKSPACE/tools/ps5/addon-repository.py" \
+  --sdk "$PS5_PAYLOAD_SDK" --depends "$PS5_DEPENDS_PREFIX" \
+  --runtime-sdk "$PS5_NATIVE_RUNTIME_SDK" --archive-map "$PS5_NATIVE_DEPENDS_MAP" \
+  build --only peripheral.joystick --only inputstream.adaptive --jobs "$BUILDTHREADS" "$@"

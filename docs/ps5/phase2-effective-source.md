@@ -38,7 +38,8 @@ local-only file in `/home/raoul/kodi`:
 
 ## Ledger synchronization
 
-`tools/ps5/migration-ledger.csv` was updated:
+The historical migration ledger (now archived as
+`ps5-migration/migration-ledger.csv` in the separate workspace repository) was updated:
 
 - `PATCH-*` rows: set to `status=done`, `disposition=adapt-native-integration`
 - `OVERLAY-*` rows: set to `status=done`, `disposition=adapt-native-integration`

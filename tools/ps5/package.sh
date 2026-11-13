@@ -8,17 +8,14 @@
 #   2. Kodi's normal link inputs -> private application link
 #   3. prepare-shared-title.py -> SDK providers and native title builders
 #   4. make app -> dist/<TITLE_ID>/{eboot.bin, sce_module, sce_sys}
-#   5. copy data and verify the completed native title; optionally upload over FTP.
+#   5. copy data and verify the completed native title.
 #
 #   BUILD       Kodi build dir           default build/ps5-release
-#   STAGE       fresh staging dir        default unique directory below BUILD
+#   STAGE       reusable output dir      default $BUILD/title
 #   WORK        external sources dir     default build/ps5-external (bootstrap.sh)
 #   APP_TEMPLATE demo app dir            default $WORK/ps5-opengl/build/native-app/PPSA99005
 #   Title metadata is copied unchanged from title/sce_sys/param.json.
 #   HEAP_MIB    app malloc heap (default 2048)
-#   PS5_HOST    console IP for FTP upload (optional)
-#   PS5_FTP_PORT  console FTP port (default 2121)
-#   PS5_DEPLOY_JOBS concurrent FTP uploads (default 8, range 1..8)
 #   PS5_TEST_BINARY_ADDON  1 includes the native SPRX screensaver (default 0)
 #   PS5_BUNNY_DIAGNOSTIC  1 includes the Python DASH diagnostic (default 0);
 #               requires native Adaptive among the selected catalogue prefixes
@@ -31,14 +28,25 @@
 #   Legacy SO prefix/ELF/Adaptive selections are unsupported on this branch.
 set -euo pipefail
 
-export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
-export PS5_OPENGL_PREFIX="${PS5_OPENGL_PREFIX:-/opt/ps5-opengl-gl46}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HERE="$ROOT"
 BUILD="${BUILD:-$ROOT/build/ps5-release}"
-STAGE="${STAGE:-$BUILD/title-$(date -u +%Y%m%dT%H%M%S)-$$}"
+[ -f "$BUILD/CMakeCache.txt" ] || {
+  echo "!! Missing $BUILD/CMakeCache.txt; run tools/buildsteps/ps5/configure-xbmc first" >&2
+  exit 1
+}
+cache_path() { sed -n "s/^$1:[^=]*=//p" "$BUILD/CMakeCache.txt"; }
+export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-$(cache_path PS5_PAYLOAD_SDK)}"
+export PS5_OPENGL_PREFIX="${PS5_OPENGL_PREFIX:-$(cache_path PS5_OPENGL_PREFIX)}"
+PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
+PS5_OPENGL_PREFIX="${PS5_OPENGL_PREFIX:-/opt/ps5-opengl-gl46}"
+STAGE="${STAGE:-$BUILD/title}"
+WORK="${WORK:-$(cache_path PS5_WORK)}"
 WORK="${WORK:-$ROOT/build/ps5-external}"
-APP_TEMPLATE="${APP_TEMPLATE:-$WORK/ps5-opengl/build/native-app/PPSA99005}"
+PS5_OPENGL_SOURCE="${PS5_OPENGL_SOURCE:-$(cache_path PS5_OPENGL_SOURCE)}"
+PS5_OPENGL_SOURCE="${PS5_OPENGL_SOURCE:-$WORK/ps5-opengl}"
+APP_TEMPLATE="${APP_TEMPLATE:-$(cache_path PS5_APP_TEMPLATE)}"
+APP_TEMPLATE="${APP_TEMPLATE:-$PS5_OPENGL_SOURCE/build/native-app/PPSA99005}"
 HEAP_MIB="${HEAP_MIB:-2048}"
 PACKAGE_ZIP="${PACKAGE_ZIP:-0}"
 for setting in TITLE_ID KODI_CATEGORY KODI_HDR_TITLE; do
@@ -85,11 +93,16 @@ SHARED_SDK="${PS5_NATIVE_RUNTIME_SDK:-$CONFIGURED_SHARED_SDK}"
 SHARED_SDK="$(realpath -e "$SHARED_SDK")"
 [ "$SHARED_SDK" = "$(realpath -e "$CONFIGURED_SHARED_SDK")" ] || {
   echo "!! packaging SDK differs from the configured Kodi SDK" >&2; exit 1; }
-NATIVE_DEPENDS_MAP="$(sed -n 's/^PS5_NATIVE_DEPENDS_MAP:[^=]*=//p' "$BUILD/CMakeCache.txt")"
+CONFIGURED_DEPENDS_MAP="$(cache_path PS5_NATIVE_DEPENDS_MAP)"
+NATIVE_DEPENDS_MAP="${PS5_NATIVE_DEPENDS_MAP:-$CONFIGURED_DEPENDS_MAP}"
 [ -n "$NATIVE_DEPENDS_MAP" ] || {
   echo "!! PS5_NATIVE_DEPENDS_MAP required; reconfigure the native title" >&2; exit 1; }
+[ "$(realpath -e "$NATIVE_DEPENDS_MAP")" = "$(realpath -e "$CONFIGURED_DEPENDS_MAP")" ] || {
+  echo "!! packaging dependency map differs from the configured Kodi map" >&2; exit 1; }
+python3 "$ROOT/tools/ps5/check-sdk.py" --sdk "$PS5_PAYLOAD_SDK"
 python3 "$ROOT/tools/ps5/native_contract.py" --sdk "$SHARED_SDK" \
   --archive-map "$NATIVE_DEPENDS_MAP" >/dev/null
+python3 "$ROOT/tools/ps5/native_graphics.py" --prepared-sdk "$SHARED_SDK"
 case "$PS5_SPRX_START_TRACE_DIAGNOSTIC" in
   0) ;;
   1) [ "$PS5_TEST_BINARY_ADDON" = "1" ] || {
@@ -100,7 +113,7 @@ TEST_ADDON="$BUILD/test-addons/sprx"
 case "$PS5_TEST_BINARY_ADDON" in
   0) ;;
   1) PS5_SPRX_START_TRACE_DIAGNOSTIC="$PS5_SPRX_START_TRACE_DIAGNOSTIC" \
-       bash "$ROOT/tools/ps5/build-sprx-test-addon.sh" "$TEST_ADDON" ;;
+       bash "$ROOT/tools/ps5/tests/shell/build-sprx-test-addon.sh" "$TEST_ADDON" ;;
   *) echo "!! PS5_TEST_BINARY_ADDON must be 0 or 1" >&2; exit 1 ;;
 esac
 
@@ -117,33 +130,35 @@ if [ "$PS5_ADAPTIVE_TEST" != "0" ] || [ -n "${PS5_ADDON_ELFS:-}" ] ||
 fi
 
 [ -f "$BUILD/kodi.bin" ] || { echo "!! $BUILD/kodi.bin not found: build Kodi first"; exit 1; }
-# A failed/incomplete Kodi build leaves kodi.bin stale relative to its own
-# link inputs: packaging would silently ship the previous build. Ask ninja
-# itself whether the kodi.bin target specifically has pending work, rather
-# than comparing mtimes against every *.o under $BUILD - the tree also
-# contains leaf objects with no edge to kodi.bin at all (e.g.
-# cores/dll-loader/exports/wrapper.c.o, the experimental binary-addon
-# loader's always-rebuilt helper target), which can legitimately be newer
-# than kodi.bin from an earlier, unrelated partial build and would
-# otherwise cause a false positive here. A few always-run generator/copy
-# utility steps (ExportFiles/GenerateSystemAddons/GenerateAddonXml) show up
-# in a dry run regardless of staleness; only a line that actually produces
-# kodi.bin counts as real pending work.
-if [ -f "$BUILD/build.ninja" ] && command -v ninja >/dev/null 2>&1; then
-  if (cd "$BUILD" && ninja -n kodi.bin 2>/dev/null) | grep -qE 'kodi\.bin$|-o kodi\.bin'; then
-    echo "!! $BUILD/kodi.bin has pending link work per 'ninja -n kodi.bin':"
-    echo "!! the Kodi build did not finish. Check: grep -n 'FAILED:\| error:' ~/kodi-build.log"
-    exit 1
-  fi
-fi
+python3 "$ROOT/tools/ps5/check-package-build.py" "$BUILD" \
+  --config "${PS5_BUILD_CONFIG:-}"
 [ -f "$APP_TEMPLATE/Makefile" ] && [ -d "$APP_TEMPLATE/.deps/native" ] || {
   echo "!! app template not found at $APP_TEMPLATE (build ps5-opengl's imgui-demo first: make -C $WORK/ps5-opengl imgui-demo)"; exit 1; }
 
 echo "==> 1. staging Kodi's data into $STAGE"
-[ ! -e "$STAGE" ] && [ ! -L "$STAGE" ] || {
-  echo "!! Stage already exists: $STAGE; choose a fresh STAGE to preserve build evidence" >&2; exit 1; }
+STAGE="$(realpath -ms "$STAGE")"
+[ ! -L "$STAGE" ] || {
+  echo "!! Stage must not be a symlink: $STAGE" >&2; exit 1; }
+STAGE="$(realpath -m "$STAGE")"
+mkdir -p "$(dirname "$STAGE")"
+exec 9>"$STAGE.lock"
+flock -n 9 || {
+  echo "!! Stage is in use by another package build: $STAGE" >&2; exit 1; }
+if [ -e "$STAGE" ]; then
+  [ -d "$STAGE" ] && [ -f "$STAGE/.ps5-package-stage" ] &&
+    [ ! -L "$STAGE/.ps5-package-stage" ] || {
+    echo "!! Refusing to replace an unmanaged stage: $STAGE; choose a new output path" >&2
+    exit 1
+  }
+  rm -rf "$STAGE"
+fi
 mkdir -p "$STAGE"
-DESTDIR="$STAGE" cmake --install "$BUILD" >"$STAGE/install.log" 2>&1 || { tail -20 "$STAGE/install.log"; exit 1; }
+touch "$STAGE/.ps5-package-stage"
+INSTALL_ARGS=()
+if [ -n "${PS5_BUILD_CONFIG:-}" ]; then
+  INSTALL_ARGS+=(--config "$PS5_BUILD_CONFIG")
+fi
+DESTDIR="$STAGE" cmake --install "$BUILD" "${INSTALL_ARGS[@]}" >"$STAGE/install.log" 2>&1 || { tail -20 "$STAGE/install.log"; exit 1; }
 [ -d "$STAGE/app0/share/kodi" ] || { echo "!! install produced no app0/share/kodi"; exit 1; }
 # Native add-on prefix selection.
 PREFIX_LIST="$(python3 - "$ROOT" "${PS5_ADDON_PREFIXES:-}" "${PS5_ADDON_PREFIXES+x}" <<'PY'
@@ -560,19 +575,9 @@ print(f"Build manifest: {out}")
 PY
 fi
 
-if [ -n "${PS5_HOST:-}" ]; then
-  PS5_DEPLOY_JOBS="${PS5_DEPLOY_JOBS:-8}"
-  [[ "$PS5_DEPLOY_JOBS" =~ ^[1-8]$ ]] || {
-    echo "!! PS5_DEPLOY_JOBS must be between 1 and 8" >&2; exit 1; }
-  command -v lftp >/dev/null || {
-    echo "!! lftp is required for deployment; install lftp or copy the folder manually" >&2; exit 1; }
-  echo "==> uploading to ftp://$PS5_HOST:${PS5_FTP_PORT:-2121}/data/homebrew/$TITLE_ID"
-  # Console timestamps can run ahead; always re-send the launcher and all modules.
-  lftp -e "set cmd:fail-exit yes; mirror -R --delete --exclude '^config[.]json$' --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST' '/data/homebrew/$TITLE_ID'; put -O '/data/homebrew/$TITLE_ID' '$DIST/eboot.bin'; mirror -R --transfer-all --no-perms --parallel=$PS5_DEPLOY_JOBS --verbose '$DIST/sce_module' '/data/homebrew/$TITLE_ID/sce_module'; quit" -p "${PS5_FTP_PORT:-2121}" "$PS5_HOST"
-fi
-
 echo
 echo "Title folder: $DIST"
-echo "Copy it to /data/homebrew/$TITLE_ID if not uploaded, restart ShadowMountPlus, launch Kodi."
+echo "Deploy explicitly: BUILD='$BUILD' STAGE='$STAGE' tools/ps5/deploy.sh <console-host>"
+echo "Then restart ShadowMountPlus and launch Kodi manually."
 echo "Log: KODI_LOG_TO_CONSOLE is not set in a title, so read /download0/.kodi/temp/kodi.log over FTP;"
 echo "     klog (nc \$PS5_HOST 3232) shows loader messages and Kodi's stdout."

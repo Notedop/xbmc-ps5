@@ -133,10 +133,11 @@ staged native Adaptive. It is not a catalogue binary. The native
 loader smoke sample remains opt-in via `PS5_TEST_BINARY_ADDON=1`.
 Legacy `PS5_ADDON_ELFS`, `PS5_AUDIO_DECODERS` and `PS5_ADAPTIVE_TEST` are rejected.
 
-Stages are fresh `BUILD/title-<UTC timestamp>-<pid>` directories by default.
-For a reproducible chosen path, use a previously nonexistent `STAGE` with
-`package.sh`, or configure `PS5_PACKAGE_STAGE`. Pass that stage's `app` directory
-explicitly to `package --title-app`; do not reuse an old `ps5-stage`.
+Packaging reuses `BUILD/title`, cleaning its contents before each run.
+Override it with `STAGE` for `package.sh`, or configure `PS5_PACKAGE_STAGE`.
+An override must be a new path or a stage already marked by the packaging script.
+Pass the resulting stage's `app` directory explicitly to `package --title-app`;
+do not use it while another title build is replacing the stage.
 `native-addons.json` records staging selection.
 
 | Component | Title behavior |

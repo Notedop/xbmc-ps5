@@ -6,11 +6,7 @@
     {
       "name": "ps5-payload-sdk",
       "role": "toolchain+sysroot",
-      "source": "host-installed",
-      "version": "unlabeled-path-install",
-      "pin": null,
-      "path": "/opt/ps5-payload-sdk",
-      "notes": "Contains compiler and target sysroot used by current builds."
+      "recipe": "tools/ps5/sdk/PKGBUILD"
     },
     {
       "name": "pacbrew-repo",

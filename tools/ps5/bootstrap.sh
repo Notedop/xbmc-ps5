@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Prepare a bare Linux (or WSL2 Ubuntu 24.04) host for building Kodi for PS5.
 #
-# This installs the external prerequisites that the Kodi build itself does not
-# produce - everything in docs/README.PS5.md section 0.3:
+# This provisions the host and initial template prerequisites documented in
+# docs/README.PS5.md:
 #
 #   1. host packages           the toolchain and build tooling
-#   2. ps5-payload-sdk         -> /opt/ps5-payload-sdk  (via pacbrew/pacman)
+#   2. ps5-payload-sdk         -> /opt/ps5-payload-sdk  (Kodi recipe/pacman)
 #   3. pacbrew-repo            ~100 ported libraries built into the SDK sysroot
-#   4. Sony link stubs         libSceVideodec2 + VRR-extended libSceVideoOut
-#   5. ps5-opengl              OpenGL 4.6 / EGL SDK -> /opt/ps5-opengl-gl46
+#   4. Sony link stubs         included in the SDK package
+#   5. ps5-opengl              delegates to tools/depends/target/ps5-opengl
 #   6. native-app boilerplate  + imgui demo, the app template package.sh uses
 #   7. lapy-helper             one-shot owned-root helper ELF bundled for
 #                              privilege elevation (see docs/ps5/elevation.md)
@@ -16,7 +16,7 @@
 # Everything is idempotent; re-run after a failure. Budget 1-3 hours of build
 # time for pacbrew and ps5-opengl (Mesa) on an 8-core machine.
 #
-# After this, continue with docs/README.PS5.md section 1 (tools/depends).
+# After this, continue with docs/README.PS5.md section 2 (tools/depends).
 #
 #   WORK   checkout/build dir for the external sources (ps5-opengl, pacbrew,
 #          the app boilerplate)                      default build/ps5-external
@@ -38,22 +38,38 @@ esac
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"        # tools/ps5
 ROOT="$(cd "$HERE/../.." && pwd)"
-export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
+export PS5_PAYLOAD_SDK="${PS5_PAYLOAD_SDK-/opt/ps5-payload-sdk}"
+case "$PS5_PAYLOAD_SDK" in
+  /*) ;;
+  *) echo "!! PS5_PAYLOAD_SDK must be a nonempty absolute SDK directory" >&2; exit 1 ;;
+esac
+PS5_PAYLOAD_SDK="$(realpath -m -- "$PS5_PAYLOAD_SDK")"
+case "$PS5_PAYLOAD_SDK" in
+  /|/opt|/usr|/usr/local|/home|/root|/var|/etc|/bin|/sbin|/lib|/lib64|/dev|/proc|/sys|/run|/boot|/mnt|/media)
+    echo "!! Unsafe PS5_PAYLOAD_SDK prefix: $PS5_PAYLOAD_SDK; select a dedicated SDK directory" >&2
+    exit 1 ;;
+esac
 export PS5_OPENGL_PREFIX="${PS5_OPENGL_PREFIX:-/opt/ps5-opengl-gl46}"
 WORK="${WORK:-$ROOT/build/ps5-external}"
+export PS5_OPENGL_SOURCE="${PS5_OPENGL_SOURCE:-$WORK/ps5-opengl}"
+export APP_TEMPLATE="${APP_TEMPLATE:-$PS5_OPENGL_SOURCE/build/native-app/PPSA99005}"
 JOBS="${JOBS:-$(nproc)}"
 export MAKEFLAGS="${MAKEFLAGS:--j$JOBS}"
 mkdir -p "$WORK"
 
 want() { [ "$STEP" = all ] || [ "$STEP" = "$1" ]; }
 
+if want sdk && { [ -e "$PS5_PAYLOAD_SDK" ] || [ -L "$PS5_PAYLOAD_SDK" ]; }; then
+  python3 "$HERE/check-sdk.py" --fingerprint --sdk "$PS5_PAYLOAD_SDK" >/dev/null
+fi
+
 # Keep sudo's credential cache alive for the whole run: the pacbrew and Mesa
 # builds run far longer than sudo's 15-minute timeout, and both end in
 # `sudo pacman -U` / `sudo cp`. Same tty as the build, so the refresh counts.
 sudo -v
-( while kill -0 "$$" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 60; done ) &
+( while kill -0 "$$" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 60; done ) >/dev/null 2>&1 &
 SUDO_KEEPALIVE=$!
-trap 'kill "$SUDO_KEEPALIVE" 2>/dev/null' EXIT
+trap 'kill "$SUDO_KEEPALIVE" 2>/dev/null || true' EXIT
 
 if want packages; then
   echo "==> host packages"
@@ -80,26 +96,20 @@ fi
 export PATH="$HOME/.local/bin:$PATH"
 
 if want sdk; then
-  echo "==> ps5-payload-sdk + pacbrew-repo (ported libraries)"
-  # pacbrew installs the SDK itself as its first package (ps5-payload-sdk, via
-  # pacman) and libc++ as its third (libcxx). Do NOT unpack the GitHub release
-  # ZIP into /opt first: pacman refuses to overwrite files it does not own
-  # ("conflicting files"). If a manual copy is there, remove it.
-  if [ -d "$PS5_PAYLOAD_SDK" ] && ! pacman -Qq ps5-payload-sdk >/dev/null 2>&1; then
-    echo "    removing manually unpacked SDK at $PS5_PAYLOAD_SDK (pacbrew reinstalls it as a package)"
-    sudo rm -rf "$PS5_PAYLOAD_SDK"
-  fi
+  echo "==> pinned Kodi payload SDK"
+  WORK="$WORK" bash "$HERE/bootstrap/ps5-sdk.sh"
+  echo "==> pacbrew-repo (ported libraries)"
   if [ ! -d "$WORK/pacbrew-repo" ]; then
     git clone --depth 1 https://github.com/ps5-payload-dev/pacbrew-repo.git "$WORK/pacbrew-repo"
   fi
   if [ ! -f "$PS5_PAYLOAD_SDK/target/user/homebrew/lib/pkgconfig/fontconfig.pc" ]; then
-    # Builds and installs every package (pacman -U) into the sysroot, SDK
-    # first, in the order of upstream's ci-libs.sh - but through our own loop,
+    # Builds and installs libraries (pacman -U) into the sysroot in the
+    # order of upstream's ci-libs.sh - but through our own loop,
     # because upstream's list has glu/glew before the mesa they depend on, and
     # because Kodi does not use pacbrew's GL stack at all (ps5-opengl builds
     # its own compiler and Mesa). Skipping llvm+mesa alone saves 1-2 hours.
     # Set PACBREW_SKIP="" to build everything (then build glu/glew after mesa).
-    SKIP="${PACBREW_SKIP-glu glew llvm mesa love}" WORK="$WORK" \
+    SKIP="sdk ${PACBREW_SKIP-glu glew llvm mesa love}" WORK="$WORK" \
       bash "$HERE/bootstrap/pacbrew.sh" sdk
   else
     echo "    sysroot already populated (fontconfig.pc present)"
@@ -107,13 +117,13 @@ if want sdk; then
 fi
 
 if want stubs; then
-  echo "==> Sony link stubs"
+  echo "==> verifying packaged SDK and system import stubs"
   WORK="$WORK" bash "$HERE/bootstrap/sce-stubs.sh"
 fi
 
 if want opengl; then
   echo "==> ps5-opengl -> $PS5_OPENGL_PREFIX"
-  WORK="$WORK" JOBS="$JOBS" bash "$HERE/bootstrap/ps5-opengl.sh"
+  WORK="$WORK" JOBS="$JOBS" make -C "$ROOT/tools/depends/target/ps5-opengl"
 fi
 
 if want template; then
@@ -149,10 +159,10 @@ if want template; then
   # package.sh copies its app skeleton (.deps, runtime_shims.c, app_heap.c,
   # linker script, sce_sys) out of this demo's prepared build directory, and
   # checks for exactly these two entries.
-  TEMPLATE="$WORK/ps5-opengl/build/native-app/PPSA99005"
+  TEMPLATE="$APP_TEMPLATE"
   if [ ! -f "$TEMPLATE/Makefile" ] || [ ! -d "$TEMPLATE/.deps/native" ]; then
     echo "    building ps5-opengl's imgui demo (the app template)"
-    make -C "$WORK/ps5-opengl" imgui-demo
+    make -C "$PS5_OPENGL_SOURCE" imgui-demo
   else
     echo "    app template present"
   fi
@@ -177,11 +187,11 @@ Add to ~/.bashrc:
   export PS5_OPENGL_PREFIX=$PS5_OPENGL_PREFIX
 
 Sanity check before building Kodi - confirm GL works on YOUR firmware: upload
-  $WORK/ps5-opengl/build/native-app/PPSA99005/dist/PPSA99005/
+  $APP_TEMPLATE/dist/PPSA99005/
 to /data/homebrew/PPSA99005 (FTP, port 2121) and launch it from the home
 screen.
 
-Next: docs/README.PS5.md section 1 (tools/depends), then:
+Next: docs/README.PS5.md section 2 (tools/depends), then:
   python3 tools/ps5/prepare-native-runtime.py --homebrew-sources "$WORK/pacbrew-repo" --jobs 4
   bash tools/ps5/configure.sh
 These commands prepare/build locally. Deployment is separate and user-operated.

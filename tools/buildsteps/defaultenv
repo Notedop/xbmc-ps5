@@ -83,6 +83,13 @@ case $XBMC_PLATFORM_DIR in
   freebsd)
     DEFAULT_CONFIGURATION="Debug"
   ;;
+
+  ps5)
+    DEFAULT_CONFIGURATION="Release"
+    DEFAULT_XBMC_DEPENDS_ROOT=$WORKSPACE/tools/depends/xbmc-depends
+    DEFAULT_RENDER_SYSTEM="gl"
+    DEFAULT_BUILD_HOST="x86_64-unknown-freebsd"
+  ;;
 esac
 
 if [ "$SDK_VERSION" == "Default" ]

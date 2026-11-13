@@ -1,0 +1,46 @@
+pkgname=ps5-payload-sdk
+pkgver=git.b32801f7dacd
+pkgrel=1
+pkgdesc="Pinned PS5 payload SDK with Kodi compiler-wrapper fixes and system import stubs"
+arch=('any')
+license=('GPLv3')
+url="https://github.com/ps5-payload-dev/sdk"
+options=(!strip libtool staticlibs)
+groups=('ps5-payload-dev')
+_sdk_commit=b32801f7dacd06210cb08b2f55d5e5dacdb58702
+source=("sdk::git+https://github.com/ps5-payload-dev/sdk.git#commit=${_sdk_commit}"
+        "0001-compiler-response-files.patch"
+        "check-sdk.py"
+        "libSceMbus.c"
+        "libSceMediaFrameworkInterface.c"
+        "libSceSaveData.c"
+        "libSceUsbStorage.c"
+        "libSceVideodec2.c")
+sha256sums=('SKIP'
+            'e1c13e7fd0e7b4c8ca66a2780456a420efae3a772b188b18d97cdfbc04fabee9'
+            '18101d5ed1f63bee4b799be4625cac10971073d168347eca06f50a5ea9e5f1b7'
+            '04b27d7ddd41124aab2aac437c5d8a7d9f34d7d23c9ab47d7fc44abccb345632'
+            'debf8339fea7bf43be95a422a3939ac6b34012ca7b8be45f11ba84bb0f70baf0'
+            'f13f4539439d39ac2eeafdf46c190fae9c43ca143ade3c8b221965b9102e02a3'
+            '6b00703db5a760fd915f4cf91d49557de897891504b0eaabbede3a835856f588'
+            '309e16c371442e3d4629d1bf7ed5d72ff3376030ef43c87ae79717f57485167c')
+
+prepare() {
+    cd "${srcdir}/sdk"
+    patch -Np1 -i "${srcdir}/0001-compiler-response-files.patch"
+    cp "${srcdir}"/libSce*.c sce_stubs/
+    if ! grep -qw sceVideoOutVrrUnpegFromFixedRate sce_stubs/libSceVideoOut.c; then
+        printf '\nvoid sceVideoOutVrrUnpegFromFixedRate(void) {}\n' >> sce_stubs/libSceVideoOut.c
+    fi
+}
+
+build() {
+    make -C "${srcdir}/sdk"
+}
+
+package() {
+    local prefix="${PS5_PAYLOAD_SDK:-/opt/ps5-payload-sdk}"
+    make -C "${srcdir}/sdk" install DESTDIR="${pkgdir}${prefix}"
+    python3 "${startdir}/check-sdk.py" --write-receipt \
+        --sdk "${pkgdir}${prefix}" --inputs "${startdir}"
+}

@@ -5,6 +5,7 @@ XBMC_PLATFORM_DIR=ps5
 . "$WORKSPACE/tools/buildsteps/defaultenv"
 set -euo pipefail
 
+export PATH="$HOME/.local/bin:$PATH"
 export BUILD="${BUILD:-$WORKSPACE/build/ps5-release}"
 export BUILD_TYPE="${BUILD_TYPE:-$Configuration}"
 export WORK="${WORK:-$WORKSPACE/build/ps5-external}"

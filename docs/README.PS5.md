@@ -65,6 +65,8 @@ Setup preserves differently pinned cached checkouts and stops rather than
 overwriting them. Use a separate `WORK` directory when changing these pins.
 Host tools (`STEP=packages`) use the host package manager. Setup can require
 sudo; empty, relative and unsafe system-directory SDK prefixes are rejected.
+Buildsteps include `$HOME/.local/bin` on `PATH` so Python-installed host tools
+prepared by Setup remain available in subsequent steps.
 Subsequent dependency, Kodi and package steps verify the SDK but never install it.
 To build only the elevation helper with an existing payload SDK, use
 `bash tools/ps5/bootstrap.sh STEP=lapy`; this does not rebuild OpenGL.

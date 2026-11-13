@@ -48,6 +48,7 @@ class BuildstepTests(unittest.TestCase):
                         "NATIVE", "Configuration", "XBMC_DEPENDS_ROOT")}
         self.env = {**environment, "WORKSPACE": str(self.root),
                     "PATH": str(self.bin) + os.pathsep + os.defpath,
+                    "HOME": str(self.root / "home"),
                     "CAPTURE": str(self.log), "BUILDTHREADS": "3",
                     "WORK": str(self.root / "external choice"),
                     "XBMC_DEPENDS_ROOT": str(self.root / "dependencies")}
@@ -107,6 +108,20 @@ class BuildstepTests(unittest.TestCase):
         self.assertIn("-DPS5_APP_TEMPLATE=/existing template", calls[0]["argv"])
         self.assertEqual(calls[0]["env"]["BUILD_TYPE"], "Debug")
         self.assertEqual(calls[0]["argv"][-1], "-DEXTRA=ON")
+
+    def test_setup_installed_tools_are_available_in_fresh_buildsteps(self):
+        user_bin = Path(self.env["HOME"]) / ".local/bin"
+        user_bin.mkdir(parents=True)
+        for directory, version in ((user_bin, "setup-meson"), (self.bin, "old-meson")):
+            meson = directory / "meson"
+            meson.write_text(f'#!/bin/sh\nprintf "%s\\n" "{version}"\n')
+            meson.chmod(0o755)
+        result, calls = self.run_step("prepare-xbmc")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = subprocess.run(["bash", "-c", "meson --version"],
+                                env=calls[0]["env"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "setup-meson")
 
     def test_build_package_and_addons_are_separate(self):
         for step, selector in (("make-xbmc", []), ("package", ["--target", "ps5-package"])):

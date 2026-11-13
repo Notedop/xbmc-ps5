@@ -53,6 +53,13 @@ class PackageStageTests(unittest.TestCase):
             self.assertEqual(capture.read_text().splitlines(),
                              ["--install", str(self.build), *(["--config", config] if config else [])])
 
+    def test_log_guidance_matches_runtime_home(self):
+        source = (ps5_test_paths.ROOT / "xbmc/platform/ps5/main.cpp").read_text()
+        home = next(line for line in source.splitlines()
+                    if line.startswith("constexpr const char* HOME_PATH")).split('"')[1]
+        script = (ps5_test_paths.HERE / "package.sh").read_text()
+        self.assertIn(f"Log: read {home}/.kodi/temp/kodi.log over FTP;", script)
+
     def configure_python_install(self, populate):
         prefix = self.root / "depends choice"
         stdlib = prefix / "lib/python3.15"

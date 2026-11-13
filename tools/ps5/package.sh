@@ -577,5 +577,5 @@ echo
 echo "Title folder: $DIST"
 echo "Deploy explicitly: BUILD='$BUILD' STAGE='$STAGE' tools/ps5/deploy.sh <console-host>"
 echo "Then restart ShadowMountPlus and launch Kodi manually."
-echo "Log: KODI_LOG_TO_CONSOLE is not set in a title, so read /download0/.kodi/temp/kodi.log over FTP;"
-echo "     klog (nc \$PS5_HOST 3232) shows loader messages and Kodi's stdout."
+echo "Log: read /data/homebrew/kodi-psmc/.kodi/temp/kodi.log over FTP;"
+echo "     klog (nc \$PS5_HOST 3232) shows loader messages and Kodi's console logging when enabled."

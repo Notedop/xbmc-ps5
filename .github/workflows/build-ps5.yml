@@ -1,0 +1,153 @@
+name: PS5 clean build
+
+on:
+  push:
+    branches: [Piers]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and package PS5 Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    env:
+      Configuration: Release
+      BUILD: ${{ github.workspace }}/build/ps5-release
+      WORK: ${{ github.workspace }}/build/ps5-external
+      TARBALLS: ${{ github.workspace }}/build/ps5-tarballs
+      CCACHE_DISABLE: '1'
+      SCCACHE_DISABLE: '1'
+      GIT_TERMINAL_PROMPT: '0'
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Record runner resources and set build parallelism
+        run: |
+          mkdir -p build/ci-logs "$TARBALLS"
+          {
+            uname -a
+            df -h "$GITHUB_WORKSPACE"
+            free -h
+            cpus="$(nproc)"
+            memory_jobs="$(awk '/MemAvailable:/ {print int($2 / 3145728)}' /proc/meminfo)"
+            jobs="$cpus"
+            if (( memory_jobs < jobs )); then jobs="$memory_jobs"; fi
+            if (( jobs < 1 )); then jobs=1; fi
+            printf 'BUILDTHREADS=%s\nMAKEFLAGS=-j%s\nCMAKE_BUILD_PARALLEL_LEVEL=%s\n' \
+              "$jobs" "$jobs" "$jobs" >> "$GITHUB_ENV"
+            echo "Clean build using $jobs parallel jobs; no cross-run caches."
+          } 2>&1 | tee build/ci-logs/resources.log
+
+      - name: Prepare host packages, SDK, graphics, and build tools
+        run: tools/buildsteps/ps5/prepare-depends 2>&1 | tee build/ci-logs/prepare-depends.log
+
+      - name: Run host regression tests
+        run: tools/buildsteps/ps5/run-tests 2>&1 | tee build/ci-logs/host-tests.log
+
+      - name: Configure dependencies
+        run: tools/buildsteps/ps5/configure-depends 2>&1 | tee build/ci-logs/configure-depends.log
+
+      - name: Build native dependencies
+        run: tools/buildsteps/ps5/make-native-depends 2>&1 | tee build/ci-logs/make-native-depends.log
+
+      - name: Build PS5 dependencies
+        run: tools/buildsteps/ps5/make-depends 2>&1 | tee build/ci-logs/make-depends.log
+
+      - name: Prepare native runtime
+        run: tools/buildsteps/ps5/prepare-xbmc 2>&1 | tee build/ci-logs/prepare-xbmc.log
+
+      - name: Configure Kodi
+        run: tools/buildsteps/ps5/configure-xbmc 2>&1 | tee build/ci-logs/configure-xbmc.log
+
+      - name: Build Kodi
+        run: tools/buildsteps/ps5/make-xbmc 2>&1 | tee build/ci-logs/make-xbmc.log
+
+      - name: Build bundled binary add-ons
+        run: tools/buildsteps/ps5/make-binary-addons 2>&1 | tee build/ci-logs/make-binary-addons.log
+
+      - name: Package PS5 title
+        run: tools/buildsteps/ps5/package 2>&1 | tee build/ci-logs/package.log
+
+      - name: Verify package outputs
+        run: |
+          shopt -s nullglob
+          packages=("$BUILD"/title/artifacts/*.zip)
+          if (( ${#packages[@]} != 1 )); then
+            echo "::error::Expected exactly one PS5 package ZIP."
+            exit 1
+          fi
+          package="${packages[0]}"
+          for output in "$package" "$package.sha256" "${package%.zip}-BUILD-MANIFEST.json"; do
+            if [[ ! -s "$output" ]]; then
+              echo "::error::Missing or empty package output: $output"
+              exit 1
+            fi
+          done
+          sha256sum --check "$package.sha256"
+          unzip -tq "$package"
+          python3 -m json.tool "${package%.zip}-BUILD-MANIFEST.json" > /dev/null
+
+      - name: Upload PS5 package, checksum, and build manifest
+        id: package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: kodi-ps5-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/ps5-release/title/artifacts/*.zip
+            build/ps5-release/title/artifacts/*.zip.sha256
+            build/ps5-release/title/artifacts/*-BUILD-MANIFEST.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Record final disk usage
+        if: ${{ always() }}
+        run: |
+          mkdir -p build/ci-logs
+          df -h "$GITHUB_WORKSPACE" 2>&1 | tee build/ci-logs/final-disk-usage.log
+
+      - name: Upload build diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: kodi-ps5-logs-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/ci-logs/*.log
+            build/ps5-external/ps5-opengl-build.log
+            build/ps5-release/CMakeFiles/CMakeConfigureLog.yaml
+            build/ps5-release/CMakeFiles/CMakeError.log
+            build/ps5-release/CMakeFiles/CMakeOutput.log
+            tools/depends/config.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Summarize build
+        if: ${{ always() }}
+        env:
+          BUILD_STATUS: ${{ job.status }}
+          PACKAGE_URL: ${{ steps.package.outputs.artifact-url }}
+        run: |
+          {
+            echo "## PS5 clean Release build"
+            echo
+            echo "Result: $BUILD_STATUS"
+            echo
+            if [[ -n "$PACKAGE_URL" ]]; then
+              printf '[Download package, checksum, and build manifest](%s)\n' "$PACKAGE_URL"
+            else
+              echo "No verified package was uploaded. See the failed step and build diagnostics."
+            fi
+            echo
+            echo "Artifacts expire after 7 days and are also available under this run's Artifacts section."
+            echo "No console deployment or GitHub Release publishing is performed."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -10,6 +10,38 @@ The PS5 CMake toolchain files live under `tools/ps5/toolchain`.
 PS5 integration is tracked in the source tree; configuration does not copy
 overlays or apply Kodi patch files.
 
+## GitHub Actions builds
+
+The **PS5 clean build** workflow (`.github/workflows/build-ps5.yml`) runs on every
+push to the default branch, currently `Piers`, without path filters. Update its
+branch filter if the default branch changes. To build manually, open **Actions ->
+PS5 clean build -> Run workflow** and select the branch to build. The workflow
+must first exist on the default branch for the manual button to be available.
+
+Each run uses a fresh standard GitHub-hosted Ubuntu 24.04 runner and rebuilds the
+SDK, graphics, native and target dependencies, Kodi Release, and required bundled
+`peripheral.joystick` and `inputstream.adaptive` add-ons before packaging. No
+caches or installed markers are restored from previous runs. Outputs may be
+reused between steps of the same run. Host build-tool regressions run as well;
+PS5 binaries and console runtime tests cannot execute on the Linux runner.
+
+Open **Actions -> workflow run -> Artifacts** to download the package artifact,
+which contains the title ZIP, its SHA-256 checksum, and build manifest. Build
+diagnostics are uploaded separately, including after a failed build when the
+runner remains available. Both artifacts expire after **7 days**; download them
+before then if needed. CI never deploys to a console or publishes a release.
+
+The workflow uses no paid larger runners. Standard-runner compute is free for
+public repositories; private-repository compute and artifact storage are subject
+to the account's allowances and billing settings. To prevent paid overages,
+configure and verify an Actions **$0 budget with usage blocking** in GitHub
+billing; the workflow cannot enforce an account-level spending cap.
+
+A full clean build must fit the standard runner's available disk and memory and
+the six-hour job limit. The first hosted run establishes whether it fits; a
+timeout or runner failure can prevent diagnostic uploads. No automatic fallback
+to a paid runner or cross-run cache is configured.
+
 ## 1. Prerequisites
 
 ### Build location

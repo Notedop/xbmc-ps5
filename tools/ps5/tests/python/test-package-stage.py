@@ -17,7 +17,7 @@ class PackageStageTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.build = self.root / "build"
-        script = (ps5_test_paths.HERE / 'package.sh').read_text()
+        script = (ps5_test_paths.HERE / 'scripts/package.sh').read_text()
         self.default = next(line for line in script.splitlines() if line.startswith("STAGE="))
         self.prepare = script.split('echo "==> 1. staging Kodi\'s data into $STAGE"\n', 1)[1]
         self.prepare = self.prepare.split('DESTDIR="$STAGE"', 1)[0]
@@ -33,7 +33,7 @@ class PackageStageTests(unittest.TestCase):
             env=env, text=True, capture_output=True)
 
     def test_install_uses_selected_build_configuration(self):
-        script = (ps5_test_paths.HERE / "package.sh").read_text()
+        script = (ps5_test_paths.HERE / "scripts/package.sh").read_text()
         install = "INSTALL_ARGS=()" + script.split("INSTALL_ARGS=()", 1)[1]
         install = install.split('[ -d "$STAGE/app0/share/kodi" ]', 1)[0]
         stage = self.root / "stage"
@@ -57,7 +57,7 @@ class PackageStageTests(unittest.TestCase):
         source = (ps5_test_paths.ROOT / "xbmc/platform/ps5/main.cpp").read_text()
         home = next(line for line in source.splitlines()
                     if line.startswith("constexpr const char* HOME_PATH")).split('"')[1]
-        script = (ps5_test_paths.HERE / "package.sh").read_text()
+        script = (ps5_test_paths.HERE / "scripts/package.sh").read_text()
         self.assertIn(f"Log: read {home}/.kodi/temp/kodi.log over FTP;", script)
 
     def configure_python_install(self, populate):

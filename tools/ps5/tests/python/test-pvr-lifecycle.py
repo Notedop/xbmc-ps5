@@ -342,7 +342,7 @@ with tempfile.TemporaryDirectory(prefix="pvr-lifecycle-") as directory:
         "cmake", f"-DSOURCE_DIR={tree}",
         f"-DSERIES_DIR={ROOT / 'tools/ps5/patches/addons/pvr.hts'}",
         "-DSERIES_NAME=pvr.hts", "-P",
-        str(ROOT / "tools/ps5/apply-patch-series.cmake")]
+        str(ROOT / "tools/ps5/scripts/apply-patch-series.cmake")]
     subprocess.run(patch_command, check=True)
     patched = source.read_bytes()
     subprocess.run(patch_command, check=True)

@@ -37,7 +37,7 @@ class SftpNativeRecipeTest(unittest.TestCase):
         cls.addClassCleanup(shutil.rmtree, cls.scratch)
         subprocess.run(
             ["cmake", "-DSOURCE_DIR=" + str(cls.source), "-DSERIES_DIR=" + str(SERIES),
-             "-P", str(ROOT / "tools/ps5/apply-patch-series.cmake")],
+             "-P", str(ROOT / "tools/ps5/scripts/apply-patch-series.cmake")],
             check=True, capture_output=True, text=True)
 
     def test_ps5_ssh_home_and_matching_private_archives(self):

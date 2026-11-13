@@ -71,9 +71,9 @@ class NativeStaticDependsTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which("cmake"), "CMake required")
     def test_cmake_updates_imports_and_interfaces_without_reordering(self):
         source = self.root / "source"
-        (source / "tools/ps5").mkdir(parents=True)
-        shutil.copyfile(ROOT / "tools/ps5/native_static_depends.py",
-                        source / "tools/ps5/native_static_depends.py")
+        (source / "tools/ps5/scripts").mkdir(parents=True)
+        shutil.copyfile(ROOT / "tools/ps5/scripts/native_static_depends.py",
+                        source / "tools/ps5/scripts/native_static_depends.py")
         sdk = self.root / "sdk"
         (sdk / "include").mkdir(parents=True)
         shutil.copyfile(self.header, sdk / "include/stdio.h")

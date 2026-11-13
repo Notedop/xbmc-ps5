@@ -18,7 +18,7 @@ source=("sdk::git+https://github.com/ps5-payload-dev/sdk.git#commit=${_sdk_commi
         "libSceVideodec2.c")
 sha256sums=('SKIP'
             'e1c13e7fd0e7b4c8ca66a2780456a420efae3a772b188b18d97cdfbc04fabee9'
-            '18101d5ed1f63bee4b799be4625cac10971073d168347eca06f50a5ea9e5f1b7'
+            '9fc5127f2d2d672d195c64683785c37324bcf2a15883c5b0d48b370d87147ed6'
             '04b27d7ddd41124aab2aac437c5d8a7d9f34d7d23c9ab47d7fc44abccb345632'
             'debf8339fea7bf43be95a422a3939ac6b34012ca7b8be45f11ba84bb0f70baf0'
             'f13f4539439d39ac2eeafdf46c190fae9c43ca143ade3c8b221965b9102e02a3'

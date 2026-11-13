@@ -21,10 +21,10 @@
       "pin": "a519561626933257213d64a4a8bd5e02b55dceb2",
       "version": "1.0.2",
       "pin_source": "tools/ps5/patches/ps5-opengl/PS5-OPENGL-COMMIT",
-      "local_worktree": "build/ps5-external/ps5-opengl (WORK, see tools/ps5/bootstrap.sh)",
+      "local_worktree": "build/ps5-external/ps5-opengl (WORK, see tools/ps5/scripts/prepare/bootstrap.sh)",
       "consumption": [
-        "toolchain/ps5-kodi.cmake via PS5_OPENGL_PREFIX",
-        "tools/ps5/package.sh APP_TEMPLATE defaults to $WORK/ps5-opengl/build/native-app/PPSA99005"
+        "tools/ps5/toolchain/ps5-kodi.cmake via PS5_OPENGL_PREFIX",
+        "tools/ps5/scripts/package.sh APP_TEMPLATE defaults to $WORK/ps5-opengl/build/native-app/PPSA99005"
       ]
     },
     {
@@ -92,8 +92,8 @@
       "status": "done-partial",
       "result": "pinned and consumed as external prerequisite; selected runtime assets vendored in-repo (shims/title)",
       "evidence": [
-        "toolchain/ps5-kodi.cmake PS5_OPENGL_PREFIX",
-        "tools/ps5/package.sh APP_TEMPLATE default and successful ps5-title/ps5-package runs"
+        "tools/ps5/toolchain/ps5-kodi.cmake PS5_OPENGL_PREFIX",
+        "tools/ps5/scripts/package.sh APP_TEMPLATE default and successful ps5-title/ps5-package runs"
       ]
     },
     "dav1d-current-build-qualification": {

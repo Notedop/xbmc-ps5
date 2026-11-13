@@ -43,7 +43,7 @@ class SharedToolchainTest(unittest.TestCase):
             build = directory / "build"
             commands = [
                 ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
-                 "-DCMAKE_TOOLCHAIN_FILE=" + str(ROOT / "toolchain/ps5-native-addon.cmake"),
+                 "-DCMAKE_TOOLCHAIN_FILE=" + str(ROOT / "tools/ps5/toolchain/ps5-native-addon.cmake"),
                  "-DPS5_PAYLOAD_SDK=" + str(SDK), "-DPS5_NATIVE_RUNTIME_SDK=" + str(runtime)],
                 ["cmake", "--build", str(build)],
             ]
@@ -74,7 +74,7 @@ class SharedToolchainTest(unittest.TestCase):
                 build = directory / "build"
                 result = subprocess.run([
                     "cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
-                    "-DCMAKE_TOOLCHAIN_FILE=" + str(ROOT / "toolchain/ps5-native-addon.cmake"),
+                    "-DCMAKE_TOOLCHAIN_FILE=" + str(ROOT / "tools/ps5/toolchain/ps5-native-addon.cmake"),
                     "-DPS5_PAYLOAD_SDK=" + str(SDK),
                     "-D" + variable + "=" + str(private), "-DCMAKE_PREFIX_PATH=" + str(host),
                 ], capture_output=True, text=True)
@@ -91,7 +91,7 @@ class SharedToolchainTest(unittest.TestCase):
             runtime = directory / "runtime"
             (runtime / "tools").mkdir(parents=True)
             (runtime / "include").mkdir()
-            shutil.copyfile(ROOT / "tools/ps5/native-clang.py", runtime / "tools/native-clang.py")
+            shutil.copyfile(ROOT / "tools/ps5/scripts/native-clang.py", runtime / "tools/native-clang.py")
             shutil.copyfile(ROOT / "tools/ps5/sdk/include/stdio.h", runtime / "include/stdio.h")
             (runtime / "PS5NativeRuntimeConfig.cmake").write_text(
                 "# Compiler-only fixture: no runtime providers.\n")
@@ -112,7 +112,7 @@ class SharedToolchainTest(unittest.TestCase):
                 stream.write("find_library(PS5_PREFIX_PROBE NAMES ps5_prefix_probe REQUIRED)\n")
             commands = [
                 ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",
-                 "-DCMAKE_TOOLCHAIN_FILE=" + str(ROOT / "toolchain/ps5-kodi.cmake"),
+                 "-DCMAKE_TOOLCHAIN_FILE=" + str(ROOT / "tools/ps5/toolchain/ps5-kodi.cmake"),
                  "-DPS5_PAYLOAD_SDK=" + str(SDK), "-DPS5_NATIVE_RUNTIME_SDK=" + str(runtime),
                  "-DPS5_HOMEBREW_PREFIX=" + str(homebrew),
                  "-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY"],

@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 spec = importlib.util.spec_from_file_location(
-    "native_clang", (ps5_test_paths.HERE / 'native-clang.py'))
+    "native_clang", (ps5_test_paths.HERE / 'scripts/native-clang.py'))
 launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
 

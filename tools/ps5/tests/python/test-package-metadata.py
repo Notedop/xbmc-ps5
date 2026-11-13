@@ -27,7 +27,7 @@ class TestPackageMetadata(unittest.TestCase):
         self.dist = self.app / "dist" / self.metadata["titleId"]
         (self.app / "sce_sys").mkdir(parents=True)
         (self.dist / "sce_sys").mkdir(parents=True)
-        self.package = (ps5_test_paths.HERE / 'package.sh').read_text()
+        self.package = (ps5_test_paths.HERE / 'scripts/package.sh').read_text()
         self.header = self.package.split("for setting in TITLE_ID", 1)[1]
         self.header = ("for setting in TITLE_ID" +
                        self.header.split("\nCONFIGURED_HBROOT=", 1)[0])

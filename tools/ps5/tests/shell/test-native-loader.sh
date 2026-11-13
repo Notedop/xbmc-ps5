@@ -47,7 +47,7 @@ ASAN_OPTIONS=detect_leaks=1 "$BUILD/sprx-addon"
 "${CC:-cc}" -std=c11 -O2 -Wall -Wextra -Werror -g \
   -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie \
   -DPS5_SPRX_START_TRACE_DIAGNOSTIC=1 \
-  -I"$ROOT/tools/ps5/tests" -I"$ROOT/xbmc/addons/kodi-dev-kit/include" \
+  -I"$ROOT/tools/ps5/scripts" -I"$ROOT/xbmc/addons/kodi-dev-kit/include" \
   "$ROOT/addons/screensaver.ps5.sprx-test/main.c" \
   "$ROOT/shims/native-app/sprx_start_trace.c" \
   "$ROOT/tools/ps5/tests/sprx-start-trace.c" -o "$BUILD/sprx-start-trace"

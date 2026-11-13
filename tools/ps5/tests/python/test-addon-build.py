@@ -105,9 +105,10 @@ class IncrementalBuildTests(unittest.TestCase):
         for relative in (
             "cmake/addons",
             "cmake/addons/addons/addon.bundle",
-            "toolchain",
+            "tools/ps5/toolchain",
             "tools/depends/target",
             "tools/depends",
+            "tools/ps5/scripts",
             "tools/ps5/patches/addons/addon.bundle",
             "xbmc/addons/kodi-dev-kit/include/kodi",
         ):
@@ -121,8 +122,8 @@ class IncrementalBuildTests(unittest.TestCase):
             "tools/depends/xbmc-addons.include",
             "tools/depends/Makefile.include",
             "cmake/KodiConfig.cmake.in",
-            "toolchain/ps5-native-addon.cmake",
-            "tools/ps5/native_addon.py",
+            "tools/ps5/toolchain/ps5-native-addon.cmake",
+            "tools/ps5/scripts/native_addon.py",
             "xbmc/addons/kodi-dev-kit/include/kodi/header.h",
             "tools/ps5/patches/addons/addon.bundle/0001.patch",
         ):
@@ -545,7 +546,7 @@ class IncrementalBuildTests(unittest.TestCase):
         self._assert_change_rebuilds("xbmc/addons/kodi-dev-kit/include/kodi/header.h")
 
     def test_toolchain_changes_rebuild(self) -> None:
-        self._assert_change_rebuilds("toolchain/ps5-native-addon.cmake")
+        self._assert_change_rebuilds("tools/ps5/toolchain/ps5-native-addon.cmake")
 
     def test_native_sdk_input_changes_rebuild(self) -> None:
         self._assert_change_rebuilds("build/ps5-native/sdk/manifest.json")
@@ -563,7 +564,7 @@ class IncrementalBuildTests(unittest.TestCase):
         self._assert_change_rebuilds("cmake/KodiConfig.cmake.in")
 
     def test_native_validation_changes_rebuild(self) -> None:
-        self._assert_change_rebuilds("tools/ps5/native_addon.py")
+        self._assert_change_rebuilds("tools/ps5/scripts/native_addon.py")
 
     def test_loader_incompatible_builds_do_not_record_success(self) -> None:
         for attribute, filename in (
@@ -889,7 +890,7 @@ class RsxsIdentityTests(unittest.TestCase):
 
             run("cmake", "-DSOURCE_DIR=" + str(source),
                 "-DSERIES_DIR=" + str(root / "tools/ps5/patches/addons/screensavers.rsxs"),
-                "-P", root / "tools/ps5/apply-patch-series.cmake")
+                "-P", root / "tools/ps5/scripts/apply-patch-series.cmake")
             (source / "CMakeLists.txt").write_text("""
 cmake_minimum_required(VERSION 3.18)
 project(rsxs_identity NONE)
@@ -949,7 +950,7 @@ class SidplayConfigureTests(unittest.TestCase):
 
             run("cmake", "-DSOURCE_DIR=" + str(source),
                 "-DSERIES_DIR=" + str(root / "tools/ps5/patches/addons/audiodecoder.sidplay"),
-                "-P", root / "tools/ps5/apply-patch-series.cmake")
+                "-P", root / "tools/ps5/scripts/apply-patch-series.cmake")
             dependency = source / "depends/common/sidplay2"
             configure = dependency / "configure"
             configure.write_text(
@@ -1011,7 +1012,7 @@ class PeripheralJoystickConfigureTests(unittest.TestCase):
 
             run("cmake", "-DSOURCE_DIR=" + str(source),
                 "-DSERIES_DIR=" + str(root / "tools/ps5/patches/addons/peripheral.joystick"),
-                "-P", root / "tools/ps5/apply-patch-series.cmake")
+                "-P", root / "tools/ps5/scripts/apply-patch-series.cmake")
             modules = directory / "modules"
             modules.mkdir()
             (modules / "FindKodi.cmake").write_text(
@@ -1232,7 +1233,7 @@ class FFmpegDirectConfigureTests(unittest.TestCase):
 
             run("cmake", "-DSOURCE_DIR=" + str(source),
                 "-DSERIES_DIR=" + str(root / "tools/ps5/patches/addons/inputstream.ffmpegdirect"),
-                "-P", root / "tools/ps5/apply-patch-series.cmake")
+                "-P", root / "tools/ps5/scripts/apply-patch-series.cmake")
             stream = (source / "src/stream/FFmpegStream.cpp").read_text()
             self.assertEqual(stream.count("m_pFormatContext->io_open = OpenWithKodiTrust;"), 2)
             self.assertEqual(stream.count("m_pFormatContext->opaque = this;"), 2)

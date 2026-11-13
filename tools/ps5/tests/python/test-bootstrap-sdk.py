@@ -16,13 +16,13 @@ from native_c_link import Elf
 
 HERE = ps5_test_paths.HERE
 ROOT = ps5_test_paths.ROOT
-SPEC = importlib.util.spec_from_file_location("payload_sdk_check", HERE / "check-sdk.py")
+SPEC = importlib.util.spec_from_file_location("payload_sdk_check", HERE / "scripts/check-sdk.py")
 CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECK)
 
 
 def assets():
-    return [HERE / "sdk/PKGBUILD", HERE / "check-sdk.py",
+    return [HERE / "sdk/PKGBUILD", HERE / "scripts/check-sdk.py",
             *HERE.glob("patches/ps5-payload-sdk/*.patch"),
             *ROOT.glob("shims/sce_stubs/*.c")]
 
@@ -104,8 +104,8 @@ class BootstrapSDKTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         here = self.root / "tools/ps5"
-        for path in assets() + [HERE / "bootstrap.sh", HERE / "bootstrap/ps5-sdk.sh",
-                                HERE / "bootstrap/sce-stubs.sh", HERE / "bootstrap/pacbrew.sh",
+        for path in assets() + [HERE / "scripts/prepare/bootstrap.sh", HERE / "scripts/prepare/ps5-sdk.sh",
+                                HERE / "scripts/prepare/sce-stubs.sh", HERE / "scripts/prepare/pacbrew.sh",
                                 HERE / "patches/pacbrew-libminizip-source.patch",
                                 HERE / "patches/pacbrew-lua-source.patch",
                                 HERE / "dependency-manifest.json",
@@ -113,7 +113,7 @@ class BootstrapSDKTests(unittest.TestCase):
             destination = self.root / path.relative_to(ROOT)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, destination)
-        self.script = here / "bootstrap.sh"
+        self.script = here / "scripts/prepare/bootstrap.sh"
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.log = self.root / "commands"
@@ -246,7 +246,7 @@ class BootstrapSDKTests(unittest.TestCase):
     def test_pacbrew_cannot_replace_the_pinned_sdk(self):
         repo = self.work / "pacbrew-repo"
         (repo / "ci-libs.sh").write_text("PKGS=(\n sdk\n)\n")
-        result = subprocess.run(["bash", str(self.script.parent / "bootstrap/pacbrew.sh"), "sdk"],
+        result = subprocess.run(["bash", str(self.script.parent / "pacbrew.sh"), "sdk"],
                                 env={**self.env, "SKIP": ""}, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("sdk (skipped)", result.stdout)

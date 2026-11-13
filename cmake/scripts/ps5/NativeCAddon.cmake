@@ -28,7 +28,7 @@ function(add_ps5_native_c_addon target)
     list(APPEND extra_args "--define=${define}")
   endforeach()
   add_custom_target(${target} ALL
-    COMMAND "${Python3_EXECUTABLE}" "${root}/tools/ps5/build-native-c-addon.py"
+    COMMAND "${Python3_EXECUTABLE}" "${root}/tools/ps5/scripts/build-native-c-addon.py"
             --source "${arg_SOURCE}" --manifest "${arg_MANIFEST}" --build "${output}"
             --sdk "${arg_SDK}" --native-tool "${arg_NATIVE_TOOL}" ${extra_args}
     VERBATIM

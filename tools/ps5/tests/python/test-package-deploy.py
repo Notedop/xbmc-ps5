@@ -51,7 +51,7 @@ class TestPackageDeploy(unittest.TestCase):
 
     def run_deploy(self, host="console.invalid", **env):
         return subprocess.run(
-            [shutil.which("bash"), str(HERE / "deploy.sh"), *([host] if host is not None else [])],
+            [shutil.which("bash"), str(HERE / "scripts/deploy.sh"), *([host] if host is not None else [])],
             env={**self.env, **env}, text=True, capture_output=True)
 
     def test_ambient_host_does_not_authorize_upload(self):
@@ -61,7 +61,7 @@ class TestPackageDeploy(unittest.TestCase):
             self.assertFalse(self.capture.exists())
 
     def test_package_contains_no_ftp_execution(self):
-        package = (HERE / "package.sh").read_text()
+        package = (HERE / "scripts/package.sh").read_text()
         self.assertNotIn("lftp", package)
         self.assertNotIn('if [ -n "${PS5_HOST:-}" ]', package)
 

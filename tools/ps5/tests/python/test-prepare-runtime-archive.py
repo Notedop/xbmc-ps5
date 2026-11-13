@@ -109,7 +109,7 @@ class PrepareArchiveTests(unittest.TestCase):
         linked = self.work / "linked.so"
         # No --whole-archive: successful extraction also exercises the rebuilt index.
         self.run_tool("ld.lld-18", "-shared", "-Bsymbolic", "-u", "ctor_fixture",
-                      "--hash-style=sysv", "-T", ROOT / "tools/ps5/native-shared.ld",
+                      "--hash-style=sysv", "-T", ROOT / "tools/ps5/scripts/native-shared.ld",
                       self.output, "-o", linked)
         elf = Elf(linked.read_bytes())
         init = elf.sections[".init_array"]
@@ -280,7 +280,7 @@ class PrepareArchiveTests(unittest.TestCase):
 
     def test_cli_json_and_unsupported_exit(self):
         self.archive(self.ctor)
-        helper = ROOT / "tools/ps5/prepare_runtime_archive.py"
+        helper = ROOT / "tools/ps5/scripts/prepare_runtime_archive.py"
         result = self.run_tool(sys.executable, helper, "--source", self.source,
                                "--output", self.output)
         self.assertEqual(json.loads(result.stdout)["mode"], "single-legacy-constructor")

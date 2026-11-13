@@ -10,7 +10,7 @@ JOBS ?= 1
 all:
 	WORK="$(WORK)" PS5_OPENGL_SOURCE="$(PS5_OPENGL_SOURCE)" \
 	  PS5_OPENGL_PREFIX="$(PS5_OPENGL_PREFIX)" PS5_PAYLOAD_SDK="$(PS5_PAYLOAD_SDK)" \
-	  JOBS="$(JOBS)" bash "$(ROOT)/tools/ps5/bootstrap/ps5-opengl.sh"
+	  JOBS="$(JOBS)" bash "$(ROOT)/tools/ps5/scripts/prepare/ps5-opengl.sh"
 
 clean distclean:
 	@echo "Preserving the external PS5 OpenGL cache at $(PS5_OPENGL_SOURCE)"

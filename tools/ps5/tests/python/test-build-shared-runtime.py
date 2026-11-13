@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
-    "shared_core_builder", (ps5_test_paths.HERE / 'build-shared-runtime.py'))
+    "shared_core_builder", (ps5_test_paths.HERE / 'scripts/build-shared-runtime.py'))
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 

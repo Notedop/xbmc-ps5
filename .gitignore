@@ -123,8 +123,6 @@ cmake_install.cmake
 !/addons/game.controller.dualsense/**
 !/addons/game.controller.ps5.mediaremote/
 !/addons/game.controller.ps5.mediaremote/**
-/tools/ps5/remote-input-payload/*.elf
-/tools/ps5/remote-input-payload/run-*.log
 /addons/kodi.binary.global.audioengine/addon.xml
 /addons/kodi.binary.global.filesystem/addon.xml
 /addons/kodi.binary.global.general/addon.xml

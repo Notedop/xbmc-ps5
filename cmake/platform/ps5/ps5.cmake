@@ -21,11 +21,11 @@ if(NOT _ps5_app_lc)
 endif()
 
 if(NOT PS5_NATIVE_RUNTIME_SDK OR NOT PS5_NATIVE_DEPENDS_MAP)
-  message(FATAL_ERROR "PS5 requires PS5_NATIVE_RUNTIME_SDK and PS5_NATIVE_DEPENDS_MAP; use tools/ps5/configure.sh")
+  message(FATAL_ERROR "PS5 requires PS5_NATIVE_RUNTIME_SDK and PS5_NATIVE_DEPENDS_MAP; use tools/ps5/scripts/configure.sh")
 endif()
 find_program(PS5_NATIVE_PYTHON NAMES python3 REQUIRED NO_CMAKE_FIND_ROOT_PATH)
 execute_process(
-  COMMAND "${PS5_NATIVE_PYTHON}" "${CMAKE_SOURCE_DIR}/tools/ps5/native_contract.py"
+  COMMAND "${PS5_NATIVE_PYTHON}" "${CMAKE_SOURCE_DIR}/tools/ps5/scripts/native_contract.py"
           --sdk "${PS5_NATIVE_RUNTIME_SDK}" --archive-map "${PS5_NATIVE_DEPENDS_MAP}"
   RESULT_VARIABLE _ps5_contract_result ERROR_VARIABLE _ps5_contract_error
   OUTPUT_QUIET)

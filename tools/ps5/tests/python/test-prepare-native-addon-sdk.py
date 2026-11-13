@@ -19,7 +19,7 @@ HERE = ps5_test_paths.HERE
 
 
 def load(name, filename):
-    directory = ps5_test_paths.TESTS if filename.startswith("test-") else HERE
+    directory = ps5_test_paths.TESTS if filename.startswith("test-") else ps5_test_paths.SCRIPTS
     spec = importlib.util.spec_from_file_location(name, directory / filename)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -e
 . "$(dirname "$0")/environment"
-python3 "$WORKSPACE/tools/ps5/check-sdk.py" --sdk "$PS5_PAYLOAD_SDK"
+python3 "$WORKSPACE/tools/ps5/scripts/check-sdk.py" --sdk "$PS5_PAYLOAD_SDK"
 exec make -C "$WORKSPACE/tools/depends/target" -j"$BUILDTHREADS" "$@"

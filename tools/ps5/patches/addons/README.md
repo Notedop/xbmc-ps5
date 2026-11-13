@@ -92,4 +92,4 @@ Other platforms never see these patches.
 
 `inputstream.adaptive` predates this layout and still uses
 `tools/ps5/patches/inputstream-adaptive-ps5.patch` through
-`tools/ps5/apply-adaptive-patch.cmake`.
+`tools/ps5/scripts/apply-adaptive-patch.cmake`.

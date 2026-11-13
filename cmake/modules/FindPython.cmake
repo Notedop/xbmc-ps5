@@ -59,7 +59,7 @@ if(NOT TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
     # expat IS linked the same way as KODI_DEPENDSBUILD (tools/depends'
     # expat, 2.8.1) - not the SDK pacbrew sysroot's older bundled expat
     # (2.6.2) that fontconfig/freetype/harfbuzz still pull in (ss0.3): the
-    # kodi-pkg-config wrapper in tools/ps5/configure.sh routes fontconfig's
+    # kodi-pkg-config wrapper in tools/ps5/scripts/configure.sh routes fontconfig's
     # "Requires.private: expat" to this same tools/depends expat too, so the
     # whole static link only ever sees one expat.a, not two conflicting ones.
     if(CORE_SYSTEM_NAME STREQUAL ps5)

@@ -1,4 +1,4 @@
-set(_PS5_PACKAGE_SCRIPT "${CMAKE_SOURCE_DIR}/tools/ps5/package.sh")
+set(_PS5_PACKAGE_SCRIPT "${CMAKE_SOURCE_DIR}/tools/ps5/scripts/package.sh")
 set(PS5_PACKAGE_STAGE "" CACHE PATH "Reusable PS5 package output (empty selects BUILD/title)")
 set(PS5_DEPLOY_HOST "" CACHE STRING "Explicit console FTP host for ps5-deploy")
 
@@ -54,7 +54,7 @@ if(EXISTS "${_PS5_PACKAGE_SCRIPT}")
 
   add_custom_target(ps5-deploy
     COMMAND ${CMAKE_COMMAND} -E env ${_PS5_PACKAGE_ENV}
-            "${CMAKE_SOURCE_DIR}/tools/ps5/deploy.sh" "${PS5_DEPLOY_HOST}"
+            "${CMAKE_SOURCE_DIR}/tools/ps5/scripts/deploy.sh" "${PS5_DEPLOY_HOST}"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL
     VERBATIM

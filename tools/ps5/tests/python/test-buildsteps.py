@@ -35,8 +35,8 @@ class BuildstepTests(unittest.TestCase):
             path = self.bin / name
             path.write_text(stub)
             path.chmod(0o755)
-        for name in ("tools/ps5/bootstrap.sh", "tools/ps5/configure.sh",
-                     "tools/ps5/deploy.sh", "tools/depends/bootstrap",
+        for name in ("tools/ps5/scripts/prepare/bootstrap.sh", "tools/ps5/scripts/configure.sh",
+                     "tools/ps5/scripts/deploy.sh", "tools/depends/bootstrap",
                      "tools/depends/configure"):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,13 +138,13 @@ class BuildstepTests(unittest.TestCase):
         result, calls = self.run_step("deploy", "console.invalid")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls[0]["argv"][1:],
-                         [str(self.root / "tools/ps5/deploy.sh"), "console.invalid"])
+                         [str(self.root / "tools/ps5/scripts/deploy.sh"), "console.invalid"])
 
     def test_host_test_selection_and_failures_propagate(self):
         result, calls = self.run_step("run-tests", "test-package-stage.py", RESULT="7")
         self.assertEqual(result.returncode, 7)
         self.assertEqual(calls[0]["argv"][1:],
-                         [str(self.root / "tools/ps5/test.py"), "test-package-stage.py"])
+                         [str(self.root / "tools/ps5/tests/run.py"), "test-package-stage.py"])
         self.assertIn("target/runtime tests are not run", result.stdout)
         result, calls = self.run_step("prepare-depends", RESULT="7")
         self.assertEqual(result.returncode, 7)
@@ -221,7 +221,7 @@ class BuildstepTests(unittest.TestCase):
         recipe = self.root / "tools/depends/target/ps5-opengl"
         recipe.mkdir(parents=True)
         shutil.copy(ROOT / "tools/depends/target/ps5-opengl/Makefile", recipe)
-        backend = self.root / "tools/ps5/bootstrap/ps5-opengl.sh"
+        backend = self.root / "tools/ps5/scripts/prepare/ps5-opengl.sh"
         backend.parent.mkdir(parents=True, exist_ok=True)
         backend.write_text('#!/bin/bash\nexec python3 "$0" "$@"\n')
         (recipe / ".installed-test").touch()
@@ -242,13 +242,13 @@ class BuildstepTests(unittest.TestCase):
         subprocess.run(["/usr/bin/make", "-n", "-C", str(recipe)],
                        env=self.env, check=True, capture_output=True)
         self.assertFalse(self.log.exists(), "Make dry runs must not execute graphics builders")
-        bootstrap = (ROOT / "tools/ps5/bootstrap.sh").read_text()
+        bootstrap = (ROOT / "tools/ps5/scripts/prepare/bootstrap.sh").read_text()
         self.assertIn('make -C "$ROOT/tools/depends/target/ps5-opengl"', bootstrap)
-        self.assertNotIn('bash "$HERE/bootstrap/ps5-opengl.sh"', bootstrap)
+        self.assertNotIn('bash "$HERE/scripts/prepare/ps5-opengl.sh"', bootstrap)
 
     def test_cmake_targets_forward_configured_inputs_and_deploy_without_building(self):
         source = self.root / "cmake source"
-        scripts = source / "tools/ps5"
+        scripts = source / "tools/ps5/scripts"
         scripts.mkdir(parents=True)
         for name in ("package.sh", "deploy.sh"):
             script = scripts / name

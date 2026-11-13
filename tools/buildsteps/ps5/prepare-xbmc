@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 . "$(dirname "$0")/environment"
-exec python3 "$WORKSPACE/tools/ps5/prepare-native-runtime.py" \
+exec python3 "$WORKSPACE/tools/ps5/scripts/prepare-native-runtime.py" \
   --sdk "$PS5_PAYLOAD_SDK" --depends "$PS5_DEPENDS_PREFIX" \
   --output "$PS5_NATIVE_OUTPUT" --source "$PS5_OPENGL_SOURCE" \
   --opengl "$PS5_OPENGL_PREFIX" --homebrew-sources "$PS5_HOMEBREW_SOURCES" \

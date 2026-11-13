@@ -6,5 +6,6 @@ import sys
 TESTS = Path(__file__).resolve().parent
 ROOT = TESTS.parents[3]
 HERE = ROOT / "tools/ps5"
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+SCRIPTS = HERE / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))

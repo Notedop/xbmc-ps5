@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from native_runtime_sdk import import_object
 
-spec = importlib.util.spec_from_file_location("qualify_cxx", (ps5_test_paths.HERE / 'qualify-shared-cxx.py'))
+spec = importlib.util.spec_from_file_location("qualify_cxx", (ps5_test_paths.HERE / 'scripts/qualify-shared-cxx.py'))
 qualifier = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(qualifier)
 

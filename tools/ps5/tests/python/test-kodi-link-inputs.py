@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location(
-    "kodi_link_inputs", (ps5_test_paths.HERE / 'kodi-link-inputs.py'))
+    "kodi_link_inputs", (ps5_test_paths.HERE / 'scripts/kodi-link-inputs.py'))
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 

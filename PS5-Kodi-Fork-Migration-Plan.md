@@ -288,7 +288,7 @@ Validate every location against the chosen upstream revision.
 | `overlay/cmake/scripts/ps5/` | `cmake/scripts/ps5/`: architecture/path setup, macros, installation |
 | `overlay/cmake/treedata/ps5/` | `cmake/treedata/ps5/`: source and test selection |
 | `overlay/cmake/installdata/ps5/` | `cmake/installdata/ps5/`: runtime data installation |
-| `toolchain/ps5-kodi.cmake` | Kodi-owned cross-compilation integration at a location consistent with upstream conventions |
+| `tools/ps5/toolchain/ps5-kodi.cmake` | Kodi-owned cross-compilation integration at a location consistent with upstream conventions |
 | Host/dependency/package scripts and title metadata | `tools/ps5/` or established Kodi packaging locations; separate responsibilities |
 | PS5 runtime defaults | Platform-specific installation/configuration; shared defaults stay suitable for other targets |
 

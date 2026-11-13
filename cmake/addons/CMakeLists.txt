@@ -455,7 +455,7 @@ foreach(addon ${addons})
           if(CORE_PLATFORM_NAME STREQUAL ps5 AND id STREQUAL "inputstream.adaptive")
             execute_process(
               COMMAND ${CMAKE_COMMAND} "-DSOURCE_DIR=${SOURCE_DIR}"
-                      -P "${CORE_SOURCE_DIR}/tools/ps5/apply-adaptive-patch.cmake"
+                      -P "${CORE_SOURCE_DIR}/tools/ps5/scripts/apply-adaptive-patch.cmake"
               RESULT_VARIABLE ps5_patch_result)
             if(NOT ps5_patch_result EQUAL 0)
               message(FATAL_ERROR "Failed to prepare PS5 inputstream.adaptive source")
@@ -466,7 +466,7 @@ foreach(addon ${addons})
               COMMAND ${CMAKE_COMMAND} "-DSOURCE_DIR=${SOURCE_DIR}"
                       "-DSERIES_DIR=${CORE_SOURCE_DIR}/tools/ps5/patches/addons/${id}"
                       "-DSERIES_NAME=${id}"
-                      -P "${CORE_SOURCE_DIR}/tools/ps5/apply-patch-series.cmake"
+                      -P "${CORE_SOURCE_DIR}/tools/ps5/scripts/apply-patch-series.cmake"
               RESULT_VARIABLE ps5_patch_result)
             if(NOT ps5_patch_result EQUAL 0)
               message(FATAL_ERROR "Failed to prepare PS5 ${id} source")

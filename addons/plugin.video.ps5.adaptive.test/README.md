@@ -4,7 +4,7 @@ Diagnostic-only Python video add-on. It explicitly selects InputStream Adaptive
 and opens Akamai's public, unencrypted Big Buck Bunny DASH sample (H.264/AAC).
 It does not use YouTube, account credentials, a local server or DRM.
 
-Set `PS5_BUNNY_DIAGNOSTIC=1` when running `tools/ps5/package.sh` to include and
+Set `PS5_BUNNY_DIAGNOSTIC=1` when running `tools/ps5/scripts/package.sh` to include and
 register this diagnostic in a fresh native title. Native InputStream Adaptive
 must already be built through the catalogue and selected for title staging.
 The diagnostic is excluded by default and is not a catalogue binary.

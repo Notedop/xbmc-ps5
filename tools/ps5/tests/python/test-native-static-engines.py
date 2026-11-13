@@ -51,7 +51,7 @@ class NativeStaticEnginesTest(unittest.TestCase):
             shutil.copytree(source, patched)
             run("cmake", "-DSOURCE_DIR=" + str(patched),
                 "-DSERIES_DIR=" + str(ROOT / "tools/ps5/patches/addons" / addon),
-                "-P", ROOT / "tools/ps5/apply-patch-series.cmake")
+                "-P", ROOT / "tools/ps5/scripts/apply-patch-series.cmake")
             binary = root / "build"
             run("cmake", "-S", patched / subdirectory, "-B", binary,
                 "-DCMAKE_BUILD_TYPE=Debug")

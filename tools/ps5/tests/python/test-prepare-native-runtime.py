@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
-    "native_preparation", (ps5_test_paths.HERE / 'prepare-native-runtime.py'))
+    "native_preparation", (ps5_test_paths.HERE / 'scripts/prepare-native-runtime.py'))
 PREPARE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PREPARE)
 

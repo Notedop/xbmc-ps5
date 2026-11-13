@@ -92,7 +92,7 @@ endif()
 if(PS5_NATIVE_RUNTIME_SDK)
   find_program(PS5_NATIVE_PYTHON NAMES python3 REQUIRED NO_CMAKE_FIND_ROOT_PATH)
   execute_process(COMMAND "${PS5_NATIVE_PYTHON}"
-    "${CORE_SOURCE_DIR}/tools/ps5/build-native-shared-addon.py"
+    "${CORE_SOURCE_DIR}/tools/ps5/scripts/build-native-shared-addon.py"
     --sdk "${PS5_NATIVE_RUNTIME_SDK}" --describe
     RESULT_VARIABLE sdk_result OUTPUT_QUIET ERROR_VARIABLE sdk_error)
   if(NOT sdk_result EQUAL 0)
@@ -107,10 +107,10 @@ if(PS5_NATIVE_RUNTIME_SDK)
             "${CORE_SOURCE_DIR}/cmake/scripts/ps5/NativeSharedAddon.cmake"
             "${CORE_SOURCE_DIR}/cmake/scripts/ps5/PS5NativeABI.cmake"
        DESTINATION "${sdk_destination}")
-  configure_file("${CORE_SOURCE_DIR}/tools/ps5/native_abi_check.h"
+  configure_file("${CORE_SOURCE_DIR}/tools/ps5/scripts/native_abi_check.h"
                  "${sdk_destination}/include/ps5_native_abi.h" COPYONLY)
-  file(COPY "${CORE_SOURCE_DIR}/tools/ps5/build-native-shared-addon.py"
-            "${CORE_SOURCE_DIR}/tools/ps5/native-clang.py"
+  file(COPY "${CORE_SOURCE_DIR}/tools/ps5/scripts/build-native-shared-addon.py"
+            "${CORE_SOURCE_DIR}/tools/ps5/scripts/native-clang.py"
        DESTINATION "${sdk_destination}/tools")
   if(DEFINED BUILD_ARGS)
     foreach(sdk_variable PS5_PAYLOAD_SDK PS5_OPENGL_PREFIX)

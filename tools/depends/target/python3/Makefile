@@ -120,7 +120,7 @@ ifeq ($(OS),ps5)
   # docs/README.PS5.md ss0.3), which pulls that same older expat in
   # transitively. Having both expat.a builds present in one static
   # whole-archive link produces duplicate-symbol errors, not just a version
-  # mismatch, so tools/ps5/configure.sh's kodi-pkg-config wrapper routes
+  # mismatch, so tools/ps5/scripts/configure.sh's kodi-pkg-config wrapper routes
   # fontconfig's "Requires.private: expat" to this same depends-built expat
   # too, keeping exactly one expat.a in the final link.
   # ac_cv_have_getc_unlocked (not ac_cv_func_getc_unlocked, which this

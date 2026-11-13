@@ -12,7 +12,7 @@ import unittest
 
 
 ROOT = ps5_test_paths.ROOT
-BOOTSTRAP = ROOT / "tools/ps5/bootstrap/ps5-opengl.sh"
+BOOTSTRAP = ROOT / "tools/ps5/scripts/prepare/ps5-opengl.sh"
 PIN = ROOT / "tools/ps5/patches/ps5-opengl/PS5-OPENGL-COMMIT"
 
 
@@ -22,10 +22,10 @@ class TestOpenGLBootstrap(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.tools = self.root / "tools/ps5"
-        (self.tools / "bootstrap").mkdir(parents=True)
+        (self.tools / "scripts/prepare").mkdir(parents=True)
         self.patches = self.tools / "patches/ps5-opengl"
         self.patches.mkdir(parents=True)
-        shutil.copyfile(BOOTSTRAP, self.tools / "bootstrap/ps5-opengl.sh")
+        shutil.copyfile(BOOTSTRAP, self.tools / "scripts/prepare/ps5-opengl.sh")
         self.patch = self.patches / "0001-fixture.patch"
         self.patch.write_text(
             "diff --git a/src/platform/local.c b/src/platform/local.c\n"
@@ -66,7 +66,7 @@ class TestOpenGLBootstrap(unittest.TestCase):
         env.pop("PS5_OPENGL_SOURCE", None)
         env.update(overrides)
         return subprocess.run(
-            ["bash", str(self.tools / "bootstrap/ps5-opengl.sh")],
+            ["bash", str(self.tools / "scripts/prepare/ps5-opengl.sh")],
             env=env, text=True, capture_output=True, check=False)
 
     def test_mismatched_checkout_is_preserved(self):
@@ -130,7 +130,7 @@ class TestOpenGLBootstrap(unittest.TestCase):
         (build / ".kodi-display-profile").write_text("2160p60\n")
         identity = build / ".kodi-sdk-build"
         identity.write_text("retained receipt\n")
-        (self.tools / "native_graphics.py").write_text(
+        (self.tools / "scripts/native_graphics.py").write_text(
             'import os, sys\nprint("QUALIFY_REACHED")\n'
             'sys.exit(int(os.environ.get("QUALIFY_RESULT", "0")))\n')
         for _ in range(2):

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 HERE = ps5_test_paths.HERE
-SPEC = importlib.util.spec_from_file_location("package_freshness", HERE / "check-package-build.py")
+SPEC = importlib.util.spec_from_file_location("package_freshness", HERE / "scripts/check-package-build.py")
 FRESHNESS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FRESHNESS)
 

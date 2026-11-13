@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-SPEC = importlib.util.spec_from_file_location("ps5_test_runner", ps5_test_paths.HERE / "test.py")
+SPEC = importlib.util.spec_from_file_location("ps5_test_runner", ps5_test_paths.HERE / "tests/run.py")
 RUNNER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RUNNER)
 
@@ -21,7 +21,7 @@ class TestRunnerTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.tests = self.root / "tests/python"
+        self.tests = self.root / "python"
         self.tests.mkdir(parents=True)
         (self.tests / "test-tiny.py").write_text(
             "import unittest\nclass Tiny(unittest.TestCase):\n"
@@ -33,8 +33,8 @@ class TestRunnerTests(unittest.TestCase):
     def run_tests(self, *selectors):
         original_path = list(sys.path)
         try:
-            with patch.object(RUNNER, "__file__", str(self.root / "test.py")), \
-                    patch.object(sys, "argv", ["test.py", *selectors]), \
+            with patch.object(RUNNER, "__file__", str(self.root / "run.py")), \
+                    patch.object(sys, "argv", ["run.py", *selectors]), \
                     contextlib.redirect_stderr(self.stderr):
                 return RUNNER.main()
         finally:
@@ -60,7 +60,19 @@ class TestRunnerTests(unittest.TestCase):
         self.assertEqual(failure.exception.code, 2)
 
     def test_test_sources_are_not_mixed_with_build_tools(self):
-        self.assertEqual(sorted(path.name for path in ps5_test_paths.HERE.glob("test-*")), [])
+        self.assertEqual(sorted(path.name for path in ps5_test_paths.SCRIPTS.glob("test-*")), [])
+
+    def test_tooling_root_contains_only_policy_data_and_directories(self):
+        self.assertEqual(
+            sorted(path.name for path in ps5_test_paths.HERE.iterdir() if path.is_file()),
+            ["addon-catalogue.json", "addon-exclusions.json", "dependency-manifest.json"])
+
+    def test_production_scripts_do_not_depend_on_test_fixtures(self):
+        for path in ps5_test_paths.SCRIPTS.rglob("*"):
+            if path.suffix not in (".py", ".sh", ".cmake"):
+                continue
+            with self.subTest(script=path.name):
+                self.assertNotIn("tools/ps5/tests", path.read_text())
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ import subprocess
 
 
 SPEC = importlib.util.spec_from_file_location(
-    "shared_graphics", (ps5_test_paths.HERE / 'build-shared-graphics.py'))
+    "shared_graphics", (ps5_test_paths.HERE / 'scripts/build-shared-graphics.py'))
 GRAPHICS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GRAPHICS)
 
@@ -49,7 +49,7 @@ class SharedGraphicsTests(unittest.TestCase):
                              for flag in cxx))
         self.assertNotIn("-fshort-wchar", cxx)
         self.assertEqual(config["compiler_launcher"]["source_abi"], "actual-ps5-frontend")
-        self.assertIn(str(GRAPHICS.ROOT / "tools/ps5/native-clang.py"),
+        self.assertIn(str(GRAPHICS.ROOT / "tools/ps5/scripts/native-clang.py"),
                       config["c_compiler"])
         self.assertEqual(config["mesa_cpp_compiler"][-2:],
                          ["-isystem", str(sdk / "target/include")])

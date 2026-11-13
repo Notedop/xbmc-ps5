@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-SCRIPT = (ps5_test_paths.HERE / 'package.sh')
+SCRIPT = (ps5_test_paths.HERE / 'scripts/package.sh')
 
 
 class PackageInputsTests(unittest.TestCase):

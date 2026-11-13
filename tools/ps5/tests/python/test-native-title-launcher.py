@@ -229,7 +229,7 @@ class LauncherLifecycleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="native-launcher-object-") as temporary:
             output = Path(temporary) / "launcher.o"
             result = subprocess.run([
-                "python3", str(ROOT / "tools/ps5/native-clang.py"),
+                "python3", str(ROOT / "tools/ps5/scripts/native-clang.py"),
                 str(sdk / "bin/prospero-clang++"), "-std=c++20", "-O2", "-Wall", "-Wextra",
                 "-Werror", "-fPIC", "-femulated-tls", "-fno-stack-protector", "-fno-exceptions",
                 "-fno-rtti", "-nostdinc++", "-I" + str(sdk / "target/include/c++/v1"),

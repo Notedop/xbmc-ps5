@@ -25,7 +25,7 @@ ROOT = ps5_test_paths.ROOT
 STAGE = Path(os.environ.get("PS5_STDIO_DEPENDS", ROOT / "build/ps5-native-stdio-depends"))
 SDK = Path(os.environ.get("PS5_PAYLOAD_SDK", "/opt/ps5-payload-sdk"))
 OVERLAY = ROOT / "tools/ps5/sdk/include"
-spec = importlib.util.spec_from_file_location("migration", ROOT / "tools/ps5/build-native-stdio-depends.py")
+spec = importlib.util.spec_from_file_location("migration", ROOT / "tools/ps5/scripts/build-native-stdio-depends.py")
 migration = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(migration)
 

@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 ROOT = ps5_test_paths.ROOT
 SPEC = importlib.util.spec_from_file_location(
-    "prepare_shared_title", ROOT / "tools/ps5/prepare-shared-title.py")
+    "prepare_shared_title", ROOT / "tools/ps5/scripts/prepare-shared-title.py")
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 SDK_TITLE_PROVIDERS = MODULE.sdk_title_providers
@@ -142,7 +142,7 @@ class SharedTitleTest(unittest.TestCase):
         for name in ("build-native-kodi-app.py", "build-native-title-launcher.py",
                      "native_c_link.py", "native_runtime_sdk.py"):
             self.assertEqual((self.app / "vendor/ps5-runtime-tools" / name).read_bytes(),
-                             (ROOT / "tools/ps5" / name).read_bytes())
+                             (ps5_test_paths.SCRIPTS / name).read_bytes())
         self.assertEqual((self.app / "tooling/native/title_native_launcher.cpp").read_bytes(),
                          (ROOT / "shims/native-app/title_native_launcher.cpp").read_bytes())
         self.assertEqual(set(record["startup_sources"]),
@@ -311,7 +311,7 @@ class SharedTitleTest(unittest.TestCase):
 
 class PackageBuildStatusTest(unittest.TestCase):
     def test_build_failure_is_not_hidden_by_an_existing_executable(self):
-        script = (ROOT / "tools/ps5/package.sh").read_text()
+        script = (ROOT / "tools/ps5/scripts/package.sh").read_text()
         section = script[script.index("build_result=0\n"):script.index("\nKODI_IMAGE=")]
         for fail in (False, True):
             with self.subTest(fail=fail), tempfile.TemporaryDirectory() as temporary:

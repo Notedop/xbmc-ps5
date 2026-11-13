@@ -22,11 +22,11 @@ class PacbrewBootstrapTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         tools = self.root / "tools/ps5"
-        for relative in ("bootstrap/pacbrew.sh", *(f"patches/{name}" for name in PATCHES)):
+        for relative in ("scripts/prepare/pacbrew.sh", *(f"patches/{name}" for name in PATCHES)):
             destination = tools / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(HERE / relative, destination)
-        self.script = tools / "bootstrap/pacbrew.sh"
+        self.script = tools / "scripts/prepare/pacbrew.sh"
         self.repo = self.root / "external/pacbrew-repo"
         self.recipe = self.repo / "libminizip/PKGBUILD"
         self.recipe.parent.mkdir(parents=True)

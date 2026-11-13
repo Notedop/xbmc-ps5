@@ -1,5 +1,5 @@
 # PlayStation 5 (Prospero) architecture setup. Always a cross build from the
-# ps5-payload-sdk toolchain file (toolchain/ps5-kodi.cmake in the port repo).
+# ps5-payload-sdk toolchain file (tools/ps5/toolchain/ps5-kodi.cmake in the port repo).
 
 if(NOT CMAKE_TOOLCHAIN_FILE)
   message(FATAL_ERROR "The ps5 platform must be built with -DCMAKE_TOOLCHAIN_FILE=.../ps5-kodi.cmake")

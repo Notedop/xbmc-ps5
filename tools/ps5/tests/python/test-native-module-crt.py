@@ -198,11 +198,11 @@ class NativeModuleCrtTest(unittest.TestCase):
                  "-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
         commands = [
             [CXX, *flags, "-D__dso_handle=__ps5_test_dso", "-c",
-             str(ROOT / "tools/ps5/native_module_crt.cpp"), "-o", str(obj)],
+             str(ROOT / "tools/ps5/scripts/native_module_crt.cpp"), "-o", str(obj)],
             [CXX, *flags, str(obj), str(harness), "-Wl,--wrap=__cxa_finalize",
              "-o", str(cls.binary)],
             [CXX, *flags, "-DPS5_SHARED_RUNTIME_CORE=1", "-D__dso_handle=__ps5_test_dso",
-             "-c", str(ROOT / "tools/ps5/native_module_crt.cpp"), "-o", str(core_obj)],
+             "-c", str(ROOT / "tools/ps5/scripts/native_module_crt.cpp"), "-o", str(core_obj)],
             [CXX, *flags, "-DPS5_SHARED_RUNTIME_CORE=1", str(core_obj), str(harness),
              "-Wl,--wrap=__cxa_finalize", "-o", str(cls.core_binary)],
         ]

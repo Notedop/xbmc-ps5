@@ -43,7 +43,7 @@ class SharedLinkTest(unittest.TestCase):
                        check=True, capture_output=True)
         result = subprocess.run([LLD, "-shared", "--hash-style=sysv", "--eh-frame-hdr",
                         "-z", "now", "-z", "max-page-size=0x4000", "--no-undefined",
-                        "-T", str(ROOT / "tools/ps5/native-shared.ld"),
+                        "-T", str(ROOT / "tools/ps5/scripts/native-shared.ld"),
                         "-init", "module_start", "-fini", "module_stop",
                         "-o", str(elf), str(obj), *map(str, objects), *map(str, libraries)],
                        capture_output=True, text=True)
@@ -586,7 +586,7 @@ class SharedLinkTest(unittest.TestCase):
             ''')
             source.write_text(source.read_text().replace("__cxa_thread_atexit", tls_symbol))
         objects = []
-        for name, path in (("crt", ROOT / "tools/ps5/native_module_crt.cpp"), ("global", source)):
+        for name, path in (("crt", ROOT / "tools/ps5/scripts/native_module_crt.cpp"), ("global", source)):
             obj = self.root / (name + ".o")
             result = subprocess.run([str(cxx), "--target=x86_64-unknown-freebsd",
                                      "-std=c++20", "-O2", "-fPIC", "-fuse-init-array",

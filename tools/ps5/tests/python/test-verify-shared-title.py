@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 ROOT = ps5_test_paths.ROOT
 SPEC = importlib.util.spec_from_file_location(
-    "verify_shared_title", ROOT / "tools/ps5/verify-shared-title.py")
+    "verify_shared_title", ROOT / "tools/ps5/scripts/verify-shared-title.py")
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
@@ -77,7 +77,7 @@ PROVIDER = {
 
 class SharedTitleProofTest(unittest.TestCase):
     def test_elevation_packaged_at_title_root_with_runtime_names(self):
-        script = (ROOT / "tools/ps5/package.sh").read_text()
+        script = (ROOT / "tools/ps5/scripts/package.sh").read_text()
         staging = script.split('python3 - "$TITLE_ID" "$LAPY_SRC"', 1)[1]
         staging = staging.split("<<'PY' || exit 1\n", 1)[1].split("\nPY\n", 1)[0]
         copy = script.split('cp "$ELEVATION_STAGE/default-config.json"', 1)[1].split('\nif [', 1)[0]
@@ -146,7 +146,7 @@ class SharedTitleProofTest(unittest.TestCase):
             self.assertNotIn(helper, source)
 
     def test_deployment_preserves_user_configuration(self):
-        script = (ROOT / "tools/ps5/package.sh").read_text()
+        script = (ROOT / "tools/ps5/scripts/package.sh").read_text()
         self.assertIn("mirror -R --delete --exclude '^config[.]json$'", script)
 
     def test_shared_network_has_one_owner_and_preserves_old_sdk_support(self):

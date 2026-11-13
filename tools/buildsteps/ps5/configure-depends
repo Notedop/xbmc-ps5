@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 . "$(dirname "$0")/environment"
-python3 "$WORKSPACE/tools/ps5/check-sdk.py" --sdk "$PS5_PAYLOAD_SDK"
+python3 "$WORKSPACE/tools/ps5/scripts/check-sdk.py" --sdk "$PS5_PAYLOAD_SDK"
 cd "$WORKSPACE/tools/depends"
 exec ./configure --host="$BUILD_HOST" --with-platform=ps5 \
   --with-toolchain="$PS5_PAYLOAD_SDK" --prefix="$XBMC_DEPENDS_ROOT" \

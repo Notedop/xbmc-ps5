@@ -33,7 +33,7 @@ class RtmpNativeTest(unittest.TestCase):
         subprocess.run(
             ["cmake", "-DSOURCE_DIR=" + str(cls.source),
              "-DSERIES_DIR=" + str(ROOT / "tools/ps5/patches/addons/inputstream.rtmp"),
-             "-P", str(ROOT / "tools/ps5/apply-patch-series.cmake")],
+             "-P", str(ROOT / "tools/ps5/scripts/apply-patch-series.cmake")],
             check=True, capture_output=True, text=True)
 
     def test_matching_private_dependencies_and_native_rtmp_compiler(self):

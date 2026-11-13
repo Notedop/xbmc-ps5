@@ -46,7 +46,7 @@ unsigned char native_max_align[alignof(std::max_align_t)];
 }
 """
 SPEC = importlib.util.spec_from_file_location("addon_builder",
-                                             (ps5_test_paths.HERE / 'build-native-shared-addon.py'))
+                                             (ps5_test_paths.HERE / 'scripts/build-native-shared-addon.py'))
 builder = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(builder)
 
@@ -65,19 +65,19 @@ class NativeAddonTest(unittest.TestCase):
         for name in ("native_shared_link.py", "native_runtime_sdk.py", "native_c_link.py",
                      "native_system_provider.py", "native_module_crt.cpp", "native-shared.ld",
                      "build-native-shared-addon.py", "native-clang.py"):
-            shutil.copyfile(ROOT / "tools/ps5" / name, tools / name)
+            shutil.copyfile(ps5_test_paths.SCRIPTS / name, tools / name)
         shutil.copy2(SIGNER, tools / "ps5-native-tool")
         for name in ("PS5NativeRuntimeConfig.cmake", "NativeSharedAddon.cmake", "PS5NativeABI.cmake"):
             shutil.copyfile(ROOT / "cmake/scripts/ps5" / name, cls.sdk / name)
         (cls.sdk / "include").mkdir()
         (cls.sdk / "include/stdio.h").write_text("#include_next <stdio.h>\n")
-        shutil.copyfile(ROOT / "tools/ps5/native_abi_check.h", cls.sdk / "include/ps5_native_abi.h")
+        shutil.copyfile(ROOT / "tools/ps5/scripts/native_abi_check.h", cls.sdk / "include/ps5_native_abi.h")
         baseline = cls.root / "native-abi-baseline.cpp"
         baseline.write_text(CXX_ABI_SOURCE)
         baseline_object = baseline.with_suffix(".o")
         cls.run_command(CXX, *ABI_FLAGS, "-std=c++17", "-nostdinc++",
                         "-I" + str(PAYLOAD / "target/include/c++/v1"),
-                        "-include", ROOT / "tools/ps5/native_abi_check.h",
+                        "-include", ROOT / "tools/ps5/scripts/native_abi_check.h",
                         "-c", baseline, "-o", baseline_object)
         cls.baseline_symbols = dict(Elf(baseline_object.read_bytes()).symbols(".symtab"))
         cls.provider("libkodi-runtime", """
@@ -162,12 +162,12 @@ class NativeAddonTest(unittest.TestCase):
           __attribute__((visibility("hidden"))) int module_stop(void) { return 0; }
         """ + body)
         obj, elf, native = (source.with_suffix(s) for s in (".o", ".so", ".elf"))
-        cls.run_command(CC, *ABI_FLAGS, "-include", ROOT / "tools/ps5/native_abi_check.h",
+        cls.run_command(CC, *ABI_FLAGS, "-include", ROOT / "tools/ps5/scripts/native_abi_check.h",
                         *flags, "-c", source, "-o", obj)
         cls.run_command(LLD, "-shared", "--no-undefined", "--hash-style=sysv",
                         "--eh-frame-hdr", "-z", "now", "-z", "max-page-size=0x4000",
                         "-init", "module_start", "-fini", "module_stop",
-                        "-T", ROOT / "tools/ps5/native-shared.ld", "-o", elf, obj, *libraries)
+                        "-T", ROOT / "tools/ps5/scripts/native-shared.ld", "-o", elf, obj, *libraries)
         return elf
 
     @classmethod
@@ -251,7 +251,7 @@ include(CPack)
 """)
         binary = root / "out"
         self.run_command(CMAKE, "-S", root, "-B", binary,
-                         "-DCMAKE_TOOLCHAIN_FILE=" + str(ROOT / "toolchain/ps5-native-addon.cmake"),
+                         "-DCMAKE_TOOLCHAIN_FILE=" + str(ROOT / "tools/ps5/toolchain/ps5-native-addon.cmake"),
                          "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_STANDARD=17",
                          "-DPACKAGE_ZIP=" + ("ON" if package else "OFF"))
         self.run_command(CMAKE, "--build", binary, "-j2")
@@ -541,7 +541,7 @@ pathlib.Path(args[args.index("--out") + 1]).write_bytes(b"wrong")
                   "-U__STDC_MB_MIGHT_NEQ_WC__"], "32-byte biggest alignment")):
             with self.subTest(flags=flags):
                 result = subprocess.run([CC, *ABI_FLAGS, *flags, "-include",
-                                         str(ROOT / "tools/ps5/native_abi_check.h"),
+                                         str(ROOT / "tools/ps5/scripts/native_abi_check.h"),
                                          "-c", str(source), "-o", str(source.with_suffix(".o"))],
                                         capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)

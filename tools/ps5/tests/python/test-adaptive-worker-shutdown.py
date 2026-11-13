@@ -19,7 +19,7 @@ BUILD.mkdir(parents=True, exist_ok=True)
 
 def test_patch_application():
     patch = ROOT / "tools/ps5/patches/inputstream-adaptive-ps5.patch"
-    script = ROOT / "tools/ps5/apply-adaptive-patch.cmake"
+    script = ROOT / "tools/ps5/scripts/apply-adaptive-patch.cmake"
     names = ("src/utils/log.h", "src/Stream.cpp",
              "src/common/AdaptiveStream.cpp", "src/common/AdaptiveStream.h")
     with tempfile.TemporaryDirectory(prefix="patch-", dir=BUILD) as directory:

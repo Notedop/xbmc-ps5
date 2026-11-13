@@ -94,14 +94,14 @@ class SampleTest(unittest.TestCase):
             temporary = tempfile.TemporaryDirectory(prefix="native-c-sample-tests-")
             cls.addClassCleanup(temporary.cleanup)
             args.build = Path(temporary.name)
-            subprocess.run(["bash", str(ROOT / "tools/ps5/tests/shell/build-sprx-test-addon.sh"),
+            subprocess.run(["bash", str(ROOT / "tools/ps5/scripts/build-sprx-test-addon.sh"),
                             str(args.build)], check=True, capture_output=True, text=True,
                            env=dict(os.environ, PS5_SPRX_START_TRACE_DIAGNOSTIC="0"))
         files = [args.build / name for name in ("main.o", "native.elf", "roundtrip.elf")]
         SOURCE, NATIVE, ROUNDTRIP = [path.read_bytes() for path in files]
 
     def test_builder_uses_manifest_identity_and_native_library(self):
-        identity = runpy.run_path(str(ROOT / "tools/ps5/build-native-c-addon.py"))["manifest_identity"]
+        identity = runpy.run_path(str(ROOT / "tools/ps5/scripts/build-native-c-addon.py"))["manifest_identity"]
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "addon.xml"
             for attributes, expected in (

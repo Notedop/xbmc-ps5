@@ -5,7 +5,7 @@ include_guard(GLOBAL)
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/tools/native_static_depends.py")
   set(_ps5_map_validator "${CMAKE_CURRENT_LIST_DIR}/tools/native_static_depends.py")
 else()
-  set(_ps5_map_validator "${CMAKE_CURRENT_LIST_DIR}/../../../tools/ps5/native_static_depends.py")
+  set(_ps5_map_validator "${CMAKE_CURRENT_LIST_DIR}/../../../tools/ps5/scripts/native_static_depends.py")
 endif()
 execute_process(
   COMMAND "${PS5_NATIVE_PYTHON}" "${_ps5_map_validator}"

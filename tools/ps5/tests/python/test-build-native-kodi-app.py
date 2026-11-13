@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 HERE = ps5_test_paths.HERE
 ROOT = HERE.parents[1]
-spec = importlib.util.spec_from_file_location("native_kodi_app", HERE / "build-native-kodi-app.py")
+spec = importlib.util.spec_from_file_location("native_kodi_app", HERE / "scripts/build-native-kodi-app.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 
@@ -267,7 +267,7 @@ void (*unsupported_priority)(void) = callback;
 """)
         obj = self.work / "priority.o"
         self.command([compiler, "-fPIC", "-c", source, "-o", obj])
-        script = self.write("native-app.ld", builder.legacy_linker_script(HERE / "native-shared.ld"))
+        script = self.write("native-app.ld", builder.legacy_linker_script(HERE / "scripts/native-shared.ld"))
         result = subprocess.run([linker, "-shared", "-T", str(script), str(obj),
                                  "-o", str(self.work / "rejected.so")],
                                 check=False, capture_output=True, text=True)
@@ -331,7 +331,7 @@ int main()
                       "-Dmodule_start=ps5_kodi_crt_initialize",
                       "-D__cxa_finalize=fixture_cxa_finalize",
                       "-D__dso_handle=fixture_dso_handle", "-c",
-                      HERE / "native_module_crt.cpp", "-o", crt])
+                      HERE / "scripts/native_module_crt.cpp", "-o", crt])
         fixture = self.write("private-crt-host.cpp", r"""
 #include <stddef.h>
 #include <stdint.h>
@@ -519,12 +519,12 @@ int main(int argc, char** argv, char** envp)
         staged_tools.mkdir()
         for name in ("build-native-kodi-app.py", "native-clang.py", "native-shared.ld",
                      "native_c_link.py", "native_shared_link.py", "native_runtime_sdk.py"):
-            shutil.copy2(HERE / name, staged_tools / name)
+            shutil.copy2(ps5_test_paths.SCRIPTS / name, staged_tools / name)
         local_native = self.work / "tooling/native"
         local_native.mkdir(parents=True)
         shutil.copy2(ROOT / "shims/native-app/kodi_app_entry.cpp", local_native)
         shutil.copy2(ROOT / "shims/native-app/title_native_startup.h", local_native)
-        shutil.copy2(HERE / "native_module_crt.cpp", local_native)
+        shutil.copy2(HERE / "scripts/native_module_crt.cpp", local_native)
         staged_output = self.work / "staged-result"
         result = subprocess.run(
             [sys.executable, str(staged_tools / "build-native-kodi-app.py"),

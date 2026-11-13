@@ -12,7 +12,7 @@ import unittest
 
 
 ROOT = ps5_test_paths.ROOT
-SPEC = importlib.util.spec_from_file_location("payload_sdk_check", ROOT / "tools/ps5/check-sdk.py")
+SPEC = importlib.util.spec_from_file_location("payload_sdk_check", ROOT / "tools/ps5/scripts/check-sdk.py")
 SDK_CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SDK_CHECK)
 
@@ -114,7 +114,7 @@ class PythonDiscoveryTest(unittest.TestCase):
     def configure(self, *arguments, success=True):
         return self.run_cmake(
             "-S", self.source, "-B", self.build, "-G", "Ninja",
-            f"-DCMAKE_TOOLCHAIN_FILE={ROOT / 'toolchain/ps5-kodi.cmake'}",
+            f"-DCMAKE_TOOLCHAIN_FILE={ROOT / 'tools/ps5/toolchain/ps5-kodi.cmake'}",
             f"-DPS5_PAYLOAD_SDK={self.sdk}", f"-DPS5_NATIVE_RUNTIME_SDK={self.runtime}",
             f"-DPS5_HOMEBREW_PREFIX={self.sdk / 'homebrew'}",
             f"-DPS5_OPENGL_PREFIX={self.sdk / 'opengl'}",

@@ -4,6 +4,9 @@ This guide covers repository setup, dependencies, configuration, building and
 packaging on Linux or WSL. Run commands from the Kodi source root unless noted.
 The conventional `tools/buildsteps/ps5` entry points cover Setup -> Configure ->
 Compile -> Package -> Deploy; each step can also be rerun independently.
+Use these entry points for the normal workflow. Lower-level scripts live under
+`tools/ps5/scripts`, with provisioning scripts under `scripts/prepare`.
+The PS5 CMake toolchain files live under `tools/ps5/toolchain`.
 PS5 integration is tracked in the source tree; configuration does not copy
 overlays or apply Kodi patch files.
 
@@ -34,7 +37,7 @@ incomplete setup. To repeat one step:
 STEP=opengl tools/buildsteps/ps5/prepare-depends  # packages | sdk | stubs | opengl | template | lapy
 ```
 
-The equivalent argument form is `bash tools/ps5/bootstrap.sh STEP=opengl`.
+The equivalent argument form is `bash tools/ps5/scripts/prepare/bootstrap.sh STEP=opengl`.
 That compatibility step delegates to the same Make recipe used by
 `make-depends`; bootstrap does not maintain a second graphics build.
 SDK setup (`STEP=sdk`) builds the pinned SDK using `tools/ps5/sdk/PKGBUILD` and
@@ -65,7 +68,7 @@ Buildsteps include `$HOME/.local/bin` on `PATH` so Python-installed host tools
 prepared by Setup remain available in subsequent steps.
 Subsequent dependency, Kodi and package steps verify the SDK but never install it.
 To build only the elevation helper with an existing payload SDK, use
-`bash tools/ps5/bootstrap.sh STEP=lapy`; this does not rebuild OpenGL.
+`bash tools/ps5/scripts/prepare/bootstrap.sh STEP=lapy`; this does not rebuild OpenGL.
 
 External sources default to `build/ps5-external`. To keep these expensive builds
 outside a disposable build directory:
@@ -77,7 +80,7 @@ tools/buildsteps/ps5/prepare-depends
 
 Keep the same exported choices for subsequent buildsteps. Only `prepare-depends`
 installs host packages or runs host provisioning; configure, compile, package and
-deploy never silently run it. The lower-level `tools/ps5/bootstrap.sh` remains
+deploy never silently run it. The lower-level `tools/ps5/scripts/prepare/bootstrap.sh` remains
 available when only external setup is wanted.
 
 ### Manual prerequisites and SDK paths
@@ -242,7 +245,7 @@ cmake --build build/ps5-release --target ps5-title
 tools/buildsteps/ps5/package
 ```
 
-Both targets call `tools/ps5/package.sh` and print their output paths. They share
+Both targets call `tools/ps5/scripts/package.sh` and print their output paths. They share
 one reusable `BUILD/title` directory, cleaned before each packaging run so removed
 files and optional diagnostics cannot leak into the next title. Set `STAGE` when
 calling the script directly, or configure `PS5_PACKAGE_STAGE` for the CMake targets,
@@ -344,7 +347,7 @@ tools/buildsteps/ps5/run-tests
 tools/buildsteps/ps5/run-tests test-prepare-native-runtime.py test-python-discovery.py
 ```
 
-The runner delegates to `tools/ps5/test.py`, which selects Python tests by
+The runner delegates to `tools/ps5/tests/run.py`, which selects Python tests by
 basename from `tools/ps5/tests/python`, not under `tools/buildsteps`. New graph tests use
 tiny mocked fixtures, not SDK/dependency builds. PS5 cross-compiled Kodi tests
 remain disabled and are never executed on the host. Runtime C++ test sources

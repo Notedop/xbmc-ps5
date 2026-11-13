@@ -15,7 +15,7 @@ from native_runtime_sdk import prove_provider, validate_stub
 
 
 SPEC = importlib.util.spec_from_file_location(
-    "graphics_module", (ps5_test_paths.HERE / 'build-shared-graphics-module.py'))
+    "graphics_module", (ps5_test_paths.HERE / 'scripts/build-shared-graphics-module.py'))
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 PREPARATION = Path(os.environ.get(

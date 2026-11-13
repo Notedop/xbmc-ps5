@@ -14,4 +14,4 @@ mkdir "$TEST_TMP"
 trap 'rm -rf -- "$TEST_TMP"' EXIT
 export TMPDIR="$TEST_TMP"
 export PYTHONDONTWRITEBYTECODE=1
-python3 "$WORKSPACE/tools/ps5/test.py" "$@"
+python3 "$WORKSPACE/tools/ps5/tests/run.py" "$@"

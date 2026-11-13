@@ -84,7 +84,7 @@ class NativeCompilerAbiTest(unittest.TestCase):
                 ([str(COMPILER), "--target=x86_64-unknown-freebsd9", "-fPIC",
                   "-femulated-tls", "-fuse-init-array", "-Wno-override-module",
                   "-c", str(bitcode), "-o", str(modern)], None),
-                ([sys.executable, str(ROOT / "tools/ps5/native-clang.py"),
+                ([sys.executable, str(ROOT / "tools/ps5/scripts/native-clang.py"),
                   *flags, "-c", "-o", str(launched)], SOURCE),
             ]
             for command, source in commands:

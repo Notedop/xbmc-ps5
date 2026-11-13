@@ -1,6 +1,6 @@
 # title/sce_sys
 
-`tools/ps5/package.sh` copies `param.json` unchanged into every title and verifies
+`tools/ps5/scripts/package.sh` copies `param.json` unchanged into every title and verifies
 that the packaged copy matches. Edit `contentVersion` here manually to bump the
 version (format `NN.NNN.NNN`, for example `22.000.001`); there is no automatic
 increment. `titleId`, `masterVersion`, category, HDR flags, memory limits and

@@ -14,8 +14,8 @@ import unittest
 
 HERE = ps5_test_paths.HERE
 ROOT = HERE.parents[1]
-sys.path.insert(0, str(HERE))
-spec = importlib.util.spec_from_file_location("staging", HERE / "stage-installed-addons.py")
+sys.path.insert(0, str(ps5_test_paths.SCRIPTS))
+spec = importlib.util.spec_from_file_location("staging", HERE / "scripts/stage-installed-addons.py")
 staging = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(staging)
 from native_addon import validate_binary
@@ -150,7 +150,7 @@ class InstalledAddons(unittest.TestCase):
         catalogue.write_text(json.dumps(policy))
         report = self.root / "report.json"
         output = self.root / "out"
-        result = subprocess.run([sys.executable, str(HERE / "stage-installed-addons.py"),
+        result = subprocess.run([sys.executable, str(HERE / "scripts/stage-installed-addons.py"),
                                  "--prefix", str(prefix), "--report", str(report),
                                  "--catalogue", str(catalogue), "--bundled-only",
                                  "--destination", str(output)], text=True, capture_output=True,
@@ -239,7 +239,7 @@ class InstalledAddons(unittest.TestCase):
             self.assertNotIn(absent, result.stdout)
 
     def test_package_prefix_record_and_explicit_override_validation(self):
-        script = (HERE / "package.sh").read_text()
+        script = (HERE / "scripts/package.sh").read_text()
         selection = script.split("# Native add-on prefix selection.\n", 1)[1].split(
             "# End native add-on prefix selection.", 1)[0]
         installed = self.root / "installed"
@@ -263,14 +263,15 @@ class InstalledAddons(unittest.TestCase):
         self.assertEqual(result.stdout.splitlines(), [str(installed)])
 
     def test_package_emits_matching_title_runtime_receipt_after_verification(self):
-        script = (HERE / "package.sh").read_text()
-        verification = script.index('python3 "$ROOT/tools/ps5/native_contract.py"')
-        receipt_start = script.index('python3 - "$ROOT/tools/ps5" "$APP/build/llvm-pie.elf"')
+        script = (HERE / "scripts/package.sh").read_text()
+        verification = script.index('python3 "$ROOT/tools/ps5/scripts/native_contract.py"')
+        receipt_start = script.index('python3 - "$ROOT/tools/ps5/scripts" "$APP/build/llvm-pie.elf"')
         self.assertGreater(receipt_start, verification)
         payload = script[receipt_start:].split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
         elf = self.root / "llvm-pie.elf"
         elf.write_bytes(self.fixture.read_bytes())
-        failed = subprocess.run([sys.executable, "-", str(HERE), str(elf), str(elf), str(elf)],
+        failed = subprocess.run([sys.executable, "-", str(ps5_test_paths.SCRIPTS),
+                                 str(elf), str(elf), str(elf)],
                                 input=payload, text=True, capture_output=True)
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn("regenerate CompileInfo.cpp and rebuild Kodi", failed.stderr)
@@ -278,14 +279,15 @@ class InstalledAddons(unittest.TestCase):
         with elf.open("ab") as stream:
             stream.write(b"repository.ps5\0https://raw.githubusercontent.com/Notedop/"
                          b"kodi-ps5-binary-addons/main/repo/piers-ps5-1/stable/\0")
-        subprocess.run([sys.executable, "-", str(HERE), str(elf), str(elf), str(elf)],
+        subprocess.run([sys.executable, "-", str(ps5_test_paths.SCRIPTS),
+                        str(elf), str(elf), str(elf)],
                        input=payload, text=True, check=True)
         receipt = json.loads(elf.with_name("ps5-addon-runtime.json").read_text())
         self.assertEqual(receipt["runtime"]["id"], "kodi-ps5-native-sprx-v1")
         self.assertEqual(receipt["title_sha256"], hashlib.sha256(elf.read_bytes()).hexdigest())
 
     def test_opt_in_probe_staged_platform_is_ps5(self):
-        script = (HERE / "package.sh").read_text()
+        script = (HERE / "scripts/package.sh").read_text()
         self.assertIn('PS5_TEST_BINARY_ADDON="${PS5_TEST_BINARY_ADDON:-0}"', script)
         self.assertIn('cp -a "$TEST_ADDON/screensaver.ps5.sprx-test"', script)
         probe = staging.ET.parse(ROOT / "addons/screensaver.ps5.sprx-test/addon.xml")
@@ -430,14 +432,14 @@ class InstalledAddons(unittest.TestCase):
     def test_cli_native_binary_inventory_and_failure_report(self):
         prefix, _, lib = self.install()
         report = self.root / "report.json"
-        result = subprocess.run([sys.executable, str(HERE / "stage-installed-addons.py"),
+        result = subprocess.run([sys.executable, str(HERE / "scripts/stage-installed-addons.py"),
                                  "--prefix", str(prefix), "--report", str(report)],
                                 text=True, capture_output=True, check=True)
         paths = result.stdout.splitlines()
         self.assertEqual(paths, [str(lib / "primary.sprx")])
         self.assertEqual(json.loads(report.read_text())[0]["binaries"], paths)
         (lib / "primary.sprx").write_text("bad")
-        failed = subprocess.run([sys.executable, str(HERE / "stage-installed-addons.py"),
+        failed = subprocess.run([sys.executable, str(HERE / "scripts/stage-installed-addons.py"),
                                  "--prefix", str(prefix), "--report", str(report)],
                                 text=True, capture_output=True)
         self.assertNotEqual(failed.returncode, 0)

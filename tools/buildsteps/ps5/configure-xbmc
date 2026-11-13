@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
 . "$(dirname "$0")/environment"
-exec bash "$WORKSPACE/tools/ps5/configure.sh" \
+exec bash "$WORKSPACE/tools/ps5/scripts/configure.sh" \
   "-DPS5_WORK=$WORK" "-DPS5_OPENGL_SOURCE=$PS5_OPENGL_SOURCE" \
   "-DPS5_APP_TEMPLATE=$APP_TEMPLATE" "-DPS5_OPENGL_PREFIX=$PS5_OPENGL_PREFIX" "$@"

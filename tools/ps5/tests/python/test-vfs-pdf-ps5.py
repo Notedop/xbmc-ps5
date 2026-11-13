@@ -40,7 +40,7 @@ class PdfNativeTest(unittest.TestCase):
         shutil.copytree(source, self.source)
         self.run_command("cmake", "-DSOURCE_DIR=" + str(self.source),
                          "-DSERIES_DIR=" + str(ROOT / "tools/ps5/patches/addons/vfs.pdf"),
-                         "-P", ROOT / "tools/ps5/apply-patch-series.cmake")
+                         "-P", ROOT / "tools/ps5/scripts/apply-patch-series.cmake")
         self.prefix = self.root / "private"
         (self.prefix / "lib").mkdir(parents=True)
         (self.prefix / "include/poppler/cpp").mkdir(parents=True)
@@ -63,7 +63,7 @@ class PdfNativeTest(unittest.TestCase):
                          [str(self.prefix / "lib" / f"lib{name}.a") for name in LIBRARIES])
         self.run_command("cmake", "-DSOURCE_DIR=" + str(self.source),
                          "-DSERIES_DIR=" + str(ROOT / "tools/ps5/patches/addons/vfs.pdf"),
-                         "-P", ROOT / "tools/ps5/apply-patch-series.cmake")
+                         "-P", ROOT / "tools/ps5/scripts/apply-patch-series.cmake")
 
     def test_missing_private_archive_never_falls_back(self):
         for name in LIBRARIES:

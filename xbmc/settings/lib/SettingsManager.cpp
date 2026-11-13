@@ -272,6 +272,7 @@ void CSettingsManager::Unload()
 void CSettingsManager::Clear()
 {
   std::unique_lock lock(m_critical);
+  std::unique_lock settingsLock(m_settingsCritical);
   Unload();
 
   m_settings.clear();

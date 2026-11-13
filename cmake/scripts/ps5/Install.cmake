@@ -9,6 +9,10 @@ set(APP_LIB_DIR ${libdir}/${APP_NAME_LC})
 set(APP_DATA_DIR ${datarootdir}/${APP_NAME_LC})
 set(APP_INCLUDE_DIR ${includedir}/${APP_NAME_LC})
 
+# Apply the PS5 keymap last, comparing content even when source timestamps match.
+file(APPEND "${CMAKE_BINARY_DIR}/${CORE_BUILD_DIR}/ExportFiles.cmake"
+     "configure_file(\"${CMAKE_SOURCE_DIR}/xbmc/platform/ps5/input/joystick.xml\" \"${CMAKE_BINARY_DIR}/system/keymaps/joystick.xml\" COPYONLY)\n")
+
 configure_file(${CMAKE_SOURCE_DIR}/cmake/KodiConfig.cmake.in
                ${CORE_BUILD_DIR}/scripts/${APP_NAME}Config.cmake @ONLY)
 
